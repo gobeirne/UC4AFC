@@ -167,10 +167,12 @@ function shuffle(arr) {
   }
 }
 
+let nextImagesToPreload = [];
+
 function beginPhase(p) {
   phase = p;
   participant = document.getElementById("name").value || "anon";
-  testStartedAt = new Date(); // ✅ log actual start time
+  testStartedAt = new Date(); // ✅ actual start time
 
   loadList().then(() => {
     shuffle(list);
@@ -229,6 +231,26 @@ function nextTrial() {
   let audioStartedAt = null;
   audio.src = `sounds/${item.audioFile}`;
 
+  // ✅ Preload NEXT trial’s images
+  if (trialIndex + 1 < list.length) {
+    const nextItem = list[trialIndex + 1];
+    const nextShuffled = [...nextItem.images];
+    shuffle(nextShuffled);
+
+    nextImagesToPreload = nextShuffled;
+    nextImagesToPreload.forEach(name => {
+      const preload = new Image();
+      preload.src = `images/${name}.jpg`;
+
+      if (config.arrows && arrowSet.has(name)) {
+        const preloadArrow = new Image();
+        preloadArrow.src = `images/${name}_arrow.jpg`;
+      }
+    });
+  } else {
+    nextImagesToPreload = [];
+  }
+
   audio.onloadedmetadata = () => {
     audio.play().then(() => {
       const offset = config.imageRevealOffsetMs || 0;
@@ -251,6 +273,7 @@ function nextTrial() {
             return;
           }
         }
+
         requestAnimationFrame(checkStart);
       };
 
