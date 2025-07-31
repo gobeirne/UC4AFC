@@ -335,8 +335,7 @@ async function loadList() {
  */
 async function preloadAssets() {
   await loadArrowFiles();
-  preloadImages();
-  preloadAudio();
+  await preloadImagesAndSounds();
   alert("✅ Preloading complete.");
 }
 
@@ -368,32 +367,44 @@ async function loadArrowFiles() {
 }
 
 /**
- * Preloads static UI images
+ * Preloads all arrow-related images and sounds into memory
  */
-function preloadImages() {
-  const imgPaths = [
-    "UClogo.png"
-    // add more static images if needed
-  ];
+async function preloadImagesAndSounds() {
+  const arrowList = Array.from(arrowSet);
+  const jobs = [];
 
-  imgPaths.forEach((src) => {
+  // Images (main + _arrow)
+  for (const name of arrowList) {
+    jobs.push(preloadImage(`images/${name}.jpg`));
+    jobs.push(preloadImage(`images/${name}_arrow.jpg`));
+    jobs.push(preloadSound(`sounds/${name}.mp3`));
+  }
+
+  // UI assets
+  jobs.push(preloadImage("UClogo.png"));
+  jobs.push(preloadSound("sounds/calib.mp3"));
+  jobs.push(preloadSound("sounds/NZEng_calib.mp3"));
+  jobs.push(preloadSound("sounds/TeReo_calib.mp3"));
+
+  await Promise.all(jobs);
+  console.log(`✅ Preloaded ${jobs.length} assets`);
+}
+
+function preloadImage(src) {
+  return new Promise((resolve) => {
     const img = new Image();
+    img.onload = resolve;
+    img.onerror = resolve;
     img.src = src;
   });
 }
 
-/**
- * Preloads static calibration sounds
- */
-function preloadAudio() {
-  const soundFiles = [
-    "calib.mp3"
-  ];
-
-  soundFiles.forEach((name) => {
+function preloadSound(src) {
+  return new Promise((resolve) => {
     const audio = new Audio();
-    audio.src = `sounds/${name}`;
-    // The browser will cache this if same-origin
+    audio.oncanplaythrough = resolve;
+    audio.onerror = resolve;
+    audio.src = src;
   });
 }
 
