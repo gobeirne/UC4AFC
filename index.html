@@ -8,7 +8,8 @@
   <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png" sizes="192x192">
 <meta name="theme-color" content="#004080">
-<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes"> <!-- legacy -->
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="UC4AFC">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -168,18 +169,8 @@ road	rose	sword	shirt	road	road.mp3
 cake	cage	park	soup	cake	cake.mp3
   </script>
 
-<script>
-  if (location.protocol === 'file:') {
-    const script = document.createElement('script');
-    script.src = 'main.inline.js';
-    document.body.appendChild(script);
-  } else {
-    const module = document.createElement('script');
-    module.type = 'module';
-    module.src = 'main.js';
-    document.body.appendChild(module);
-  }
-</script>
+<script src="main.inline.js"></script>
+
 <script>
   if ("serviceWorker" in navigator) {
     const isLocal = location.protocol === "file:";
