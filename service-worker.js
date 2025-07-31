@@ -239,13 +239,28 @@ const ASSETS_TO_CACHE = [
 ];
 
 self.addEventListener("install", (event) => {
+  self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
-    })
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.allSettled(
+        ASSETS_TO_CACHE.map((url) =>
+          fetch(url)
+            .then((response) => {
+              if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+              return cache.put(url, response);
+            })
+        )
+      ).then((results) => {
+        results.forEach((result, i) => {
+          if (result.status === "rejected") {
+            console.warn(`⚠️ Failed to cache: ${ASSETS_TO_CACHE[i]}`);
+          }
+        });
+      })
+    )
   );
-  self.skipWaiting(); // Activate new worker immediately
 });
+
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
