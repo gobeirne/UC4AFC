@@ -9,15 +9,15 @@ const ASSETS_TO_CACHE = [
   "./arrowFiles.json",
 
   // JS modules
-  "./js/global.js",
-  "./js/config.js",
-  "./js/ui.js",
-  "./js/setImage.js",
-  "./js/flow.js",
-  "./js/list.js",
-  "./js/preload.js",
-  "./js/results.js",
-  "./js/main.js",
+  "./global.js",
+  "./config.js",
+  "./ui.js",
+  "./setImage.js",
+  "./flow.js",
+  "./list.js",
+  "./preload.js",
+  "./results.js",
+  "./main.js",
 
   // Images (add more as needed or automate)
 "./images/back.jpg",
