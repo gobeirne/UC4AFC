@@ -1,7 +1,7 @@
 // File: main.js
 import { loadConfig } from "./config.js";
 import { loadArrowFiles, preloadAssets, startCalibration } from "./preload.js";
-import { setOptImgs, config, optImgs, phase, audio, responseLog, trialIndex } from "./global.js";
+import { setOptImgs, config, optImgs, phase, audio, responseLog, trialIndex, list } from "./global.js";
 import { showScreen, adjustImageSize, showInstructions } from "./ui.js";
 import { beginPhase } from "./flow.js";
 import { saveResults } from "./results.js";
@@ -32,9 +32,7 @@ export function abortPhase() {
 
 // --- Escape Key to Abort ---
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    abortPhase();
-  }
+  if (e.key === "Escape") abortPhase();
 });
 
 // --- Startup ---
@@ -48,38 +46,34 @@ window.onload = async () => {
   });
 
   await loadConfig();
-  await loadArrowFiles();         // must finish first
-const fullList = config.arrowList;
-preloadAssets(fullList);  // pass it explicitly
+  await loadArrowFiles();
+
+  // ⏳ Defer full preload until stimulus list exists
+  if (list && list.length > 0) {
+    await preloadAssets(list);
+  } else {
+    console.warn("⚠️ Stimulus list empty — skipping preload.");
+  }
+
   setOptImgs();
 
+  // ✅ Abort button logic
   const abortBtn = document.getElementById("abortBtn");
   if (abortBtn) {
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
     const showOnTouch = config.showAbortXOnTouchDevices === true;
-
-    if (showOnTouch && isTouchDevice) {
-      abortBtn.style.display = "block";
-    } else {
-      abortBtn.style.display = "none";
-    }
+    abortBtn.style.display = (showOnTouch && isTouchDevice) ? "block" : "none";
   }
 
   document.getElementById("delay").value = config.defaultDelay || 1500;
-adjustImageSize();
-showScreen("intro");
+  adjustImageSize();
+  showScreen("intro");
 
-window.addEventListener("resize", adjustImageSize);
-
-// Preload in background after intro is visible
-preloadAssets();
-
+  window.addEventListener("resize", adjustImageSize);
 
   // ✅ Set click handlers for test mode
   optImgs.forEach(img => {
-    img.addEventListener("click", () => {
-      recordResponse(img);
-    });
+    img.addEventListener("click", () => recordResponse(img));
   });
 
   // ✅ Wire up navigation buttons
@@ -110,11 +104,7 @@ document.getElementById("startBtn").onclick = () => {
   showInstructions("test", () => {
     const abortBtn = document.getElementById("abortBtn");
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
-      abortBtn.style.display = "block";
-    } else if (abortBtn) {
-      abortBtn.style.display = "none";
-    }
+    if (abortBtn) abortBtn.style.display = (config.showAbortXOnTouchDevices && isTouchDevice) ? "block" : "none";
     beginPhase("test");
   });
 };
@@ -123,11 +113,7 @@ document.getElementById("trainBtn").onclick = () => {
   showInstructions("training", () => {
     const abortBtn = document.getElementById("abortBtn");
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
-      abortBtn.style.display = "block";
-    } else if (abortBtn) {
-      abortBtn.style.display = "none";
-    }
+    if (abortBtn) abortBtn.style.display = (config.showAbortXOnTouchDevices && isTouchDevice) ? "block" : "none";
     beginPhase("training");
   });
 };

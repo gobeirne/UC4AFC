@@ -402,65 +402,45 @@ async function loadList() {
  * Load arrow list + preload key assets
  */
 async function preloadAssets() {
-  const list = config.arrowList;
-  if (!list || !Array.isArray(list) || list.length === 0) {
-    console.warn("⚠️ Skipping preload — no arrowList found.");
-    return;
-  }
-  await preloadImagesAndSounds(list);
-}
-
-/**
- * Loads arrowFiles.json if running on web, or uses fallback list for file://
- */
-async function loadArrowFiles() {
-  if (location.protocol === "file:") {
-    const fallbackList = [
-      "beak", "chin", "dad", "hood", "knees",
-      "lock", "mum", "nose", "note", "page",
-      "seed", "tongue"
-    ];
-    console.warn("⚠️ Using static arrow list fallback (file:// mode)");
-    setArrowList(fallbackList);
-    config.arrowList = fallbackList;
+  if (!Array.isArray(list) || list.length === 0) {
+    console.warn("⚠️ Skipping preload — stimulus list is empty.");
     return;
   }
 
-  try {
-    const res = await fetch("arrowFiles.json");
-    if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
-    const data = await res.json();
-    if (!Array.isArray(data)) throw new Error("Invalid arrowFiles.json format");
-    setArrowList(data);
-    config.arrowList = data;
-	console.log("✅ Loaded arrow list:", data.length, "items:", data);
-  } catch (err) {
-    console.error("❌ Could not load arrowFiles.json:", err);
-  }
-}
+  const assetSet = new Set();
 
-/**
- * Preloads all relevant images and sounds into memory
- */
-async function preloadImagesAndSounds(list) {
-  const jobs = [];
+  // Collect all image and audio assets from the list
+  for (const item of list) {
+    if (item.correct) {
+      assetSet.add(`images/${item.correct}.jpg`);
+      assetSet.add(`images/${item.correct}_arrow.jpg`);
+    }
 
-  for (const name of list) {
-    jobs.push(preloadImage(`images/${name}.jpg`));
-    jobs.push(preloadImage(`images/${name}_arrow.jpg`));
-    jobs.push(preloadSound(`sounds/${name}.mp3`));
+    if (Array.isArray(item.choices)) {
+      for (const choice of item.choices) {
+        assetSet.add(`images/${choice}.jpg`);
+        assetSet.add(`images/${choice}_arrow.jpg`);
+      }
+    }
+
+    if (item.audioFile) {
+      assetSet.add(`sounds/${item.audioFile}`);
+    }
   }
 
-  // UI and calibration assets
-  jobs.push(preloadImage("UClogo.png"));
-  jobs.push(preloadSound("sounds/calib.mp3"));
-  jobs.push(preloadSound("sounds/NZEng_calib.mp3"));
-  jobs.push(preloadSound("sounds/TeReo_calib.mp3"));
+  // Add UI/calibration assets
+  assetSet.add("UClogo.png");
+  assetSet.add("sounds/calib.mp3");
+  assetSet.add("sounds/NZEng_calib.mp3");
+  assetSet.add("sounds/TeReo_calib.mp3");
 
+  const jobs = Array.from(assetSet).map(src => {
+    return src.endsWith(".jpg") ? preloadImage(src) : preloadSound(src);
+  });
+
+  console.log(`📦 Will preload assets for: ${assetSet.size} items`);
   await Promise.all(jobs);
-  console.log("📦 Will preload assets for:", list.length, "items");
   console.log(`✅ Preloaded ${jobs.length} assets`);
-  
 }
 
 function preloadImage(src) {
@@ -488,6 +468,35 @@ function preloadSound(src) {
 }
 
 /**
+ * Loads arrowFiles.json if running on web, or uses fallback list for file://
+ */
+async function loadArrowFiles() {
+  if (location.protocol === "file:") {
+    const fallbackList = [
+      "beak", "chin", "dad", "hood", "knees",
+      "lock", "mum", "nose", "note", "page",
+      "seed", "tongue"
+    ];
+    console.warn("⚠️ Using static arrow list fallback (file:// mode)");
+    setArrowList(fallbackList);
+    config.arrowList = fallbackList;
+    return;
+  }
+
+  try {
+    const res = await fetch("arrowFiles.json");
+    if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data)) throw new Error("Invalid arrowFiles.json format");
+    setArrowList(data);
+    config.arrowList = data;
+    console.log("✅ Loaded arrow list:", data.length);
+  } catch (err) {
+    console.error("❌ Could not load arrowFiles.json:", err);
+  }
+}
+
+/**
  * Starts calibration loop based on current language mode
  */
 function startCalibration() {
@@ -508,7 +517,6 @@ function startCalibration() {
     audio.loop = false;
   });
 }
-
 
 // --- results.js ---
 // File: results.js
@@ -614,9 +622,7 @@ function abortPhase() {
 
 // --- Escape Key to Abort ---
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    abortPhase();
-  }
+  if (e.key === "Escape") abortPhase();
 });
 
 // --- Startup ---
@@ -630,38 +636,34 @@ window.onload = async () => {
   });
 
   await loadConfig();
-  await loadArrowFiles();         // must finish first
-const fullList = config.arrowList;
-preloadAssets(fullList);  // pass it explicitly
+  await loadArrowFiles();
+
+  // ⏳ Defer full preload until stimulus list exists
+  if (list && list.length > 0) {
+    await preloadAssets(list);
+  } else {
+    console.warn("⚠️ Stimulus list empty — skipping preload.");
+  }
+
   setOptImgs();
 
+  // ✅ Abort button logic
   const abortBtn = document.getElementById("abortBtn");
   if (abortBtn) {
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
     const showOnTouch = config.showAbortXOnTouchDevices === true;
-
-    if (showOnTouch && isTouchDevice) {
-      abortBtn.style.display = "block";
-    } else {
-      abortBtn.style.display = "none";
-    }
+    abortBtn.style.display = (showOnTouch && isTouchDevice) ? "block" : "none";
   }
 
   document.getElementById("delay").value = config.defaultDelay || 1500;
-adjustImageSize();
-showScreen("intro");
+  adjustImageSize();
+  showScreen("intro");
 
-window.addEventListener("resize", adjustImageSize);
-
-// Preload in background after intro is visible
-preloadAssets();
-
+  window.addEventListener("resize", adjustImageSize);
 
   // ✅ Set click handlers for test mode
   optImgs.forEach(img => {
-    img.addEventListener("click", () => {
-      recordResponse(img);
-    });
+    img.addEventListener("click", () => recordResponse(img));
   });
 
   // ✅ Wire up navigation buttons
@@ -692,11 +694,7 @@ document.getElementById("startBtn").onclick = () => {
   showInstructions("test", () => {
     const abortBtn = document.getElementById("abortBtn");
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
-      abortBtn.style.display = "block";
-    } else if (abortBtn) {
-      abortBtn.style.display = "none";
-    }
+    if (abortBtn) abortBtn.style.display = (config.showAbortXOnTouchDevices && isTouchDevice) ? "block" : "none";
     beginPhase("test");
   });
 };
@@ -705,11 +703,7 @@ document.getElementById("trainBtn").onclick = () => {
   showInstructions("training", () => {
     const abortBtn = document.getElementById("abortBtn");
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
-      abortBtn.style.display = "block";
-    } else if (abortBtn) {
-      abortBtn.style.display = "none";
-    }
+    if (abortBtn) abortBtn.style.display = (config.showAbortXOnTouchDevices && isTouchDevice) ? "block" : "none";
     beginPhase("training");
   });
 };
