@@ -1,28 +1,27 @@
-// File: main.js
-import { loadConfig } from "./config.js";
-import { loadArrowFiles, preloadAssets, startCalibration } from "./preload.js";
-import { setOptImgs, config, optImgs, phase, audio, responseLog, trialIndex, list } from "./global.js";
-import { showScreen, adjustImageSize, showInstructions } from "./ui.js";
-import { beginPhase } from "./flow.js";
-import { saveResults } from "./results.js";
+let assetsReady = false;
+let waitingToBeginPhase = "";
 
-// --- Abort Phase Function ---
-export function abortPhase() {
+// Abort current training audio and timeouts if needed
+function abortPhase() {
   const abortBtn = document.getElementById("abortBtn");
 
   const stopAudio = () => {
-    if (audio && !audio.paused) {
+    if (audio) {
       audio.pause();
       audio.currentTime = 0;
       audio.src = "";
+      audio.onended = null;
     }
   };
 
-  if (phase === "training" && confirm("Abort training?")) {
-    stopAudio();
-    showScreen("thankyou");
-    if (abortBtn) abortBtn.style.display = "none";
-  } else if (phase === "test" && confirm("Abort test and save progress?")) {
+if (phase === "training" && confirm("Abort training?")) {
+  abortTraining(); // 👈 tells flow.js to stop future audio/images
+  stopAudio();
+  trialIndex = 0;
+  responseLog.length = 0;
+  showScreen("thankyou");
+  if (abortBtn) abortBtn.style.display = "none";
+} else if (phase === "test" && confirm("Abort test and save progress?")) {
     stopAudio();
     showScreen("thankyou");
     if (abortBtn) abortBtn.style.display = "none";
@@ -30,12 +29,42 @@ export function abortPhase() {
   }
 }
 
-// --- Escape Key to Abort ---
+// Escape key handler
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") abortPhase();
 });
 
-// --- Startup ---
+// Show loading screen and wait until assetsReady becomes true
+function waitForAssetsThenBegin() {
+  showScreen("loading");
+
+  const okBtn = document.getElementById("loading-ok");
+  okBtn.disabled = true;
+  okBtn.style.display = "inline-block";
+  okBtn.textContent = "Loading…";
+
+  okBtn.onclick = () => {
+    okBtn.disabled = true;
+    okBtn.style.display = "none";
+    beginPhase(waitingToBeginPhase);
+    waitingToBeginPhase = "";
+  };
+
+  const check = () => {
+    if (assetsReady) {
+      document.querySelector("#loading h2").textContent = "✅ Ready!";
+      document.querySelector("#loading p").textContent = "Assets have been loaded.";
+      okBtn.disabled = false;
+      okBtn.textContent = "OK";
+    } else {
+      setTimeout(check, 200);
+    }
+  };
+
+  check();
+}
+
+
 window.onload = async () => {
   await new Promise(resolve => {
     if (document.readyState === "loading") {
@@ -46,40 +75,37 @@ window.onload = async () => {
   });
 
   await loadConfig();
-  await loadArrowFiles();
+  await loadList();
 
-  // ⏳ Defer full preload until stimulus list exists
-  if (list && list.length > 0) {
-    await preloadAssets(list);
-  } else {
-    console.warn("⚠️ Stimulus list empty — skipping preload.");
-  }
+  showScreen("intro");
+  adjustImageSize();
+  window.addEventListener("resize", adjustImageSize);
+
+  // Start preloading in background
+preloadAllAssets().then(() => {
+  assetsReady = true;
+  console.log("✅ Assets preloaded.");
+  // ❌ Don't auto-begin — wait for user to click OK
+});
+
 
   setOptImgs();
 
-  // ✅ Abort button logic
   const abortBtn = document.getElementById("abortBtn");
   if (abortBtn) {
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
     const showOnTouch = config.showAbortXOnTouchDevices === true;
     abortBtn.style.display = (showOnTouch && isTouchDevice) ? "block" : "none";
+    abortBtn.addEventListener("click", abortPhase);
   }
 
-  document.getElementById("delay").value = config.defaultDelay || 1500;
-  adjustImageSize();
-  showScreen("intro");
-
-  window.addEventListener("resize", adjustImageSize);
-
-  // ✅ Set click handlers for test mode
   optImgs.forEach(img => {
     img.addEventListener("click", () => recordResponse(img));
   });
 
-  // ✅ Wire up navigation buttons
   const back = document.getElementById("backBtn");
-  const ok = document.getElementById("okBtn");
-  const ret = document.getElementById("returnBtn");
+  const ok   = document.getElementById("okBtn");
+  const ret  = document.getElementById("returnBtn");
 
   if (back) back.addEventListener("click", () => showScreen("intro"));
   if (ok)   ok.addEventListener("click", () => beginPhase(phase));
@@ -90,32 +116,45 @@ window.onload = async () => {
     showScreen("intro");
   });
 
-  if (abortBtn) abortBtn.addEventListener("click", abortPhase);
-};
+  document.getElementById("delay").value = config.defaultDelay || 1500;
+  document.getElementById("delay").oninput = (e) => {
+    const val = parseInt(e.target.value);
+    if (!isNaN(val)) config.delayMs = val;
+  };
 
-// --- Delay Setting ---
-document.getElementById("delay").oninput = (e) => {
-  const val = parseInt(e.target.value);
-  if (!isNaN(val)) config.delayMs = val;
-};
+  // Train Button
+  document.getElementById("trainBtn").onclick = () => {
+    showInstructions("training", () => {
+      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
+        abortBtn.style.display = "block";
+      }
 
-// --- Main Buttons ---
-document.getElementById("startBtn").onclick = () => {
-  showInstructions("test", () => {
-    const abortBtn = document.getElementById("abortBtn");
-    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    if (abortBtn) abortBtn.style.display = (config.showAbortXOnTouchDevices && isTouchDevice) ? "block" : "none";
-    beginPhase("test");
-  });
-};
+      if (assetsReady) {
+        beginPhase("training");
+      } else {
+        waitingToBeginPhase = "training";
+        waitForAssetsThenBegin();
+      }
+    });
+  };
 
-document.getElementById("trainBtn").onclick = () => {
-  showInstructions("training", () => {
-    const abortBtn = document.getElementById("abortBtn");
-    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    if (abortBtn) abortBtn.style.display = (config.showAbortXOnTouchDevices && isTouchDevice) ? "block" : "none";
-    beginPhase("training");
-  });
-};
+  // Start Button
+  document.getElementById("startBtn").onclick = () => {
+    showInstructions("test", () => {
+      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
+        abortBtn.style.display = "block";
+      }
 
-document.getElementById("calibrateBtn").onclick = startCalibration;
+      if (assetsReady) {
+        beginPhase("test");
+      } else {
+        waitingToBeginPhase = "test";
+        waitForAssetsThenBegin();
+      }
+    });
+  };
+
+  document.getElementById("calibrateBtn").onclick = startCalibration;
+};

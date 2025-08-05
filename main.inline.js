@@ -64,15 +64,10 @@ document.addEventListener("DOMContentLoaded", setOptImgs);
 // File: config.js
 
 async function loadConfig() {
-  try {
-    const res = await fetch("config.json");
-    const externalConfig = await res.json();
-    Object.assign(config, externalConfig);
-    console.log("✅ Loaded config.json:", config);
-  } catch (err) {
-    console.error("❌ Failed to load config.json:", err);
-    console.warn("⚠️ Could not load config.json. Using fallback config.");
-    
+  const isLocal = location.protocol === "file:";
+
+  if (isLocal) {
+    console.warn("📁 Running locally. Skipping fetch(config.json) and using fallback config.");
     Object.assign(config, {
       arrows: true,
       defaultDelay: 1500,
@@ -85,8 +80,17 @@ async function loadConfig() {
         test: "You will hear a word and see four pictures. Click the picture that matches the word you heard."
       }
     });
+    return;
+  }
 
-    console.log("📦 Fallback config in use:", config);
+  try {
+    const res = await fetch("config.json");
+    const externalConfig = await res.json();
+    Object.assign(config, externalConfig);
+    console.log("✅ Loaded config.json:", config);
+  } catch (err) {
+    console.error("❌ Failed to load config.json:", err);
+    console.warn("⚠️ Could not load config.json. Using fallback config.");
   }
 }
 
@@ -182,6 +186,8 @@ function setImage(imgElement, name, useArrows = true) {
 // File: flow.js
 
 
+let trainingAborted = false;
+
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -193,8 +199,9 @@ let nextImagesToPreload = [];
 
 function beginPhase(p) {
   phase = p;
+  trainingAborted = false;
   participant = document.getElementById("name").value || "anon";
-  testStartedAt = new Date(); // ✅ actual start time
+  testStartedAt = new Date();
 
   loadList().then(() => {
     shuffle(list);
@@ -212,56 +219,53 @@ function beginPhase(p) {
 }
 
 function showTrainingItem() {
-  if (trialIndex >= list.length || phase !== "training") {
+  if (trainingAborted || trialIndex >= list.length || phase !== "training") {
     showScreen("instructions");
     return;
   }
 
   const item = list[trialIndex];
 
-  // Reset and prepare audio
   audio.pause();
   audio.currentTime = 0;
   audio.onended = null;
   audio.src = `sounds/${item.audioFile}`;
 
   audio.play().then(() => {
-    // ✅ Image appears after 600 ms from audio start
+    if (trainingAborted) return;
+
     setTimeout(() => {
-      if (phase === "training") {
-        setImage(trainingImg, item.correct, config.arrows);
-      }
+      if (trainingAborted || phase !== "training") return;
+      setImage(trainingImg, item.correct, config.arrows);
     }, config.imageRevealOffsetMs || 600);
   }).catch(err => {
     console.error("⚠️ Training audio failed to play:", err);
   });
 
   audio.onended = () => {
+    if (trainingAborted) return;
+
     trialIndex++;
     if (phase === "training") {
       setTimeout(() => {
-        if (phase === "training") {
-          showTrainingItem();
-        }
+        if (trainingAborted || phase !== "training") return;
+        showTrainingItem();
       }, config.delayMs || 1500);
     }
   };
 }
 
-
-
-
 function nextTrial() {
-if (trialIndex >= list.length) {
-  if (phase === "test") {
-    saveResults();
-  } else {
-    showScreen("thankyou");
-    const abortBtn = document.getElementById("abortBtn");
-    if (abortBtn) abortBtn.style.display = "none";
+  if (trialIndex >= list.length) {
+    if (phase === "test") {
+      saveResults();
+    } else {
+      showScreen("thankyou");
+      const abortBtn = document.getElementById("abortBtn");
+      if (abortBtn) abortBtn.style.display = "none";
+    }
+    return;
   }
-  return;
-}
 
   const item = list[trialIndex];
   const shuffled = [...item.images];
@@ -366,10 +370,13 @@ function recordResponse(img) {
   }, 500);
 }
 
+function abortTraining() {
+  trainingAborted = true;
+}
+
 
 // --- list.js ---
-// File: list.js
-
+// File: list.js (non-module)
 async function loadList() {
   if (location.protocol === "file:") {
     const fallback = document.getElementById("list-fallback");
@@ -383,72 +390,286 @@ async function loadList() {
       const [a, b, c, d, correct, audioFile] = line.split(/\t/);
       return { images: [a, b, c, d], correct, audioFile };
     }));
-    console.warn("Loaded inline list (local file mode)");
+    console.warn("📦 Loaded inline fallback list (file://)");
   } else {
-    const txt = await fetch("UC4AFC_lists.txt").then(r => r.text());
-    list.length = 0;
-    list.push(...txt.trim().split(/\r?\n/).map(line => {
-      const [a, b, c, d, correct, audioFile] = line.split(/\t/);
-      return { images: [a, b, c, d], correct, audioFile };
-    }));
+    try {
+      const txt = await fetch("UC4AFC_lists.txt").then(r => r.text());
+      list.length = 0;
+      list.push(...txt.trim().split(/\r?\n/).map(line => {
+        const [a, b, c, d, correct, audioFile] = line.split(/\t/);
+        return { images: [a, b, c, d], correct, audioFile };
+      }));
+      console.log("✅ Loaded list from UC4AFC_lists.txt");
+    } catch (err) {
+      console.error("❌ Failed to load UC4AFC_lists.txt:", err);
+      alert("Failed to load stimulus list.");
+    }
   }
+
+  // ✅ All assets are preloaded via preloadAllAssets() in main.js
 }
 
 
 // --- preload.js ---
-// File: preload.js
-
 /**
- * Load arrow list + preload key assets
+ * Preload all images and sounds listed in preloadfilelist.txt
+ * Falls back to hardcoded list in file:// mode.
  */
-async function preloadAssets() {
-  if (!Array.isArray(list) || list.length === 0) {
-    console.warn("⚠️ Skipping preload — stimulus list is empty.");
-    return;
+
+async function preloadAllAssets() {
+  let assetList = [];
+
+  const isLocal = location.protocol === "file:";
+
+  if (isLocal) {
+    // 🚧 Fallback list for local mode
+assetList = [
+  "images/bag.jpg",
+  "images/back.jpg",
+  "images/bat.jpg",
+  "images/bed.jpg",
+  "images/bike.jpg",
+  "images/bat_backup.jpg",
+  "images/beak.jpg",
+  "images/bite.jpg",
+  "images/bird.jpg",
+  "images/bin.jpg",
+  "images/book.jpg",
+  "images/beach.jpg",
+  "images/boat.jpg",
+  "images/beak_arrow.jpg",
+  "images/boot.jpg",
+  "images/bug.jpg",
+  "images/cage.jpg",
+  "images/cake.jpg",
+  "images/cap.jpg",
+  "images/cat.jpg",
+  "images/card.jpg",
+  "images/ball.jpg",
+  "images/chalk.jpg",
+  "images/chin.jpg",
+  "images/chin_arrow.jpg",
+  "images/chip.jpg",
+  "images/bone.jpg",
+  "images/bus.jpg",
+  "images/bell.jpg",
+  "images/coat.jpg",
+  "images/comb.jpg",
+  "images/cone.jpg",
+  "images/cot.jpg",
+  "images/cot_backup.jpg",
+  "images/dad.jpg",
+  "images/dad_arrow.jpg",
+  "images/dirt.jpg",
+  "images/dog.jpg",
+  "images/fan.jpg",
+  "images/duck.jpg",
+  "images/feet.jpg",
+  "images/fork.jpg",
+  "images/gate.jpg",
+  "images/goat.jpg",
+  "images/hat.jpg",
+  "images/hall.jpg",
+  "images/head.jpg",
+  "images/head_backup.jpg",
+  "images/heart.jpg",
+  "images/hen.jpg",
+  "images/hood_arrow.jpg",
+  "images/house.jpg",
+  "images/hut.jpg",
+  "images/hood.jpg",
+  "images/keys.jpg",
+  "images/hug.jpg",
+  "images/kite.jpg",
+  "images/king.jpg",
+  "images/knees.jpg",
+  "images/knees_arrow.jpg",
+  "images/leaf.jpg",
+  "images/knife.jpg",
+  "images/leg.jpg",
+  "images/lick.jpg",
+  "images/light.jpg",
+  "images/lock.jpg",
+  "images/lock_arrow.jpg",
+  "images/log.jpg",
+  "images/man.jpg",
+  "images/meat.jpg",
+  "images/mop.jpg",
+  "images/mouse.jpg",
+  "images/mouth.jpg",
+  "images/mum.jpg",
+  "images/mum_arrow.jpg",
+  "images/night.jpg",
+  "images/nose.jpg",
+  "images/nose_arrow.jpg",
+  "images/note.jpg",
+  "images/note_arrow.jpg",
+  "images/nurse.jpg",
+  "images/nurse_backup.jpg",
+  "images/nut.jpg",
+  "images/page_arrow.jpg",
+  "images/page.jpg",
+  "images/park.jpg",
+  "images/pan.jpg",
+  "images/peach.jpg",
+  "images/peach_backup.jpg",
+  "images/pen.jpg",
+  "images/pig.jpg",
+  "images/purse.jpg",
+  "images/road.jpg",
+  "images/rock.jpg",
+  "images/rose.jpg",
+  "images/rug.jpg",
+  "images/sack.jpg",
+  "images/sad.jpg",
+  "images/seed.jpg",
+  "images/seed_arrow.jpg",
+  "images/sheep.jpg",
+  "images/shark.jpg",
+  "images/sheep_backup.jpg",
+  "images/shell.jpg",
+  "images/shirt.jpg",
+  "images/ship.jpg",
+  "images/shop.jpg",
+  "images/sock.jpg",
+  "images/soup.jpg",
+  "images/suit.jpg",
+  "images/sword.jpg",
+  "images/tongue.jpg",
+  "images/tap.jpg",
+  "images/tongue_arrow.jpg",
+  "images/van.jpg",
+  "images/zip.jpg",
+  "sounds/back.mp3",
+  "sounds/ball.mp3",
+  "sounds/bat.mp3",
+  "sounds/bed.mp3",
+  "sounds/bell.mp3",
+  "sounds/bin.mp3",
+  "sounds/beach.mp3",
+  "sounds/bird.mp3",
+  "sounds/bone.mp3",
+  "sounds/book.mp3",
+  "sounds/boot.mp3",
+  "sounds/bike.mp3",
+  "sounds/bus.mp3",
+  "sounds/bug.mp3",
+  "sounds/cage.mp3",
+  "sounds/beak.mp3",
+  "sounds/cake.mp3",
+  "sounds/calib.mp3",
+  "sounds/card.mp3",
+  "sounds/boat.mp3",
+  "sounds/chalk.mp3",
+  "sounds/cat.mp3",
+  "sounds/cap.mp3",
+  "sounds/chin.mp3",
+  "sounds/bag.mp3",
+  "sounds/chip.mp3",
+  "sounds/bite.mp3",
+  "sounds/coat.mp3",
+  "sounds/comb.mp3",
+  "sounds/cone.mp3",
+  "sounds/cot.mp3",
+  "sounds/dad.mp3",
+  "sounds/dirt.mp3",
+  "sounds/dog.mp3",
+  "sounds/duck.mp3",
+  "sounds/fan.mp3",
+  "sounds/feet.mp3",
+  "sounds/gate.mp3",
+  "sounds/fork.mp3",
+  "sounds/goat.mp3",
+  "sounds/hall.mp3",
+  "sounds/hat.mp3",
+  "sounds/heart.mp3",
+  "sounds/head.mp3",
+  "sounds/hood.mp3",
+  "sounds/hen.mp3",
+  "sounds/house.mp3",
+  "sounds/hug.mp3",
+  "sounds/hut.mp3",
+  "sounds/keys.mp3",
+  "sounds/king.mp3",
+  "sounds/kite.mp3",
+  "sounds/knees.mp3",
+  "sounds/knife.mp3",
+  "sounds/leaf.mp3",
+  "sounds/leg.mp3",
+  "sounds/light.mp3",
+  "sounds/lock.mp3",
+  "sounds/lick.mp3",
+  "sounds/man.mp3",
+  "sounds/meat.mp3",
+  "sounds/mop.mp3",
+  "sounds/mouse.mp3",
+  "sounds/log.mp3",
+  "sounds/mum.mp3",
+  "sounds/mouth.mp3",
+  "sounds/night.mp3",
+  "sounds/nose.mp3",
+  "sounds/note.mp3",
+  "sounds/nurse.mp3",
+  "sounds/nut.mp3",
+  "sounds/pan.mp3",
+  "sounds/page.mp3",
+  "sounds/park.mp3",
+  "sounds/peach.mp3",
+  "sounds/pen.mp3",
+  "sounds/pig.mp3",
+  "sounds/purse.mp3",
+  "sounds/road.mp3",
+  "sounds/rock.mp3",
+  "sounds/rose.mp3",
+  "sounds/rug.mp3",
+  "sounds/sack.mp3",
+  "sounds/sad.mp3",
+  "sounds/seed.mp3",
+  "sounds/shark.mp3",
+  "sounds/sheep.mp3",
+  "sounds/ship.mp3",
+  "sounds/shell.mp3",
+  "sounds/shirt.mp3",
+  "sounds/shop.mp3",
+  "sounds/sock.mp3",
+  "sounds/soup.mp3",
+  "sounds/suit.mp3",
+  "sounds/sword.mp3",
+  "sounds/tongue.mp3",
+  "sounds/tap.mp3",
+  "sounds/van.mp3",
+  "sounds/zip.mp3"
+];
+    console.warn("📦 Using fallback preload asset list (file:// mode)");
+  } else {
+    try {
+      const res = await fetch("preloadfilelist.txt");
+      if (!res.ok) throw new Error(`Failed to fetch preloadfilelist.txt: ${res.status}`);
+      const raw = await res.text();
+      assetList = raw.split(/\r?\n/).filter(x => x.trim().length > 0);
+    } catch (err) {
+      console.error("❌ Failed to load preloadfilelist.txt:", err);
+      return;
+    }
   }
 
-  const assetSet = new Set();
+  const jobs = assetList.map(src =>
+    src.endsWith(".jpg") ? preloadImage(src) :
+    src.endsWith(".mp3") ? preloadSound(src) :
+    null
+  ).filter(job => job !== null);
 
-  // Collect all image and audio assets from the list
-  for (const item of list) {
-    if (item.correct) {
-      assetSet.add(`images/${item.correct}.jpg`);
-      assetSet.add(`images/${item.correct}_arrow.jpg`);
-    }
-
-    if (Array.isArray(item.choices)) {
-      for (const choice of item.choices) {
-        assetSet.add(`images/${choice}.jpg`);
-        assetSet.add(`images/${choice}_arrow.jpg`);
-      }
-    }
-
-    if (item.audioFile) {
-      assetSet.add(`sounds/${item.audioFile}`);
-    }
-  }
-
-  // Add UI/calibration assets
-  assetSet.add("UClogo.png");
-  assetSet.add("sounds/calib.mp3");
-  assetSet.add("sounds/NZEng_calib.mp3");
-  assetSet.add("sounds/TeReo_calib.mp3");
-
-  const jobs = Array.from(assetSet).map(src => {
-    return src.endsWith(".jpg") ? preloadImage(src) : preloadSound(src);
-  });
-
-  console.log(`📦 Will preload assets for: ${assetSet.size} items`);
+  console.log(`📦 Preloading ${jobs.length} assets...`);
   await Promise.all(jobs);
-  console.log(`✅ Preloaded ${jobs.length} assets`);
+  console.log(`✅ Finished preloading ${jobs.length} assets.`);
 }
 
 function preloadImage(src) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const img = new Image();
     img.onload = resolve;
     img.onerror = () => {
-      console.warn(`⚠️ Failed to preload image: ${src}`);
+      console.warn(`⚠️ Failed to load image: ${src}`);
       resolve();
     };
     img.src = src;
@@ -456,49 +677,17 @@ function preloadImage(src) {
 }
 
 function preloadSound(src) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const audio = new Audio();
     audio.oncanplaythrough = resolve;
     audio.onerror = () => {
-      console.warn(`⚠️ Failed to preload sound: ${src}`);
+      console.warn(`⚠️ Failed to load sound: ${src}`);
       resolve();
     };
     audio.src = src;
   });
 }
 
-/**
- * Loads arrowFiles.json if running on web, or uses fallback list for file://
- */
-async function loadArrowFiles() {
-  if (location.protocol === "file:") {
-    const fallbackList = [
-      "beak", "chin", "dad", "hood", "knees",
-      "lock", "mum", "nose", "note", "page",
-      "seed", "tongue"
-    ];
-    console.warn("⚠️ Using static arrow list fallback (file:// mode)");
-    setArrowList(fallbackList);
-    config.arrowList = fallbackList;
-    return;
-  }
-
-  try {
-    const res = await fetch("arrowFiles.json");
-    if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
-    const data = await res.json();
-    if (!Array.isArray(data)) throw new Error("Invalid arrowFiles.json format");
-    setArrowList(data);
-    config.arrowList = data;
-    console.log("✅ Loaded arrow list:", data.length);
-  } catch (err) {
-    console.error("❌ Could not load arrowFiles.json:", err);
-  }
-}
-
-/**
- * Starts calibration loop based on current language mode
- */
 function startCalibration() {
   const mode = localStorage.getItem("language") || "Te reo Māori";
   const soundFile = mode === "English" ? "NZEng_calib.mp3" : "TeReo_calib.mp3";
@@ -517,6 +706,7 @@ function startCalibration() {
     audio.loop = false;
   });
 }
+
 
 // --- results.js ---
 // File: results.js
@@ -594,25 +784,30 @@ function saveResults(optionalNote = "") {
 
 
 // --- main.js ---
-// File: main.js
+let assetsReady = false;
+let waitingToBeginPhase = "";
 
-// --- Abort Phase Function ---
+// Abort current training audio and timeouts if needed
 function abortPhase() {
   const abortBtn = document.getElementById("abortBtn");
 
   const stopAudio = () => {
-    if (audio && !audio.paused) {
+    if (audio) {
       audio.pause();
       audio.currentTime = 0;
       audio.src = "";
+      audio.onended = null;
     }
   };
 
-  if (phase === "training" && confirm("Abort training?")) {
-    stopAudio();
-    showScreen("thankyou");
-    if (abortBtn) abortBtn.style.display = "none";
-  } else if (phase === "test" && confirm("Abort test and save progress?")) {
+if (phase === "training" && confirm("Abort training?")) {
+  abortTraining(); // 👈 tells flow.js to stop future audio/images
+  stopAudio();
+  trialIndex = 0;
+  responseLog.length = 0;
+  showScreen("thankyou");
+  if (abortBtn) abortBtn.style.display = "none";
+} else if (phase === "test" && confirm("Abort test and save progress?")) {
     stopAudio();
     showScreen("thankyou");
     if (abortBtn) abortBtn.style.display = "none";
@@ -620,12 +815,42 @@ function abortPhase() {
   }
 }
 
-// --- Escape Key to Abort ---
+// Escape key handler
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") abortPhase();
 });
 
-// --- Startup ---
+// Show loading screen and wait until assetsReady becomes true
+function waitForAssetsThenBegin() {
+  showScreen("loading");
+
+  const okBtn = document.getElementById("loading-ok");
+  okBtn.disabled = true;
+  okBtn.style.display = "inline-block";
+  okBtn.textContent = "Loading…";
+
+  okBtn.onclick = () => {
+    okBtn.disabled = true;
+    okBtn.style.display = "none";
+    beginPhase(waitingToBeginPhase);
+    waitingToBeginPhase = "";
+  };
+
+  const check = () => {
+    if (assetsReady) {
+      document.querySelector("#loading h2").textContent = "✅ Ready!";
+      document.querySelector("#loading p").textContent = "Assets have been loaded.";
+      okBtn.disabled = false;
+      okBtn.textContent = "OK";
+    } else {
+      setTimeout(check, 200);
+    }
+  };
+
+  check();
+}
+
+
 window.onload = async () => {
   await new Promise(resolve => {
     if (document.readyState === "loading") {
@@ -636,40 +861,37 @@ window.onload = async () => {
   });
 
   await loadConfig();
-  await loadArrowFiles();
+  await loadList();
 
-  // ⏳ Defer full preload until stimulus list exists
-  if (list && list.length > 0) {
-    await preloadAssets(list);
-  } else {
-    console.warn("⚠️ Stimulus list empty — skipping preload.");
-  }
+  showScreen("intro");
+  adjustImageSize();
+  window.addEventListener("resize", adjustImageSize);
+
+  // Start preloading in background
+preloadAllAssets().then(() => {
+  assetsReady = true;
+  console.log("✅ Assets preloaded.");
+  // ❌ Don't auto-begin — wait for user to click OK
+});
+
 
   setOptImgs();
 
-  // ✅ Abort button logic
   const abortBtn = document.getElementById("abortBtn");
   if (abortBtn) {
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
     const showOnTouch = config.showAbortXOnTouchDevices === true;
     abortBtn.style.display = (showOnTouch && isTouchDevice) ? "block" : "none";
+    abortBtn.addEventListener("click", abortPhase);
   }
 
-  document.getElementById("delay").value = config.defaultDelay || 1500;
-  adjustImageSize();
-  showScreen("intro");
-
-  window.addEventListener("resize", adjustImageSize);
-
-  // ✅ Set click handlers for test mode
   optImgs.forEach(img => {
     img.addEventListener("click", () => recordResponse(img));
   });
 
-  // ✅ Wire up navigation buttons
   const back = document.getElementById("backBtn");
-  const ok = document.getElementById("okBtn");
-  const ret = document.getElementById("returnBtn");
+  const ok   = document.getElementById("okBtn");
+  const ret  = document.getElementById("returnBtn");
 
   if (back) back.addEventListener("click", () => showScreen("intro"));
   if (ok)   ok.addEventListener("click", () => beginPhase(phase));
@@ -680,34 +902,47 @@ window.onload = async () => {
     showScreen("intro");
   });
 
-  if (abortBtn) abortBtn.addEventListener("click", abortPhase);
-};
+  document.getElementById("delay").value = config.defaultDelay || 1500;
+  document.getElementById("delay").oninput = (e) => {
+    const val = parseInt(e.target.value);
+    if (!isNaN(val)) config.delayMs = val;
+  };
 
-// --- Delay Setting ---
-document.getElementById("delay").oninput = (e) => {
-  const val = parseInt(e.target.value);
-  if (!isNaN(val)) config.delayMs = val;
-};
+  // Train Button
+  document.getElementById("trainBtn").onclick = () => {
+    showInstructions("training", () => {
+      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
+        abortBtn.style.display = "block";
+      }
 
-// --- Main Buttons ---
-document.getElementById("startBtn").onclick = () => {
-  showInstructions("test", () => {
-    const abortBtn = document.getElementById("abortBtn");
-    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    if (abortBtn) abortBtn.style.display = (config.showAbortXOnTouchDevices && isTouchDevice) ? "block" : "none";
-    beginPhase("test");
-  });
-};
+      if (assetsReady) {
+        beginPhase("training");
+      } else {
+        waitingToBeginPhase = "training";
+        waitForAssetsThenBegin();
+      }
+    });
+  };
 
-document.getElementById("trainBtn").onclick = () => {
-  showInstructions("training", () => {
-    const abortBtn = document.getElementById("abortBtn");
-    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    if (abortBtn) abortBtn.style.display = (config.showAbortXOnTouchDevices && isTouchDevice) ? "block" : "none";
-    beginPhase("training");
-  });
-};
+  // Start Button
+  document.getElementById("startBtn").onclick = () => {
+    showInstructions("test", () => {
+      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
+        abortBtn.style.display = "block";
+      }
 
-document.getElementById("calibrateBtn").onclick = startCalibration;
+      if (assetsReady) {
+        beginPhase("test");
+      } else {
+        waitingToBeginPhase = "test";
+        waitForAssetsThenBegin();
+      }
+    });
+  };
+
+  document.getElementById("calibrateBtn").onclick = startCalibration;
+};
 
 

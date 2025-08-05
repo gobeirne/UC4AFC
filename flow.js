@@ -18,6 +18,8 @@ import { showScreen, setImage } from "./ui.js";
 import { loadList } from "./list.js";
 import { saveResults } from "./results.js";
 
+let trainingAborted = false;
+
 export function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -29,8 +31,9 @@ let nextImagesToPreload = [];
 
 export function beginPhase(p) {
   phase = p;
+  trainingAborted = false;
   participant = document.getElementById("name").value || "anon";
-  testStartedAt = new Date(); // ✅ actual start time
+  testStartedAt = new Date();
 
   loadList().then(() => {
     shuffle(list);
@@ -48,56 +51,53 @@ export function beginPhase(p) {
 }
 
 export function showTrainingItem() {
-  if (trialIndex >= list.length || phase !== "training") {
+  if (trainingAborted || trialIndex >= list.length || phase !== "training") {
     showScreen("instructions");
     return;
   }
 
   const item = list[trialIndex];
 
-  // Reset and prepare audio
   audio.pause();
   audio.currentTime = 0;
   audio.onended = null;
   audio.src = `sounds/${item.audioFile}`;
 
   audio.play().then(() => {
-    // ✅ Image appears after 600 ms from audio start
+    if (trainingAborted) return;
+
     setTimeout(() => {
-      if (phase === "training") {
-        setImage(trainingImg, item.correct, config.arrows);
-      }
+      if (trainingAborted || phase !== "training") return;
+      setImage(trainingImg, item.correct, config.arrows);
     }, config.imageRevealOffsetMs || 600);
   }).catch(err => {
     console.error("⚠️ Training audio failed to play:", err);
   });
 
   audio.onended = () => {
+    if (trainingAborted) return;
+
     trialIndex++;
     if (phase === "training") {
       setTimeout(() => {
-        if (phase === "training") {
-          showTrainingItem();
-        }
+        if (trainingAborted || phase !== "training") return;
+        showTrainingItem();
       }, config.delayMs || 1500);
     }
   };
 }
 
-
-
-
 export function nextTrial() {
-if (trialIndex >= list.length) {
-  if (phase === "test") {
-    saveResults();
-  } else {
-    showScreen("thankyou");
-    const abortBtn = document.getElementById("abortBtn");
-    if (abortBtn) abortBtn.style.display = "none";
+  if (trialIndex >= list.length) {
+    if (phase === "test") {
+      saveResults();
+    } else {
+      showScreen("thankyou");
+      const abortBtn = document.getElementById("abortBtn");
+      if (abortBtn) abortBtn.style.display = "none";
+    }
+    return;
   }
-  return;
-}
 
   const item = list[trialIndex];
   const shuffled = [...item.images];
@@ -200,4 +200,8 @@ export function recordResponse(img) {
       nextTrial();
     }, remaining);
   }, 500);
+}
+
+export function abortTraining() {
+  trainingAborted = true;
 }

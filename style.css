@@ -87,6 +87,10 @@ button {
 button:hover {
   background-color: #a00c25; /* darker UC red for hover */
 }
+#loading-ok:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 #training-img {
   max-width: 100%;
@@ -99,14 +103,22 @@ button:hover {
   top: 0.5rem;
   right: 0.5rem;
   z-index: 1000;
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   padding: 0.25em 0.5em;
-  background: #fff;
-  border: 2px solid #900;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid #aaa;
   border-radius: 0.25em;
+  color: #666;
+  font-weight: normal;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.3s ease;
+}
+
+#abortBtn:hover {
+  opacity: 1;
   color: #900;
   font-weight: bold;
-  cursor: pointer;
 }
 
 
