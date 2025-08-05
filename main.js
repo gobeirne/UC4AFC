@@ -91,13 +91,17 @@ preloadAllAssets().then(() => {
 
   setOptImgs();
 
-  const abortBtn = document.getElementById("abortBtn");
-  if (abortBtn) {
-    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    const showOnTouch = config.showAbortXOnTouchDevices === true;
-    abortBtn.style.display = (showOnTouch && isTouchDevice) ? "block" : "none";
-    abortBtn.addEventListener("click", abortPhase);
-  }
+const abortBtn = document.getElementById("abortBtn");
+if (abortBtn) {
+  // 🖼️ Show the button only if needed
+  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  const showOnTouch = config.showAbortXOnTouchDevices === true;
+  abortBtn.style.display = (showOnTouch && isTouchDevice) ? "block" : "none";
+
+  // 🧠 Always attach the click handler
+  abortBtn.addEventListener("click", abortPhase);
+}
+
 
   optImgs.forEach(img => {
     img.addEventListener("click", () => recordResponse(img));
