@@ -82,7 +82,7 @@ document.body.insertAdjacentHTML("afterbegin", `
 `);
 
 document.getElementById("fileInput").addEventListener("change", async (e) => {
-  const raw = Array.from(e.target.files).filter(f => f.name !== "main.inline.js");
+const raw = Array.from(e.target.files).filter(f => !["main.inline.js", "service-worker.js"].includes(f.name));
   const fileMap = Object.fromEntries(raw.map(f => [f.name, f]));
 
   // Sort based on preferred order, then extras

@@ -26,7 +26,7 @@ export let participant = "";
 export let responseLog = [];
 
 export const trainingImg = document.getElementById("training-img");
-export const audio = document.getElementById("stimulus");
+export let audio = null;
 
 export let optImgs = [];
 export let startTime = null;
@@ -38,7 +38,9 @@ export function setOptImgs() {
     document.getElementById("opt2"),
     document.getElementById("opt3")
   ];
+  audio = document.getElementById("stimulus");
 }
+
 
 
 

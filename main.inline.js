@@ -31,7 +31,7 @@ let participant = "";
 let responseLog = [];
 
 const trainingImg = document.getElementById("training-img");
-const audio = document.getElementById("stimulus");
+let audio = null;
 
 let optImgs = [];
 let startTime = null;
@@ -43,7 +43,9 @@ function setOptImgs() {
     document.getElementById("opt2"),
     document.getElementById("opt3")
   ];
+  audio = document.getElementById("stimulus");
 }
+
 
 
 
@@ -63,17 +65,21 @@ async function loadConfig() {
   } catch (err) {
     console.error("❌ Failed to load config.json:", err);
     console.warn("⚠️ Could not load config.json. Using fallback config.");
+    
     Object.assign(config, {
       arrows: true,
       defaultDelay: 1500,
       showCountdown: true,
-	  saveJson: false,
+      showAbortXOnTouchDevices: true,
+      saveJson: false,
       imageRevealOffsetMs: 600,
       instructions: {
         training: "You’ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
         test: "You will hear a word and see four pictures. Click the picture that matches the word you heard."
       }
     });
+
+    console.log("📦 Fallback config in use:", config);
   }
 }
 
@@ -190,7 +196,7 @@ function beginPhase(p) {
 }
 
 function showTrainingItem() {
-  if (trialIndex >= list.length) {
+  if (trialIndex >= list.length || phase !== "training") {
     showScreen("instructions");
     return;
   }
@@ -202,21 +208,36 @@ function showTrainingItem() {
   audio.currentTime = 0;
   audio.onended = null;
   audio.src = `sounds/${item.audioFile}`;
+
   audio.play().catch(err => {
     console.error("⚠️ Training audio failed to play:", err);
   });
 
   audio.onended = () => {
     trialIndex++;
-    setTimeout(showTrainingItem, config.delayMs || 1500);
+
+    if (phase === "training") {
+      setTimeout(() => {
+        if (phase === "training") {
+          showTrainingItem();
+        }
+      }, config.delayMs || 1500);
+    }
   };
 }
 
+
 function nextTrial() {
-  if (trialIndex >= list.length) {
+if (trialIndex >= list.length) {
+  if (phase === "test") {
     saveResults();
-    return;
+  } else {
+    showScreen("thankyou");
+    const abortBtn = document.getElementById("abortBtn");
+    if (abortBtn) abortBtn.style.display = "none";
   }
+  return;
+}
 
   const item = list[trialIndex];
   const shuffled = [...item.images];
@@ -532,6 +553,37 @@ function saveResults(optionalNote = "") {
 // --- main.js ---
 // File: main.js
 
+// --- Abort Phase Function ---
+function abortPhase() {
+  const abortBtn = document.getElementById("abortBtn");
+
+  const stopAudio = () => {
+    if (audio && !audio.paused) {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.src = "";
+    }
+  };
+
+  if (phase === "training" && confirm("Abort training?")) {
+    stopAudio();
+    showScreen("thankyou");
+    if (abortBtn) abortBtn.style.display = "none";
+  } else if (phase === "test" && confirm("Abort test and save progress?")) {
+    stopAudio();
+    showScreen("thankyou");
+    if (abortBtn) abortBtn.style.display = "none";
+    saveResults("test aborted at " + new Date().toLocaleString());
+  }
+}
+
+// --- Escape Key to Abort ---
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    abortPhase();
+  }
+});
+
 // --- Startup ---
 window.onload = async () => {
   await new Promise(resolve => {
@@ -543,9 +595,28 @@ window.onload = async () => {
   });
 
   await loadConfig();
-  await loadArrowFiles(); // Must come after config
+  await loadArrowFiles();
+  setOptImgs();
 
-  setOptImgs(); // Populate image elements
+// ✅ Show abort button ONLY on touch devices if configured
+const abortBtn = document.getElementById("abortBtn");
+if (abortBtn) {
+  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  const showOnTouch = config.showAbortXOnTouchDevices === true;
+
+  console.log("📱 Touch device detected?", isTouchDevice);
+  console.log("⚙️ Config: showAbortXOnTouchDevices =", showOnTouch);
+
+  if (showOnTouch && isTouchDevice) {
+    console.log("✅ Showing abort button (touch device only)");
+    abortBtn.style.display = "block";
+  } else {
+    console.log("🚫 Hiding abort button");
+    abortBtn.style.display = "none";
+  }
+}
+
+
   document.getElementById("delay").value = config.defaultDelay || 1500;
   adjustImageSize();
   showScreen("intro");
@@ -559,22 +630,22 @@ window.onload = async () => {
     });
   });
 
-  // ✅ Wire up navigation buttons after DOM is ready
+  // ✅ Wire up navigation buttons
   const back = document.getElementById("backBtn");
   const ok = document.getElementById("okBtn");
   const ret = document.getElementById("returnBtn");
 
   if (back) back.addEventListener("click", () => showScreen("intro"));
   if (ok)   ok.addEventListener("click", () => beginPhase(phase));
-  
-  if (ret) ret.addEventListener("click", () => {
+  if (ret)  ret.addEventListener("click", () => {
     trialIndex = 0;
     responseLog.length = 0;
+    if (abortBtn) abortBtn.style.display = "none";
     showScreen("intro");
   });
+
+  if (abortBtn) abortBtn.addEventListener("click", abortPhase);
 };
-
-
 
 // --- Delay Setting ---
 document.getElementById("delay").oninput = (e) => {
@@ -584,26 +655,33 @@ document.getElementById("delay").oninput = (e) => {
 
 // --- Main Buttons ---
 document.getElementById("startBtn").onclick = () => {
-  showInstructions("test", () => beginPhase("test"));
+  showInstructions("test", () => {
+    const abortBtn = document.getElementById("abortBtn");
+    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
+      abortBtn.style.display = "block";
+    } else if (abortBtn) {
+      abortBtn.style.display = "none";
+    }
+    beginPhase("test");
+  });
 };
 
 document.getElementById("trainBtn").onclick = () => {
-  showInstructions("training", () => beginPhase("training"));
+  showInstructions("training", () => {
+    const abortBtn = document.getElementById("abortBtn");
+    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
+      abortBtn.style.display = "block";
+    } else if (abortBtn) {
+      abortBtn.style.display = "none";
+    }
+    beginPhase("training");
+  });
 };
+
 
 document.getElementById("preloadBtn").onclick = preloadAssets;
 document.getElementById("calibrateBtn").onclick = startCalibration;
-
-// --- Escape Key to Abort ---
-window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    if (phase === "training" && confirm("Abort training?")) {
-      saveResults("training aborted at " + new Date().toLocaleString());
-    } else if (phase === "test" && confirm("Abort test and save progress?")) {
-      saveResults("test aborted at " + new Date().toLocaleString());
-    }
-  }
-});
-
 
 

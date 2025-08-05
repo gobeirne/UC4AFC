@@ -48,7 +48,7 @@ export function beginPhase(p) {
 }
 
 export function showTrainingItem() {
-  if (trialIndex >= list.length) {
+  if (trialIndex >= list.length || phase !== "training") {
     showScreen("instructions");
     return;
   }
@@ -60,21 +60,36 @@ export function showTrainingItem() {
   audio.currentTime = 0;
   audio.onended = null;
   audio.src = `sounds/${item.audioFile}`;
+
   audio.play().catch(err => {
     console.error("⚠️ Training audio failed to play:", err);
   });
 
   audio.onended = () => {
     trialIndex++;
-    setTimeout(showTrainingItem, config.delayMs || 1500);
+
+    if (phase === "training") {
+      setTimeout(() => {
+        if (phase === "training") {
+          showTrainingItem();
+        }
+      }, config.delayMs || 1500);
+    }
   };
 }
 
+
 export function nextTrial() {
-  if (trialIndex >= list.length) {
+if (trialIndex >= list.length) {
+  if (phase === "test") {
     saveResults();
-    return;
+  } else {
+    showScreen("thankyou");
+    const abortBtn = document.getElementById("abortBtn");
+    if (abortBtn) abortBtn.style.display = "none";
   }
+  return;
+}
 
   const item = list[trialIndex];
   const shuffled = [...item.images];

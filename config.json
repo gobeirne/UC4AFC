@@ -3,6 +3,7 @@
   "defaultDelay": 1500,
   "imageRevealOffsetMs": 600,
   "showCountdown": true,
+  "showAbortXOnTouchDevices": true,
   "saveJson": false,
   "instructions": {
     "training": "You’ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
