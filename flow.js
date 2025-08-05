@@ -54,20 +54,26 @@ export function showTrainingItem() {
   }
 
   const item = list[trialIndex];
-  setImage(trainingImg, item.correct, config.arrows);
 
+  // Reset and prepare audio
   audio.pause();
   audio.currentTime = 0;
   audio.onended = null;
   audio.src = `sounds/${item.audioFile}`;
 
-  audio.play().catch(err => {
+  audio.play().then(() => {
+    // ✅ Image appears after 600 ms from audio start
+    setTimeout(() => {
+      if (phase === "training") {
+        setImage(trainingImg, item.correct, config.arrows);
+      }
+    }, config.imageRevealOffsetMs || 600);
+  }).catch(err => {
     console.error("⚠️ Training audio failed to play:", err);
   });
 
   audio.onended = () => {
     trialIndex++;
-
     if (phase === "training") {
       setTimeout(() => {
         if (phase === "training") {
@@ -77,6 +83,8 @@ export function showTrainingItem() {
     }
   };
 }
+
+
 
 
 export function nextTrial() {

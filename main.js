@@ -48,33 +48,32 @@ window.onload = async () => {
   });
 
   await loadConfig();
-  await loadArrowFiles();
+  await loadArrowFiles();         // must finish first
+const fullList = config.arrowList;
+preloadAssets(fullList);  // pass it explicitly
   setOptImgs();
 
-// ✅ Show abort button ONLY on touch devices if configured
-const abortBtn = document.getElementById("abortBtn");
-if (abortBtn) {
-  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-  const showOnTouch = config.showAbortXOnTouchDevices === true;
+  const abortBtn = document.getElementById("abortBtn");
+  if (abortBtn) {
+    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const showOnTouch = config.showAbortXOnTouchDevices === true;
 
-  console.log("📱 Touch device detected?", isTouchDevice);
-  console.log("⚙️ Config: showAbortXOnTouchDevices =", showOnTouch);
-
-  if (showOnTouch && isTouchDevice) {
-    console.log("✅ Showing abort button (touch device only)");
-    abortBtn.style.display = "block";
-  } else {
-    console.log("🚫 Hiding abort button");
-    abortBtn.style.display = "none";
+    if (showOnTouch && isTouchDevice) {
+      abortBtn.style.display = "block";
+    } else {
+      abortBtn.style.display = "none";
+    }
   }
-}
-
 
   document.getElementById("delay").value = config.defaultDelay || 1500;
-  adjustImageSize();
-  showScreen("intro");
+adjustImageSize();
+showScreen("intro");
 
-  window.addEventListener("resize", adjustImageSize);
+window.addEventListener("resize", adjustImageSize);
+
+// Preload in background after intro is visible
+preloadAssets();
+
 
   // ✅ Set click handlers for test mode
   optImgs.forEach(img => {
@@ -133,6 +132,4 @@ document.getElementById("trainBtn").onclick = () => {
   });
 };
 
-
-document.getElementById("preloadBtn").onclick = preloadAssets;
 document.getElementById("calibrateBtn").onclick = startCalibration;

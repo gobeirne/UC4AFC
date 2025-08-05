@@ -4,36 +4,39 @@
 
 // --- global.js ---
 // File: global.js
+
+// --- Config ---
 const config = {
   arrows: true,
   defaultDelay: 1500,
   showCountdown: true,
   imageRevealOffsetMs: 600,
+  showAbortXOnTouchDevices: true,
   instructions: {
     training:
       "You’ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
     test:
       "You will hear a word and see four pictures. Click the picture that matches the word you heard."
   },
-  arrowList: ["beak", "chin", "dad", "hood", "knees", "lock", "mum", "nose", "note", "page", "seed", "tongue"]
+  arrowList: [
+    "beak", "chin", "dad", "hood", "knees",
+    "lock", "mum", "nose", "note", "page",
+    "seed", "tongue"
+  ]
 };
+
+// --- Runtime State ---
 let testStartedAt = null;
-
-let arrowSet = new Set();
-function setArrowList(list) {
-  arrowSet = new Set(list);
-}
-
 let list = [];
 let trialIndex = 0;
 let phase = "";
 let participant = "";
 let responseLog = [];
 
+// --- DOM Elements ---
 const trainingImg = document.getElementById("training-img");
-let audio = null;
-
 let optImgs = [];
+let audio = null;
 let startTime = null;
 
 function setOptImgs() {
@@ -46,10 +49,14 @@ function setOptImgs() {
   audio = document.getElementById("stimulus");
 }
 
+// --- Arrows ---
+let arrowSet = new Set();
+function setArrowList(list) {
+  arrowSet.clear();
+  list.forEach(item => arrowSet.add(item));
+}
 
-
-
-
+// Ensure optImgs/audio init if script is late-loaded
 document.addEventListener("DOMContentLoaded", setOptImgs);
 
 
@@ -211,20 +218,26 @@ function showTrainingItem() {
   }
 
   const item = list[trialIndex];
-  setImage(trainingImg, item.correct, config.arrows);
 
+  // Reset and prepare audio
   audio.pause();
   audio.currentTime = 0;
   audio.onended = null;
   audio.src = `sounds/${item.audioFile}`;
 
-  audio.play().catch(err => {
+  audio.play().then(() => {
+    // ✅ Image appears after 600 ms from audio start
+    setTimeout(() => {
+      if (phase === "training") {
+        setImage(trainingImg, item.correct, config.arrows);
+      }
+    }, config.imageRevealOffsetMs || 600);
+  }).catch(err => {
     console.error("⚠️ Training audio failed to play:", err);
   });
 
   audio.onended = () => {
     trialIndex++;
-
     if (phase === "training") {
       setTimeout(() => {
         if (phase === "training") {
@@ -234,6 +247,8 @@ function showTrainingItem() {
     }
   };
 }
+
+
 
 
 function nextTrial() {
@@ -387,9 +402,12 @@ async function loadList() {
  * Load arrow list + preload key assets
  */
 async function preloadAssets() {
-  await loadArrowFiles();
-  await preloadImagesAndSounds();
-  alert("✅ Preloading complete.");
+  const list = config.arrowList;
+  if (!list || !Array.isArray(list) || list.length === 0) {
+    console.warn("⚠️ Skipping preload — no arrowList found.");
+    return;
+  }
+  await preloadImagesAndSounds(list);
 }
 
 /**
@@ -404,6 +422,7 @@ async function loadArrowFiles() {
     ];
     console.warn("⚠️ Using static arrow list fallback (file:// mode)");
     setArrowList(fallbackList);
+    config.arrowList = fallbackList;
     return;
   }
 
@@ -413,41 +432,45 @@ async function loadArrowFiles() {
     const data = await res.json();
     if (!Array.isArray(data)) throw new Error("Invalid arrowFiles.json format");
     setArrowList(data);
-    console.log("✅ Loaded arrow list:", data.length);
+    config.arrowList = data;
+	console.log("✅ Loaded arrow list:", data.length, "items:", data);
   } catch (err) {
     console.error("❌ Could not load arrowFiles.json:", err);
   }
 }
 
 /**
- * Preloads all arrow-related images and sounds into memory
+ * Preloads all relevant images and sounds into memory
  */
-async function preloadImagesAndSounds() {
-  const arrowList = Array.from(arrowSet);
+async function preloadImagesAndSounds(list) {
   const jobs = [];
 
-  // Images (main + _arrow)
-  for (const name of arrowList) {
+  for (const name of list) {
     jobs.push(preloadImage(`images/${name}.jpg`));
     jobs.push(preloadImage(`images/${name}_arrow.jpg`));
     jobs.push(preloadSound(`sounds/${name}.mp3`));
   }
 
-  // UI assets
+  // UI and calibration assets
   jobs.push(preloadImage("UClogo.png"));
   jobs.push(preloadSound("sounds/calib.mp3"));
   jobs.push(preloadSound("sounds/NZEng_calib.mp3"));
   jobs.push(preloadSound("sounds/TeReo_calib.mp3"));
 
   await Promise.all(jobs);
+  console.log("📦 Will preload assets for:", list.length, "items");
   console.log(`✅ Preloaded ${jobs.length} assets`);
+  
 }
 
 function preloadImage(src) {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = resolve;
-    img.onerror = resolve;
+    img.onerror = () => {
+      console.warn(`⚠️ Failed to preload image: ${src}`);
+      resolve();
+    };
     img.src = src;
   });
 }
@@ -456,7 +479,10 @@ function preloadSound(src) {
   return new Promise((resolve) => {
     const audio = new Audio();
     audio.oncanplaythrough = resolve;
-    audio.onerror = resolve;
+    audio.onerror = () => {
+      console.warn(`⚠️ Failed to preload sound: ${src}`);
+      resolve();
+    };
     audio.src = src;
   });
 }
@@ -604,33 +630,32 @@ window.onload = async () => {
   });
 
   await loadConfig();
-  await loadArrowFiles();
+  await loadArrowFiles();         // must finish first
+const fullList = config.arrowList;
+preloadAssets(fullList);  // pass it explicitly
   setOptImgs();
 
-// ✅ Show abort button ONLY on touch devices if configured
-const abortBtn = document.getElementById("abortBtn");
-if (abortBtn) {
-  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-  const showOnTouch = config.showAbortXOnTouchDevices === true;
+  const abortBtn = document.getElementById("abortBtn");
+  if (abortBtn) {
+    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const showOnTouch = config.showAbortXOnTouchDevices === true;
 
-  console.log("📱 Touch device detected?", isTouchDevice);
-  console.log("⚙️ Config: showAbortXOnTouchDevices =", showOnTouch);
-
-  if (showOnTouch && isTouchDevice) {
-    console.log("✅ Showing abort button (touch device only)");
-    abortBtn.style.display = "block";
-  } else {
-    console.log("🚫 Hiding abort button");
-    abortBtn.style.display = "none";
+    if (showOnTouch && isTouchDevice) {
+      abortBtn.style.display = "block";
+    } else {
+      abortBtn.style.display = "none";
+    }
   }
-}
-
 
   document.getElementById("delay").value = config.defaultDelay || 1500;
-  adjustImageSize();
-  showScreen("intro");
+adjustImageSize();
+showScreen("intro");
 
-  window.addEventListener("resize", adjustImageSize);
+window.addEventListener("resize", adjustImageSize);
+
+// Preload in background after intro is visible
+preloadAssets();
+
 
   // ✅ Set click handlers for test mode
   optImgs.forEach(img => {
@@ -689,8 +714,6 @@ document.getElementById("trainBtn").onclick = () => {
   });
 };
 
-
-document.getElementById("preloadBtn").onclick = preloadAssets;
 document.getElementById("calibrateBtn").onclick = startCalibration;
 
 
