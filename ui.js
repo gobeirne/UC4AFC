@@ -10,13 +10,22 @@ export function showScreen(id) {
 }
 
 export function adjustImageSize() {
-  const gridSize = Math.min(window.innerWidth, window.innerHeight) / 2 - 30;
+  const rowGap = 12;
+  const colGap = 12;
+  const padding = 20; // buffer from edges
+
+  const availableWidth = window.innerWidth - colGap - padding * 2;
+  const availableHeight = window.innerHeight - rowGap - padding * 2;
+
+  const squareSize = Math.min(availableWidth / 2, availableHeight / 2);
+
   optImgs.forEach(img => {
-    img.style.width = `${gridSize}px`;
-    img.style.height = `${gridSize}px`;
+    img.style.width = `${squareSize}px`;
+    img.style.height = `${squareSize}px`;
   });
-  trainingImg.style.width = `${gridSize}px`;
-  trainingImg.style.height = `${gridSize}px`;
+
+  trainingImg.style.width = `${squareSize}px`;
+  trainingImg.style.height = `${squareSize}px`;
   trainingImg.style.objectFit = "contain";
   trainingImg.style.margin = "0 auto";
   trainingImg.style.display = "block";
