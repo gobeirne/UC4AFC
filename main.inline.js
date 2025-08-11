@@ -129,13 +129,6 @@ function adjustImageSize() {
 }
 
 
-function setImage(imgEl, name, useArrows = true) {
-  const base = `images/${name}`;
-  const normal = `${base}.jpg`;
-  const arrow  = `${base}_arrow.jpg`;
-  imgEl.src = (useArrows && config.arrows && arrowSet.has(name)) ? arrow : normal;
-}
-
 function showInstructions(phase, onContinue) {
   const title = phase === "training" ? "Training Instructions" : "Test Instructions";
   const text = config.instructions?.[phase] || "(No instructions found)";

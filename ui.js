@@ -1,5 +1,6 @@
 // File: ui.js
 import { config, optImgs, trainingImg, arrowSet } from "./global.js";
+import { setImage } from "./setImage.js";
 
 export const screens = Array.from(document.querySelectorAll(".screen"));
 
@@ -31,13 +32,6 @@ export function adjustImageSize() {
   trainingImg.style.display = "block";
 }
 
-
-export function setImage(imgEl, name, useArrows = true) {
-  const base = `images/${name}`;
-  const normal = `${base}.jpg`;
-  const arrow  = `${base}_arrow.jpg`;
-  imgEl.src = (useArrows && config.arrows && arrowSet.has(name)) ? arrow : normal;
-}
 
 export function showInstructions(phase, onContinue) {
   const title = phase === "training" ? "Training Instructions" : "Test Instructions";
