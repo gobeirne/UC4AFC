@@ -1,5 +1,5 @@
 // File: ui.js
-import { config, optImgs, trainingImg } from "./global.js";
+import { config, optImgs, trainingImg, arrowSet } from "./global.js";
 
 export const screens = Array.from(document.querySelectorAll(".screen"));
 
@@ -31,24 +31,12 @@ export function adjustImageSize() {
   trainingImg.style.display = "block";
 }
 
+
 export function setImage(imgEl, name, useArrows = true) {
-  const basePath = `images/${name}`;
-  const arrowPath = `${basePath}_arrow.jpg`;
-  const normalPath = `${basePath}.jpg`;
-
-  if (!useArrows) {
-    imgEl.src = normalPath;
-    return;
-  }
-
-  const probe = new Image();
-  probe.onload = () => {
-    imgEl.src = arrowPath;
-  };
-  probe.onerror = () => {
-    imgEl.src = normalPath;
-  };
-  probe.src = arrowPath;
+  const base = `images/${name}`;
+  const normal = `${base}.jpg`;
+  const arrow  = `${base}_arrow.jpg`;
+  imgEl.src = (useArrows && config.arrows && arrowSet.has(name)) ? arrow : normal;
 }
 
 export function showInstructions(phase, onContinue) {

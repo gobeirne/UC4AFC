@@ -128,24 +128,12 @@ function adjustImageSize() {
   trainingImg.style.display = "block";
 }
 
+
 function setImage(imgEl, name, useArrows = true) {
-  const basePath = `images/${name}`;
-  const arrowPath = `${basePath}_arrow.jpg`;
-  const normalPath = `${basePath}.jpg`;
-
-  if (!useArrows) {
-    imgEl.src = normalPath;
-    return;
-  }
-
-  const probe = new Image();
-  probe.onload = () => {
-    imgEl.src = arrowPath;
-  };
-  probe.onerror = () => {
-    imgEl.src = normalPath;
-  };
-  probe.src = arrowPath;
+  const base = `images/${name}`;
+  const normal = `${base}.jpg`;
+  const arrow  = `${base}_arrow.jpg`;
+  imgEl.src = (useArrows && config.arrows && arrowSet.has(name)) ? arrow : normal;
 }
 
 function showInstructions(phase, onContinue) {
@@ -174,11 +162,9 @@ function setImage(imgElement, name, useArrows = true) {
   const fallback = `${base}.jpg`;
   const arrow = `${base}_arrow.jpg`;
 
-  if (useArrows && arrowSet.has(name)) {
-    imgElement.src = arrow;
-  } else {
-    imgElement.src = fallback;
-  }
+  imgElement.src = (useArrows && config.arrows && arrowSet.has(name))
+    ? arrow
+    : fallback;
 }
 
 
@@ -861,6 +847,21 @@ window.onload = async () => {
   });
 
   await loadConfig();
+  
+  // ✅ Initialise arrowSet before list/preload
+  if (location.protocol === "file:") {
+    // Local: use the static list embedded in config
+    setArrowList(Array.isArray(config.arrowList) ? config.arrowList : []);
+  } else {
+    // Hosted: prefer arrowFiles.json (fallback to config.arrowList)
+    try {
+      const res = await fetch("arrowFiles.json");
+      const arr = await res.json();
+      setArrowList(Array.isArray(arr) ? arr : []);
+    } catch (e) {
+      setArrowList(Array.isArray(config.arrowList) ? config.arrowList : []);
+    }
+  }
   await loadList();
 
   showScreen("intro");

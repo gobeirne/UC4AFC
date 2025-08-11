@@ -75,6 +75,21 @@ window.onload = async () => {
   });
 
   await loadConfig();
+  
+  // ✅ Initialise arrowSet before list/preload
+  if (location.protocol === "file:") {
+    // Local: use the static list embedded in config
+    setArrowList(Array.isArray(config.arrowList) ? config.arrowList : []);
+  } else {
+    // Hosted: prefer arrowFiles.json (fallback to config.arrowList)
+    try {
+      const res = await fetch("arrowFiles.json");
+      const arr = await res.json();
+      setArrowList(Array.isArray(arr) ? arr : []);
+    } catch (e) {
+      setArrowList(Array.isArray(config.arrowList) ? config.arrowList : []);
+    }
+  }
   await loadList();
 
   showScreen("intro");
