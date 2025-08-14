@@ -19,9 +19,9 @@ const config = {
       "You will hear a word and see four pictures. Click the picture that matches the word you heard."
   },
   arrowList: [
-    "beak", "chin", "dad", "hood", "knees",
-    "lock", "mum", "nose", "note", "page",
-    "seed", "tongue"
+    //"beak", "chin", "dad", "hood", "knees",
+    //"lock", "mum", "nose", "note", "page",
+    //"seed", "tongue"
   ]
 };
 
