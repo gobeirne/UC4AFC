@@ -7,7 +7,7 @@ export async function loadConfig() {
   if (isLocal) {
     console.warn("📁 Running locally. Skipping fetch(config.json) and using fallback config.");
     Object.assign(config, {
-      arrows: true,
+      arrows: false,
       defaultDelay: 1500,
       showCountdown: true,
       showAbortXOnTouchDevices: true,

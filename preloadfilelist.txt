@@ -6,7 +6,6 @@ images/boat.jpg
 images/beach.jpg
 images/beak_arrow.jpg
 images/bed.jpg
-images/bat_backup.jpg
 images/boot.jpg
 images/bus.jpg
 images/bat.jpg
@@ -30,7 +29,6 @@ images/dad_arrow.jpg
 images/dad.jpg
 images/cot.jpg
 images/dirt.jpg
-images/cot_backup.jpg
 images/bell.jpg
 images/bike.jpg
 images/dog.jpg
@@ -43,7 +41,6 @@ images/fan.jpg
 images/feet.jpg
 images/fork.jpg
 images/hen.jpg
-images/head_backup.jpg
 images/hood_arrow.jpg
 images/bird.jpg
 images/hood.jpg
@@ -75,14 +72,11 @@ images/mum_arrow.jpg
 images/nose.jpg
 images/nose_arrow.jpg
 images/mop.jpg
-images/nurse_backup.jpg
 images/nut.jpg
 images/nurse.jpg
 images/mouth.jpg
-images/page_arrow.jpg
 images/pan.jpg
 images/note_arrow.jpg
-images/peach_backup.jpg
 images/park.jpg
 images/pig.jpg
 images/pen.jpg
@@ -97,12 +91,10 @@ images/sad.jpg
 images/peach.jpg
 images/seed.jpg
 images/note.jpg
-images/seed_arrow.jpg
 images/shark.jpg
 images/sheep.jpg
 images/shell.jpg
 images/shirt.jpg
-images/sheep_backup.jpg
 images/ship.jpg
 images/shop.jpg
 images/sock.jpg
@@ -112,7 +104,6 @@ images/tongue.jpg
 images/tap.jpg
 images/soup.jpg
 images/van.jpg
-images/tongue_arrow.jpg
 images/zip.jpg
 sounds/back.mp3
 sounds/bag.mp3

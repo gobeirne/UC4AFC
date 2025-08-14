@@ -69,7 +69,7 @@ async function loadConfig() {
   if (isLocal) {
     console.warn("📁 Running locally. Skipping fetch(config.json) and using fallback config.");
     Object.assign(config, {
-      arrows: true,
+      arrows: false,
       defaultDelay: 1500,
       showCountdown: true,
       showAbortXOnTouchDevices: true,
@@ -436,7 +436,6 @@ assetList = [
   "images/comb.jpg",
   "images/cone.jpg",
   "images/cot.jpg",
-  "images/cot_backup.jpg",
   "images/dad.jpg",
   "images/dad_arrow.jpg",
   "images/dirt.jpg",
@@ -450,7 +449,6 @@ assetList = [
   "images/hat.jpg",
   "images/hall.jpg",
   "images/head.jpg",
-  "images/head_backup.jpg",
   "images/heart.jpg",
   "images/hen.jpg",
   "images/hood_arrow.jpg",
@@ -491,7 +489,6 @@ assetList = [
   "images/park.jpg",
   "images/pan.jpg",
   "images/peach.jpg",
-  "images/peach_backup.jpg",
   "images/pen.jpg",
   "images/pig.jpg",
   "images/purse.jpg",
@@ -505,7 +502,6 @@ assetList = [
   "images/seed_arrow.jpg",
   "images/sheep.jpg",
   "images/shark.jpg",
-  "images/sheep_backup.jpg",
   "images/shell.jpg",
   "images/shirt.jpg",
   "images/ship.jpg",
@@ -892,7 +888,7 @@ if (abortBtn) {
   const ret  = document.getElementById("returnBtn");
 
   if (back) back.addEventListener("click", () => showScreen("intro"));
-  if (ok)   ok.addEventListener("click", () => beginPhase(phase));
+ // if (ok)   ok.addEventListener("click", () => beginPhase(phase));
   if (ret)  ret.addEventListener("click", () => {
     trialIndex = 0;
     responseLog.length = 0;
