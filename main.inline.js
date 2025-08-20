@@ -808,10 +808,15 @@ function saveResults(optionalNote = "") {
     console.warn("🛑 Skipping JSON download due to config.saveJson = false");
   }
 
-  // --- Show end screen
-  showScreen("thankyou");
-  document.getElementById("fileinfo").textContent =
-    `Saved: UC4AFC_${participant}_${timeStr}.${shouldSaveJson ? "{txt,json}" : "txt"}`;
+ // --- Show end screen
+showScreen("thankyou");
+document.getElementById("fileinfo").textContent =
+  `Saved: UC4AFC_${participant}_${timeStr}.${shouldSaveJson ? "{txt,json}" : "txt"}`;
+
+// Enable Save Again button
+const saveAgainBtn = document.getElementById("saveAgainBtn");
+if (saveAgainBtn) {
+  saveAgainBtn.onclick = () => saveResults("manual re-save at " + new Date().toLocaleString());
 }
 
 
