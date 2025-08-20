@@ -19,7 +19,7 @@ man	fan	pen	shark	man	man.mp3
 fork	chalk	back	rug	fork	fork.mp3
 rock	sock	fork	boot	rock	rock.mp3
 nurse	purse	bus	coat	nurse	nurse.mp3
-sad	dad	head	mum	sad	sad.mp3
+sad	dad	road	mum	sad	sad.mp3
 shirt	dirt	nut	bed	shirt	shirt.mp3
 kite	night	cot	park	kite	kite.mp3
 coat	note	kite	sock	coat	coat.mp3
@@ -55,7 +55,7 @@ hat	bat	back	lick	hat	hat.mp3
 tap	cap	cat	dog	tap	tap.mp3
 meat	feet	dirt	dad	meat	meat.mp3
 mum	hug	comb	lock	mum	mum.mp3
-leaf	peach	knife	road	leaf	leaf.mp3
+leaf	beach	knife	road	leaf	leaf.mp3
 bus	duck	nurse	tap	bus	bus.mp3
 bin	ship	man	shark	bin	bin.mp3
 bag	dad	rug	meat	bag	bag.mp3
