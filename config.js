@@ -15,7 +15,7 @@ export async function loadConfig() {
       imageRevealOffsetMs: 600,
       instructions: {
         training: "You’ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
-        test: "You will hear a word and see four pictures. Click the picture that matches the word you heard."
+        test: "You will hear a word and see four pictures. Click the picture that matches the word you heard. If you're not sure, have a guess."
       }
     });
     return;
@@ -31,3 +31,4 @@ export async function loadConfig() {
     console.warn("⚠️ Could not load config.json. Using fallback config.");
   }
 }
+
