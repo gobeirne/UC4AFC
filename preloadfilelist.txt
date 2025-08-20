@@ -4,7 +4,6 @@ images/ball.jpg
 images/beak.jpg
 images/boat.jpg
 images/beach.jpg
-images/beak_arrow.jpg
 images/bed.jpg
 images/boot.jpg
 images/bus.jpg
@@ -16,7 +15,6 @@ images/cage.jpg
 images/coat.jpg
 images/chip.jpg
 images/cake.jpg
-images/chin_arrow.jpg
 images/bin.jpg
 images/book.jpg
 images/bone.jpg
@@ -25,7 +23,6 @@ images/cone.jpg
 images/chalk.jpg
 images/comb.jpg
 images/cat.jpg
-images/dad_arrow.jpg
 images/dad.jpg
 images/cot.jpg
 images/dirt.jpg
@@ -41,7 +38,6 @@ images/fan.jpg
 images/feet.jpg
 images/fork.jpg
 images/hen.jpg
-images/hood_arrow.jpg
 images/bird.jpg
 images/hood.jpg
 images/king.jpg
@@ -53,11 +49,9 @@ images/kite.jpg
 images/knife.jpg
 images/leaf.jpg
 images/hall.jpg
-images/knees_arrow.jpg
 images/leg.jpg
 images/lick.jpg
 images/light.jpg
-images/lock_arrow.jpg
 images/lock.jpg
 images/cap.jpg
 images/knees.jpg
@@ -68,15 +62,12 @@ images/man.jpg
 images/mum.jpg
 images/heart.jpg
 images/night.jpg
-images/mum_arrow.jpg
 images/nose.jpg
-images/nose_arrow.jpg
 images/mop.jpg
 images/nut.jpg
 images/nurse.jpg
 images/mouth.jpg
 images/pan.jpg
-images/note_arrow.jpg
 images/park.jpg
 images/pig.jpg
 images/pen.jpg
@@ -203,4 +194,5 @@ sounds/tap.mp3
 sounds/van.mp3
 sounds/suit.mp3
 sounds/zip.mp3
+
 sounds/tongue.mp3
