@@ -16,7 +16,7 @@ const config = {
     training:
       "You’ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
     test:
-      "You will hear a word and see four pictures. Click the picture that matches the word you heard. If you're not sure, have a guess."
+      "You will hear a word and see four pictures. Click the picture that matches the word you heard."
   },
   arrowList: [
     //"beak", "chin", "dad", "hood", "knees",
@@ -151,6 +151,13 @@ function showInstructions(phase, onContinue) {
 // File: setImage.js
 
 function setImage(imgElement, name, useArrows = true) {
+  // 🔍 Validate the name before using it
+  if (typeof name !== "string" || !name.trim()) {
+    console.warn("⚠️ setImage called with bad name:", name, imgElement);
+    imgElement.removeAttribute("src"); // or point to a known placeholder if you prefer
+    return;
+  }
+
   const base = `images/${name}`;
   const fallback = `${base}.jpg`;
   const arrow = `${base}_arrow.jpg`;
@@ -158,6 +165,9 @@ function setImage(imgElement, name, useArrows = true) {
   imgElement.src = (useArrows && config.arrows && arrowSet.has(name))
     ? arrow
     : fallback;
+
+  // Optional: improve accessibility
+  imgElement.alt = name;
 }
 
 
@@ -166,6 +176,9 @@ function setImage(imgElement, name, useArrows = true) {
 
 
 let trainingAborted = false;
+
+const isNonEmpty = v => typeof v === "string" && v.trim().length > 0;
+const warn = (...args) => console.warn(...args);
 
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -203,7 +216,12 @@ function showTrainingItem() {
     return;
   }
 
-  const item = list[trialIndex];
+const item = list[trialIndex];
+  if (!item || !isNonEmpty(item.correct) || !isNonEmpty(item.audioFile)) {
+    warn("⚠️ Bad training item, skipping trial", { index: trialIndex + 1, item });
+    trialIndex++;
+    return showTrainingItem();
+  }
 
   audio.pause();
   audio.currentTime = 0;
@@ -247,6 +265,12 @@ function nextTrial() {
   }
 
   const item = list[trialIndex];
+  if (!item) {
+    warn("⚠️ Missing trial item at index", trialIndex);
+    trialIndex++;
+    return nextTrial();
+  }
+  
   const shuffled = [...item.images];
   shuffle(shuffled);
 
@@ -257,7 +281,11 @@ function nextTrial() {
   });
 
   let audioStartedAt = null;
-  audio.src = `sounds/${item.audioFile}`;
+  if (!isNonEmpty(item.audioFile)) {
+    warn("⚠️ Invalid audioFile in trial", trialIndex + 1, item);
+  } else {
+    audio.src = `sounds/${item.audioFile}`;
+  }
 
   // ✅ Preload NEXT trial’s images
   if (trialIndex + 1 < list.length) {
@@ -266,15 +294,19 @@ function nextTrial() {
     shuffle(nextShuffled);
 
     nextImagesToPreload = nextShuffled;
-    nextImagesToPreload.forEach(name => {
+	nextImagesToPreload.forEach(name => {
+      if (!isNonEmpty(name)) {
+        warn("⚠️ Skipping preload for invalid name (next trial)", { nextIndex: trialIndex + 2, name });
+        return;
+      }
       const preload = new Image();
       preload.src = `images/${name}.jpg`;
-
       if (config.arrows && arrowSet.has(name)) {
         const preloadArrow = new Image();
         preloadArrow.src = `images/${name}_arrow.jpg`;
       }
     });
+	
   } else {
     nextImagesToPreload = [];
   }
@@ -291,12 +323,22 @@ function nextTrial() {
         if (audioStartedAt) {
           const elapsed = performance.now() - audioStartedAt;
           if (elapsed >= offset) {
-            shuffled.forEach((name, idx) => {
+			  +            shuffled.forEach((name, idx) => {
+              if (!isNonEmpty(name)) {
+                warn("⚠️ Empty/invalid image name in trial",
+                  trialIndex + 1, { item, position: idx, shuffled });
+              }
               setImage(optImgs[idx], name, config.arrows);
-              optImgs[idx].setAttribute("data-name", name);
+              // Only set data-name if valid to avoid propagating "undefined"
+              if (isNonEmpty(name)) {
+                optImgs[idx].setAttribute("data-name", name);
+              } else {
+                optImgs[idx].removeAttribute("data-name");
+              }
               optImgs[idx].style.display = "block";
               optImgs[idx].style.opacity = "1.0";
             });
+
             startTime = performance.now();
             return;
           }
@@ -357,27 +399,42 @@ function abortTraining() {
 // --- list.js ---
 // File: list.js (non-module)
 async function loadList() {
+  function parseLines(text, sourceLabel) {
+    const lines = text.trim().split(/\r?\n/);
+    const rows = lines.map((line, i) => {
+      // Split to exactly 6 fields, trim each, and validate
+      const parts = line.split(/\t/).map(s => (s ?? "").trim());
+      if (parts.length !== 6 || parts.some(p => !p)) {
+        console.warn(`⚠️ Bad list row skipped @ line ${i + 1} (${sourceLabel}):`, line);
+        return null;
+      }
+      const [a, b, c, d, correct, audioFile] = parts;
+      return { images: [a, b, c, d], correct, audioFile };
+    }).filter(Boolean);
+
+    if (rows.length === 0) {
+      console.error(`❌ No valid rows parsed from ${sourceLabel}.`);
+    }
+    return rows;
+  }
+
   if (location.protocol === "file:") {
     const fallback = document.getElementById("list-fallback");
     if (!fallback) {
       alert("Local fallback list not found in page.");
       throw new Error("Missing <script id='list-fallback'> element");
     }
-    const raw = fallback.textContent.trim();
+    const raw = fallback.textContent || "";
+    const rows = parseLines(raw, "inline fallback");
     list.length = 0;
-    list.push(...raw.split(/\r?\n/).map(line => {
-      const [a, b, c, d, correct, audioFile] = line.split(/\t/);
-      return { images: [a, b, c, d], correct, audioFile };
-    }));
+    list.push(...rows);
     console.warn("📦 Loaded inline fallback list (file://)");
   } else {
     try {
       const txt = await fetch("UC4AFC_lists.txt").then(r => r.text());
+      const rows = parseLines(txt, "UC4AFC_lists.txt");
       list.length = 0;
-      list.push(...txt.trim().split(/\r?\n/).map(line => {
-        const [a, b, c, d, correct, audioFile] = line.split(/\t/);
-        return { images: [a, b, c, d], correct, audioFile };
-      }));
+      list.push(...rows);
       console.log("✅ Loaded list from UC4AFC_lists.txt");
     } catch (err) {
       console.error("❌ Failed to load UC4AFC_lists.txt:", err);

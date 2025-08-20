@@ -20,6 +20,9 @@ import { saveResults } from "./results.js";
 
 let trainingAborted = false;
 
+const isNonEmpty = v => typeof v === "string" && v.trim().length > 0;
+const warn = (...args) => console.warn(...args);
+
 export function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -56,7 +59,12 @@ export function showTrainingItem() {
     return;
   }
 
-  const item = list[trialIndex];
+const item = list[trialIndex];
+  if (!item || !isNonEmpty(item.correct) || !isNonEmpty(item.audioFile)) {
+    warn("⚠️ Bad training item, skipping trial", { index: trialIndex + 1, item });
+    trialIndex++;
+    return showTrainingItem();
+  }
 
   audio.pause();
   audio.currentTime = 0;
@@ -100,6 +108,12 @@ export function nextTrial() {
   }
 
   const item = list[trialIndex];
+  if (!item) {
+    warn("⚠️ Missing trial item at index", trialIndex);
+    trialIndex++;
+    return nextTrial();
+  }
+  
   const shuffled = [...item.images];
   shuffle(shuffled);
 
@@ -110,7 +124,11 @@ export function nextTrial() {
   });
 
   let audioStartedAt = null;
-  audio.src = `sounds/${item.audioFile}`;
+  if (!isNonEmpty(item.audioFile)) {
+    warn("⚠️ Invalid audioFile in trial", trialIndex + 1, item);
+  } else {
+    audio.src = `sounds/${item.audioFile}`;
+  }
 
   // ✅ Preload NEXT trial’s images
   if (trialIndex + 1 < list.length) {
@@ -119,15 +137,19 @@ export function nextTrial() {
     shuffle(nextShuffled);
 
     nextImagesToPreload = nextShuffled;
-    nextImagesToPreload.forEach(name => {
+	nextImagesToPreload.forEach(name => {
+      if (!isNonEmpty(name)) {
+        warn("⚠️ Skipping preload for invalid name (next trial)", { nextIndex: trialIndex + 2, name });
+        return;
+      }
       const preload = new Image();
       preload.src = `images/${name}.jpg`;
-
       if (config.arrows && arrowSet.has(name)) {
         const preloadArrow = new Image();
         preloadArrow.src = `images/${name}_arrow.jpg`;
       }
     });
+	
   } else {
     nextImagesToPreload = [];
   }
@@ -144,12 +166,22 @@ export function nextTrial() {
         if (audioStartedAt) {
           const elapsed = performance.now() - audioStartedAt;
           if (elapsed >= offset) {
-            shuffled.forEach((name, idx) => {
+			  +            shuffled.forEach((name, idx) => {
+              if (!isNonEmpty(name)) {
+                warn("⚠️ Empty/invalid image name in trial",
+                  trialIndex + 1, { item, position: idx, shuffled });
+              }
               setImage(optImgs[idx], name, config.arrows);
-              optImgs[idx].setAttribute("data-name", name);
+              // Only set data-name if valid to avoid propagating "undefined"
+              if (isNonEmpty(name)) {
+                optImgs[idx].setAttribute("data-name", name);
+              } else {
+                optImgs[idx].removeAttribute("data-name");
+              }
               optImgs[idx].style.display = "block";
               optImgs[idx].style.opacity = "1.0";
             });
+
             startTime = performance.now();
             return;
           }

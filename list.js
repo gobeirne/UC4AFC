@@ -1,26 +1,41 @@
 // File: list.js (non-module)
 async function loadList() {
+  function parseLines(text, sourceLabel) {
+    const lines = text.trim().split(/\r?\n/);
+    const rows = lines.map((line, i) => {
+      // Split to exactly 6 fields, trim each, and validate
+      const parts = line.split(/\t/).map(s => (s ?? "").trim());
+      if (parts.length !== 6 || parts.some(p => !p)) {
+        console.warn(`⚠️ Bad list row skipped @ line ${i + 1} (${sourceLabel}):`, line);
+        return null;
+      }
+      const [a, b, c, d, correct, audioFile] = parts;
+      return { images: [a, b, c, d], correct, audioFile };
+    }).filter(Boolean);
+
+    if (rows.length === 0) {
+      console.error(`❌ No valid rows parsed from ${sourceLabel}.`);
+    }
+    return rows;
+  }
+
   if (location.protocol === "file:") {
     const fallback = document.getElementById("list-fallback");
     if (!fallback) {
       alert("Local fallback list not found in page.");
       throw new Error("Missing <script id='list-fallback'> element");
     }
-    const raw = fallback.textContent.trim();
+    const raw = fallback.textContent || "";
+    const rows = parseLines(raw, "inline fallback");
     list.length = 0;
-    list.push(...raw.split(/\r?\n/).map(line => {
-      const [a, b, c, d, correct, audioFile] = line.split(/\t/);
-      return { images: [a, b, c, d], correct, audioFile };
-    }));
+    list.push(...rows);
     console.warn("📦 Loaded inline fallback list (file://)");
   } else {
     try {
       const txt = await fetch("UC4AFC_lists.txt").then(r => r.text());
+      const rows = parseLines(txt, "UC4AFC_lists.txt");
       list.length = 0;
-      list.push(...txt.trim().split(/\r?\n/).map(line => {
-        const [a, b, c, d, correct, audioFile] = line.split(/\t/);
-        return { images: [a, b, c, d], correct, audioFile };
-      }));
+      list.push(...rows);
       console.log("✅ Loaded list from UC4AFC_lists.txt");
     } catch (err) {
       console.error("❌ Failed to load UC4AFC_lists.txt:", err);
