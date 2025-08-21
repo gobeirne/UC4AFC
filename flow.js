@@ -166,7 +166,7 @@ export function nextTrial() {
         if (audioStartedAt) {
           const elapsed = performance.now() - audioStartedAt;
           if (elapsed >= offset) {
-			  +            shuffled.forEach((name, idx) => {
+			             shuffled.forEach((name, idx) => {
               if (!isNonEmpty(name)) {
                 warn("⚠️ Empty/invalid image name in trial",
                   trialIndex + 1, { item, position: idx, shuffled });
