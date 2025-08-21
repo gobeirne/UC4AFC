@@ -77,3 +77,4 @@ const saveAgainBtn = document.getElementById("saveAgainBtn");
 if (saveAgainBtn) {
   saveAgainBtn.onclick = () => saveResults("manual re-save at " + new Date().toLocaleString());
 }
+}
