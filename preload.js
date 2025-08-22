@@ -236,40 +236,71 @@ assetList = [
     }
   }
 
-  const jobs = assetList.map(src =>
-    src.endsWith(".jpg") ? preloadImage(src) :
-    src.endsWith(".mp3") ? preloadSound(src) :
-    null
-  ).filter(job => job !== null);
+const tasks = assetList.map(src => () => {
+  if (src.endsWith(".jpg")) return preloadImage(src);
+  if (src.endsWith(".mp3")) return preloadSound(src);
+  return Promise.resolve();
+}).filter(Boolean);
 
-  console.log(`📦 Preloading ${jobs.length} assets...`);
-  await Promise.all(jobs);
-  console.log(`✅ Finished preloading ${jobs.length} assets.`);
+console.log(`📦 Preloading ${tasks.length} assets...`);
+await runWithConcurrency(tasks, 8); // keep this modest on mobile
+console.log(`✅ Finished preloading ${tasks.length} assets.`);
+
+async function runWithConcurrency(fns, limit = 8) {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, fns.length) }, async () => {
+    while (i < fns.length) await fns[i++]();
+  });
+  await Promise.all(workers);
 }
 
-function preloadImage(src) {
-  return new Promise(resolve => {
+
+function preloadImage(src, timeoutMs = 7000) {
+  return new Promise((resolve) => {
     const img = new Image();
-    img.onload = resolve;
-    img.onerror = () => {
-      console.warn(`⚠️ Failed to load image: ${src}`);
-      resolve();
-    };
+    let settled = false;
+
+    const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
+    const timer = setTimeout(() => {
+      console.warn(`⏱️ Image preload timed out: ${src}`);
+      done();
+    }, timeoutMs);
+
+    img.onload = done;
+    img.onerror = () => { console.warn(`⚠️ Failed to load image: ${src}`); done(); };
     img.src = src;
+
+    // On some browsers, decode can resolve earlier/more reliably
+    if (img.decode) {
+      img.decode().then(done).catch(done);
+    }
   });
 }
 
-function preloadSound(src) {
-  return new Promise(resolve => {
+
+function preloadSound(src, timeoutMs = 7000) {
+  return new Promise((resolve) => {
     const audio = new Audio();
-    audio.oncanplaythrough = resolve;
-    audio.onerror = () => {
-      console.warn(`⚠️ Failed to load sound: ${src}`);
-      resolve();
-    };
+    let settled = false;
+
+    const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
+    const timer = setTimeout(() => {
+      console.warn(`⏱️ Sound preload timed out: ${src}`);
+      done();
+    }, timeoutMs);
+
+    const once = (type) => audio.addEventListener(type, done, { once: true });
+    once("canplaythrough");
+    once("loadeddata");
+    once("loadedmetadata");
+    audio.addEventListener("error", () => { console.warn(`⚠️ Failed to load sound: ${src}`); done(); }, { once: true });
+
+    audio.preload = "auto";
     audio.src = src;
+    try { audio.load(); } catch (_) {}  // iOS: kick the fetch
   });
 }
+
 
 export function startCalibration() {
   const mode = localStorage.getItem("language") || "Te reo Māori";

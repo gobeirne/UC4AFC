@@ -50,19 +50,33 @@ function waitForAssetsThenBegin() {
     waitingToBeginPhase = "";
   };
 
+  const start = Date.now();
+  const CHECK_MS = 200;
+  const GRACE_MS = 8000; // after 8s, let the user start anyway
+
   const check = () => {
     if (assetsReady) {
       document.querySelector("#loading h2").textContent = "✅ Ready!";
       document.querySelector("#loading p").textContent = "Assets have been loaded.";
       okBtn.disabled = false;
       okBtn.textContent = "OK";
-    } else {
-      setTimeout(check, 200);
+      return;
     }
+
+    const elapsed = Date.now() - start;
+    if (elapsed > GRACE_MS && okBtn.disabled) {
+      okBtn.disabled = false;
+      okBtn.textContent = "Start (assets still loading)";
+      const p = document.querySelector("#loading p");
+      if (p) p.textContent = "Some assets may continue loading in the background.";
+    }
+
+    setTimeout(check, CHECK_MS);
   };
 
   check();
 }
+
 
 
 window.onload = async () => {
@@ -127,7 +141,7 @@ if (abortBtn) {
   const ret  = document.getElementById("returnBtn");
 
   if (back) back.addEventListener("click", () => showScreen("intro"));
-  if (ok)   ok.addEventListener("click", () => beginPhase(phase));
+ // if (ok)   ok.addEventListener("click", () => beginPhase(phase));
   if (ret)  ret.addEventListener("click", () => {
     trialIndex = 0;
     responseLog.length = 0;
