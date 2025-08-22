@@ -702,7 +702,7 @@ async function runWithConcurrency(fns, limit = 8) {
   });
   await Promise.all(workers);
 }
-
+}
 
 function preloadImage(src, timeoutMs = 7000) {
   return new Promise((resolve) => {
