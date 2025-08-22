@@ -849,6 +849,33 @@ const saveAgainBtn = document.getElementById("saveAgainBtn");
 if (saveAgainBtn) {
   saveAgainBtn.onclick = () => saveResults("manual re-save at " + new Date().toLocaleString());
 }
+
+
+  // Email (subject = filename; body = TXT contents)
+  const emailBtn = document.getElementById("emailBtn");
+  if (emailBtn) {
+    const baseName = `UC4AFC_${participant}_${timeStr}`;
+    const subject = `${baseName}.txt`;
+
+    const txtContent = txtLines.join("\n");
+
+    // Mailto size is limited — keep conservative
+    const MAX_MAILTO_BODY = 1800;
+    let body = txtContent;
+    let truncated = false;
+    if (body.length > MAX_MAILTO_BODY) {
+      truncated = true;
+      body = body.slice(0, MAX_MAILTO_BODY - 120)
+        + `\n\n[...truncated...]\n(Full file saved locally as ${subject}${shouldSaveJson ? " and JSON." : "."})`;
+    }
+
+    // Optional default recipient via config.emailTo (add to config.json if you want)
+    const to = (typeof config?.emailTo === "string" && config.emailTo.trim()) ? config.emailTo : "";
+    const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+    emailBtn.onclick = () => { location.href = mailto; };
+    if (truncated) emailBtn.title = "Body truncated to fit email link limits";
+  }
 }
 
 // --- main.js ---
