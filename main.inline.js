@@ -9,7 +9,7 @@
 const config = {
   arrows: false,
   defaultDelay: 1500,
-  breakEvery: 24,
+  breakEvery: 32,
   showCountdown: true,
   imageRevealOffsetMs: 600,
   showAbortXOnTouchDevices: true,

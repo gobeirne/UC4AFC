@@ -2,7 +2,7 @@
   "arrows": false,
   "defaultDelay": 1500,
   "imageRevealOffsetMs": 600,
-  "breakEvery": 24
+  "breakEvery": 32
   "showCountdown": true,
   "showAbortXOnTouchDevices": true,
   "saveJson": false,
