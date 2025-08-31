@@ -20,6 +20,8 @@ import { saveResults } from "./results.js";
 
 let trainingAborted = false;
 
+let lastBreakAt = -1;  // remember the index where we last stopped for a break
+
 const isNonEmpty = v => typeof v === "string" && v.trim().length > 0;
 const warn = (...args) => console.warn(...args);
 
@@ -96,6 +98,27 @@ const item = list[trialIndex];
 }
 
 export function nextTrial() {
+	
+	// Pause for a rest every N trials before starting the next one
+if (phase === "test") {
+  const n = Number(config.breakEvery) || 0; // 0 = disabled
+  if (n > 0 && trialIndex > 0 && (trialIndex % n === 0) && lastBreakAt !== trialIndex) {
+    lastBreakAt = trialIndex;
+
+    // Show break screen and wait for the user
+    showScreen("break");
+    const btn = document.getElementById("breakOkBtn");
+    if (btn) {
+      btn.onclick = () => {
+        showScreen("test");
+        nextTrial();  // resume: try again, now same trialIndex starts
+      };
+    }
+    return; // stop here until user presses OK
+  }
+}
+
+	
   if (trialIndex >= list.length) {
     if (phase === "test") {
       saveResults();

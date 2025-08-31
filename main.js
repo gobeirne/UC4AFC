@@ -155,6 +155,19 @@ if (abortBtn) {
     if (!isNaN(val)) config.delayMs = val;
   };
 
+// Taking a break...
+const breakEveryInput = document.getElementById("breakEvery");
+if (breakEveryInput) {
+  // set initial UI value from config default
+  breakEveryInput.value = typeof config.breakEvery === "number" ? config.breakEvery : 24;
+  breakEveryInput.oninput = (e) => {
+    const n = parseInt(e.target.value, 10);
+    // 0 or empty = disable breaks
+    if (!Number.isNaN(n) && n >= 0) config.breakEvery = n;
+  };
+}
+
+
   // Train Button
   document.getElementById("trainBtn").onclick = () => {
     showInstructions("training", () => {

@@ -9,6 +9,7 @@
 const config = {
   arrows: false,
   defaultDelay: 1500,
+  breakEvery: 24,
   showCountdown: true,
   imageRevealOffsetMs: 600,
   showAbortXOnTouchDevices: true,
@@ -177,6 +178,8 @@ function setImage(imgElement, name, useArrows = true) {
 
 let trainingAborted = false;
 
+let lastBreakAt = -1;  // remember the index where we last stopped for a break
+
 const isNonEmpty = v => typeof v === "string" && v.trim().length > 0;
 const warn = (...args) => console.warn(...args);
 
@@ -253,6 +256,27 @@ const item = list[trialIndex];
 }
 
 function nextTrial() {
+	
+	// Pause for a rest every N trials before starting the next one
+if (phase === "test") {
+  const n = Number(config.breakEvery) || 0; // 0 = disabled
+  if (n > 0 && trialIndex > 0 && (trialIndex % n === 0) && lastBreakAt !== trialIndex) {
+    lastBreakAt = trialIndex;
+
+    // Show break screen and wait for the user
+    showScreen("break");
+    const btn = document.getElementById("breakOkBtn");
+    if (btn) {
+      btn.onclick = () => {
+        showScreen("test");
+        nextTrial();  // resume: try again, now same trialIndex starts
+      };
+    }
+    return; // stop here until user presses OK
+  }
+}
+
+	
   if (trialIndex >= list.length) {
     if (phase === "test") {
       saveResults();
@@ -1035,6 +1059,19 @@ if (abortBtn) {
     const val = parseInt(e.target.value);
     if (!isNaN(val)) config.delayMs = val;
   };
+
+// Taking a break...
+const breakEveryInput = document.getElementById("breakEvery");
+if (breakEveryInput) {
+  // set initial UI value from config default
+  breakEveryInput.value = typeof config.breakEvery === "number" ? config.breakEvery : 24;
+  breakEveryInput.oninput = (e) => {
+    const n = parseInt(e.target.value, 10);
+    // 0 or empty = disable breaks
+    if (!Number.isNaN(n) && n >= 0) config.breakEvery = n;
+  };
+}
+
 
   // Train Button
   document.getElementById("trainBtn").onclick = () => {

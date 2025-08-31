@@ -2,8 +2,9 @@
 
 // --- Config ---
 export const config = {
-  arrows: true,
+  arrows: false,
   defaultDelay: 1500,
+  breakEvery: 24,
   showCountdown: true,
   imageRevealOffsetMs: 600,
   showAbortXOnTouchDevices: true,
@@ -11,7 +12,7 @@ export const config = {
     training:
       "You’ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
     test:
-      "You will hear a word and see four pictures. Click the picture that matches the word you heard."
+      "You will hear a word and see four pictures. Click the picture that matches the word you heard. If you're not sure, have a guess."
   },
   arrowList: [
     //"beak", "chin", "dad", "hood", "knees",

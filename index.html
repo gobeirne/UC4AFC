@@ -31,7 +31,11 @@
   <button id="trainBtn">Training</button>
   <button id="startBtn">Start</button><br />
   <button id="calibrateBtn" disabled>Calibration</button>
-
+<label>
+  Take a break every
+  <input id="breakEvery" type="number" min="0" value="24" style="width:4em;">
+  presentations
+</label>
  <!-- <p class="footer">
     &copy; 2025 G.O'B.
   </p>-->
@@ -42,6 +46,13 @@
   <p id="instructions-text"></p>
   <button id="backBtn">Back</button>
   <button id="okBtn">OK</button>
+</div>
+
+<!-- Break screen -->
+<div id="break" class="screen" style="display:none;">
+  <h2>You're doing a great job!</h2>
+  <p>Let's take a break.</p>
+  <button id="breakOkBtn">OK</button>
 </div>
 
 <div id="loading" class="screen" style="display:none; text-align:center; padding:2em;">
