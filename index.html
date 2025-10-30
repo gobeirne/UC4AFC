@@ -66,8 +66,8 @@
 </div>
 
 <div id="loading" class="screen" style="display:none; text-align:center; padding:2em;">
-  <h2>â³ Loading assetsâ€¦</h2>
-  <p>This may take a few seconds. Please waitâ€¦</p>
+  <h2>⏳ Loading assets...</h2>
+  <p>This may take a few seconds. Please wait...</p>
   <button id="loading-ok" style="display:none; margin-top: 1em;">OK</button>
 </div>
 
@@ -78,7 +78,7 @@
 </div>
 
 <div id="test" class="screen">
-  <button id="abortBtn" title="Abort test">âŒ</button> 
+  <button id="abortBtn" title="Abort test">❌</button> 
   <audio id="stimulus"></audio>
 <div class="grid-container">
   <div class="grid">
@@ -203,11 +203,11 @@ cake	cage	park	soup	cake	cake.mp3
     const isLocal = location.protocol === "file:";
 
     if (isLocal) {
-      console.warn("ðŸ›‘ Skipping service worker: running from file://");
+      console.warn("🛑 Skipping service worker: running from file://");
     } else {
       navigator.serviceWorker.register("service-worker.js")
-        .then(reg => console.log("âœ… Service Worker registered:", reg.scope))
-        .catch(err => console.warn("âš ï¸ Service Worker failed to register:", err));
+        .then(reg => console.log("✅ Service Worker registered:", reg.scope))
+        .catch(err => console.warn("⚠️ Service Worker failed to register:", err));
     }
   }
 </script>
