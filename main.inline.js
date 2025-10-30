@@ -15,7 +15,7 @@ const config = {
   showAbortXOnTouchDevices: true,
   instructions: {
     training:
-      "You’ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
+      "Youâ€™ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
     test:
       "You will hear a word and see four pictures. Click the picture that matches the word you heard. If you're not sure, have a guess."
   },
@@ -33,6 +33,7 @@ let trialIndex = 0;
 let phase = "";
 let participant = "";
 let responseLog = [];
+let selectedList = "1"; // Track which list is selected (1, 2, or demo)
 
 // --- DOM Elements ---
 const trainingImg = document.getElementById("training-img");
@@ -94,6 +95,7 @@ async function loadConfig() {
     console.warn("⚠️ Could not load config.json. Using fallback config.");
   }
 }
+
 
 
 // --- ui.js ---
@@ -192,13 +194,13 @@ function shuffle(arr) {
 
 let nextImagesToPreload = [];
 
-function beginPhase(p) {
+function beginPhase(p, listNum = null) {
   phase = p;
   trainingAborted = false;
   participant = document.getElementById("name").value || "anon";
   testStartedAt = new Date();
 
-  loadList().then(() => {
+  loadList(listNum || selectedList).then(() => {
     shuffle(list);
     trialIndex = 0;
     responseLog.length = 0;
@@ -221,7 +223,7 @@ function showTrainingItem() {
 
 const item = list[trialIndex];
   if (!item || !isNonEmpty(item.correct) || !isNonEmpty(item.audioFile)) {
-    warn("⚠️ Bad training item, skipping trial", { index: trialIndex + 1, item });
+    warn("âš ï¸ Bad training item, skipping trial", { index: trialIndex + 1, item });
     trialIndex++;
     return showTrainingItem();
   }
@@ -239,7 +241,7 @@ const item = list[trialIndex];
       setImage(trainingImg, item.correct, config.arrows);
     }, config.imageRevealOffsetMs || 600);
   }).catch(err => {
-    console.error("⚠️ Training audio failed to play:", err);
+    console.error("âš ï¸ Training audio failed to play:", err);
   });
 
   audio.onended = () => {
@@ -278,7 +280,7 @@ if (phase === "test") {
 
 	
   if (trialIndex >= list.length) {
-    if (phase === "test") {
+    if (phase === "test" && selectedList !== "demo") {
       saveResults();
     } else {
       showScreen("thankyou");
@@ -290,7 +292,7 @@ if (phase === "test") {
 
   const item = list[trialIndex];
   if (!item) {
-    warn("⚠️ Missing trial item at index", trialIndex);
+    warn("âš ï¸ Missing trial item at index", trialIndex);
     trialIndex++;
     return nextTrial();
   }
@@ -306,12 +308,12 @@ if (phase === "test") {
 
   let audioStartedAt = null;
   if (!isNonEmpty(item.audioFile)) {
-    warn("⚠️ Invalid audioFile in trial", trialIndex + 1, item);
+    warn("âš ï¸ Invalid audioFile in trial", trialIndex + 1, item);
   } else {
     audio.src = `sounds/${item.audioFile}`;
   }
 
-  // ✅ Preload NEXT trial’s images
+  // âœ… Preload NEXT trialâ€™s images
   if (trialIndex + 1 < list.length) {
     const nextItem = list[trialIndex + 1];
     const nextShuffled = [...nextItem.images];
@@ -320,7 +322,7 @@ if (phase === "test") {
     nextImagesToPreload = nextShuffled;
 	nextImagesToPreload.forEach(name => {
       if (!isNonEmpty(name)) {
-        warn("⚠️ Skipping preload for invalid name (next trial)", { nextIndex: trialIndex + 2, name });
+        warn("âš ï¸ Skipping preload for invalid name (next trial)", { nextIndex: trialIndex + 2, name });
         return;
       }
       const preload = new Image();
@@ -349,7 +351,7 @@ if (phase === "test") {
           if (elapsed >= offset) {
 			             shuffled.forEach((name, idx) => {
               if (!isNonEmpty(name)) {
-                warn("⚠️ Empty/invalid image name in trial",
+                warn("âš ï¸ Empty/invalid image name in trial",
                   trialIndex + 1, { item, position: idx, shuffled });
               }
               setImage(optImgs[idx], name, config.arrows);
@@ -375,7 +377,7 @@ if (phase === "test") {
     }).catch(err => {
       console.error("Audio play failed:", err);
       if (!audio._erroredOnce) {
-        alert("⚠️ Audio failed to play. Check browser autoplay settings.");
+        alert("âš ï¸ Audio failed to play. Check browser autoplay settings.");
         audio._erroredOnce = true;
       }
     });
@@ -422,7 +424,7 @@ function abortTraining() {
 
 // --- list.js ---
 // File: list.js (non-module)
-async function loadList() {
+async function loadList(listNumber = "1") {
   function parseLines(text, sourceLabel) {
     const lines = text.trim().split(/\r?\n/);
     const rows = lines.map((line, i) => {
@@ -455,13 +457,21 @@ async function loadList() {
     console.warn("📦 Loaded inline fallback list (file://)");
   } else {
     try {
-      const txt = await fetch("UC4AFC_lists.txt").then(r => r.text());
-      const rows = parseLines(txt, "UC4AFC_lists.txt");
+      // Determine which list file to load
+      let filename;
+      if (listNumber === "demo") {
+        filename = "UC4AFC_list00.txt";
+      } else {
+        filename = `UC4AFC_list0${listNumber}.txt`;
+      }
+      
+      const txt = await fetch(filename).then(r => r.text());
+      const rows = parseLines(txt, filename);
       list.length = 0;
       list.push(...rows);
-      console.log("✅ Loaded list from UC4AFC_lists.txt");
+      console.log(`✅ Loaded list from ${filename}`);
     } catch (err) {
-      console.error("❌ Failed to load UC4AFC_lists.txt:", err);
+      console.error(`❌ Failed to load list file:`, err);
       alert("Failed to load stimulus list.");
     }
   }
@@ -818,6 +828,7 @@ function saveResults(optionalNote = "") {
     : "(unknown)";
 
   const jsonData = {
+    list: selectedList === "demo" ? "Demo" : `List ${selectedList}`,
     participant,
     startedAt: testStartedAt?.toISOString() || null,
     timestamp: now.toISOString(),
@@ -828,6 +839,7 @@ function saveResults(optionalNote = "") {
   // --- Build .txt output
   const txtLines = [
     `# Participant\t${participant}`,
+    `# List used\t${selectedList === "demo" ? "Demo" : `List ${selectedList}`}`,
     `# test started at ${startTimeFormatted}`,
     "",
     "Trial\tSound\tCorrect\tChosen\tTime_ms"
@@ -860,7 +872,7 @@ function saveResults(optionalNote = "") {
     a2.download = `UC4AFC_${participant}_${timeStr}.json`;
     a2.click();
   } else {
-    console.warn("🛑 Skipping JSON download due to config.saveJson = false");
+    console.warn("ðŸ›‘ Skipping JSON download due to config.saveJson = false");
   }
 
  // --- Show end screen
@@ -883,7 +895,7 @@ if (saveAgainBtn) {
 
     const txtContent = txtLines.join("\n");
 
-    // Mailto size is limited — keep conservative
+    // Mailto size is limited â€” keep conservative
     const MAX_MAILTO_BODY = 1800;
     let body = txtContent;
     let truncated = false;
@@ -905,6 +917,7 @@ if (saveAgainBtn) {
 // --- main.js ---
 let assetsReady = false;
 let waitingToBeginPhase = "";
+let waitingListNum = null;
 
 // Abort current training audio and timeouts if needed
 function abortPhase() {
@@ -920,7 +933,7 @@ function abortPhase() {
   };
 
 if (phase === "training" && confirm("Abort training?")) {
-  abortTraining(); // 👈 tells flow.js to stop future audio/images
+  abortTraining(); // ðŸ‘ˆ tells flow.js to stop future audio/images
   stopAudio();
   trialIndex = 0;
   responseLog.length = 0;
@@ -946,12 +959,13 @@ function waitForAssetsThenBegin() {
   const okBtn = document.getElementById("loading-ok");
   okBtn.disabled = true;
   okBtn.style.display = "inline-block";
-  okBtn.textContent = "Loading…";
+  okBtn.textContent = "Loadingâ€¦";
 
   okBtn.onclick = () => {
     okBtn.disabled = true;
     okBtn.style.display = "none";
     beginPhase(waitingToBeginPhase);
+    waitingListNum = null;
     waitingToBeginPhase = "";
   };
 
@@ -961,7 +975,7 @@ function waitForAssetsThenBegin() {
 
   const check = () => {
     if (assetsReady) {
-      document.querySelector("#loading h2").textContent = "✅ Ready!";
+      document.querySelector("#loading h2").textContent = "âœ… Ready!";
       document.querySelector("#loading p").textContent = "Assets have been loaded.";
       okBtn.disabled = false;
       okBtn.textContent = "OK";
@@ -995,7 +1009,7 @@ window.onload = async () => {
 
   await loadConfig();
   
-  // ✅ Initialise arrowSet before list/preload
+  // âœ… Initialise arrowSet before list/preload
   if (location.protocol === "file:") {
     // Local: use the static list embedded in config
     setArrowList(Array.isArray(config.arrowList) ? config.arrowList : []);
@@ -1018,8 +1032,8 @@ window.onload = async () => {
   // Start preloading in background
 preloadAllAssets().then(() => {
   assetsReady = true;
-  console.log("✅ Assets preloaded.");
-  // ❌ Don't auto-begin — wait for user to click OK
+  console.log("âœ… Assets preloaded.");
+  // âŒ Don't auto-begin â€” wait for user to click OK
 });
 
 
@@ -1027,12 +1041,12 @@ preloadAllAssets().then(() => {
 
 const abortBtn = document.getElementById("abortBtn");
 if (abortBtn) {
-  // 🖼️ Show the button only if needed
+  // ðŸ–¼ï¸ Show the button only if needed
   const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
   const showOnTouch = config.showAbortXOnTouchDevices === true;
   abortBtn.style.display = (showOnTouch && isTouchDevice) ? "block" : "none";
 
-  // 🧠 Always attach the click handler
+  // ðŸ§  Always attach the click handler
   abortBtn.addEventListener("click", abortPhase);
 }
 
@@ -1073,8 +1087,19 @@ if (breakEveryInput) {
 }
 
 
-  // Train Button
+
+  // Helper function to get selected list
+  function getSelectedList() {
+    const radios = document.getElementsByName("listSelection");
+    for (const radio of radios) {
+      if (radio.checked) return radio.value;
+    }
+    return "1"; // default
+  }
+
+  // Train Button - uses selected list
   document.getElementById("trainBtn").onclick = () => {
+    selectedList = getSelectedList();
     showInstructions("training", () => {
       const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
       if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
@@ -1090,8 +1115,28 @@ if (breakEveryInput) {
     });
   };
 
-  // Start Button
+  // Demo Button - uses demo list and doesn't save results
+  document.getElementById("demoBtn").onclick = () => {
+    selectedList = "demo";
+    showInstructions("test", () => {
+      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
+        abortBtn.style.display = "block";
+      }
+
+      if (assetsReady) {
+        beginPhase("test", "demo");
+      } else {
+        waitingToBeginPhase = "test";
+        waitingListNum = "demo";
+        waitForAssetsThenBegin();
+      }
+    });
+  };
+
+  // Start Button - uses selected list
   document.getElementById("startBtn").onclick = () => {
+    selectedList = getSelectedList();
     showInstructions("test", () => {
       const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
       if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {

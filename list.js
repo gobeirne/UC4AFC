@@ -1,5 +1,5 @@
 // File: list.js (non-module)
-async function loadList() {
+async function loadList(listNumber = "1") {
   function parseLines(text, sourceLabel) {
     const lines = text.trim().split(/\r?\n/);
     const rows = lines.map((line, i) => {
@@ -32,13 +32,21 @@ async function loadList() {
     console.warn("📦 Loaded inline fallback list (file://)");
   } else {
     try {
-      const txt = await fetch("UC4AFC_lists.txt").then(r => r.text());
-      const rows = parseLines(txt, "UC4AFC_lists.txt");
+      // Determine which list file to load
+      let filename;
+      if (listNumber === "demo") {
+        filename = "UC4AFC_list00.txt";
+      } else {
+        filename = `UC4AFC_list0${listNumber}.txt`;
+      }
+      
+      const txt = await fetch(filename).then(r => r.text());
+      const rows = parseLines(txt, filename);
       list.length = 0;
       list.push(...rows);
-      console.log("✅ Loaded list from UC4AFC_lists.txt");
+      console.log(`✅ Loaded list from ${filename}`);
     } catch (err) {
-      console.error("❌ Failed to load UC4AFC_lists.txt:", err);
+      console.error(`❌ Failed to load list file:`, err);
       alert("Failed to load stimulus list.");
     }
   }

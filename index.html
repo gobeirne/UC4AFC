@@ -24,11 +24,21 @@
   <p class="small">University of Canterbury Four-Alternative Forced Choice Speech Test</p>
 
   <input id="name" placeholder="Participant name/code" /><br />
+  
+  <div style="margin: 1rem 0;">
+    <label style="margin-right: 1rem;">
+      <input type="radio" name="listSelection" value="1" checked> List 1
+    </label>
+    <label>
+      <input type="radio" name="listSelection" value="2"> List 2
+    </label>
+  </div>
 <label hidden>
     Delay (ms): <input id="delay" type="number" value="1500" />
   </label><br hidden>
 
   <button id="trainBtn">Training</button>
+  <button id="demoBtn">Demo</button>
   <button id="startBtn">Start</button><br />
   <button id="calibrateBtn" disabled>Calibration</button>
 <label>
@@ -56,8 +66,8 @@
 </div>
 
 <div id="loading" class="screen" style="display:none; text-align:center; padding:2em;">
-  <h2>⏳ Loading assets…</h2>
-  <p>This may take a few seconds. Please wait…</p>
+  <h2>â³ Loading assetsâ€¦</h2>
+  <p>This may take a few seconds. Please waitâ€¦</p>
   <button id="loading-ok" style="display:none; margin-top: 1em;">OK</button>
 </div>
 
@@ -68,7 +78,7 @@
 </div>
 
 <div id="test" class="screen">
-  <button id="abortBtn" title="Abort test">❌</button> 
+  <button id="abortBtn" title="Abort test">âŒ</button> 
   <audio id="stimulus"></audio>
 <div class="grid-container">
   <div class="grid">
@@ -193,11 +203,11 @@ cake	cage	park	soup	cake	cake.mp3
     const isLocal = location.protocol === "file:";
 
     if (isLocal) {
-      console.warn("🛑 Skipping service worker: running from file://");
+      console.warn("ðŸ›‘ Skipping service worker: running from file://");
     } else {
       navigator.serviceWorker.register("service-worker.js")
-        .then(reg => console.log("✅ Service Worker registered:", reg.scope))
-        .catch(err => console.warn("⚠️ Service Worker failed to register:", err));
+        .then(reg => console.log("âœ… Service Worker registered:", reg.scope))
+        .catch(err => console.warn("âš ï¸ Service Worker failed to register:", err));
     }
   }
 </script>

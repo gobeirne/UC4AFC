@@ -1,5 +1,6 @@
 let assetsReady = false;
 let waitingToBeginPhase = "";
+let waitingListNum = null;
 
 // Abort current training audio and timeouts if needed
 function abortPhase() {
@@ -15,7 +16,7 @@ function abortPhase() {
   };
 
 if (phase === "training" && confirm("Abort training?")) {
-  abortTraining(); // 👈 tells flow.js to stop future audio/images
+  abortTraining(); // ðŸ‘ˆ tells flow.js to stop future audio/images
   stopAudio();
   trialIndex = 0;
   responseLog.length = 0;
@@ -41,12 +42,13 @@ function waitForAssetsThenBegin() {
   const okBtn = document.getElementById("loading-ok");
   okBtn.disabled = true;
   okBtn.style.display = "inline-block";
-  okBtn.textContent = "Loading…";
+  okBtn.textContent = "Loadingâ€¦";
 
   okBtn.onclick = () => {
     okBtn.disabled = true;
     okBtn.style.display = "none";
     beginPhase(waitingToBeginPhase);
+    waitingListNum = null;
     waitingToBeginPhase = "";
   };
 
@@ -56,7 +58,7 @@ function waitForAssetsThenBegin() {
 
   const check = () => {
     if (assetsReady) {
-      document.querySelector("#loading h2").textContent = "✅ Ready!";
+      document.querySelector("#loading h2").textContent = "âœ… Ready!";
       document.querySelector("#loading p").textContent = "Assets have been loaded.";
       okBtn.disabled = false;
       okBtn.textContent = "OK";
@@ -90,7 +92,7 @@ window.onload = async () => {
 
   await loadConfig();
   
-  // ✅ Initialise arrowSet before list/preload
+  // âœ… Initialise arrowSet before list/preload
   if (location.protocol === "file:") {
     // Local: use the static list embedded in config
     setArrowList(Array.isArray(config.arrowList) ? config.arrowList : []);
@@ -113,8 +115,8 @@ window.onload = async () => {
   // Start preloading in background
 preloadAllAssets().then(() => {
   assetsReady = true;
-  console.log("✅ Assets preloaded.");
-  // ❌ Don't auto-begin — wait for user to click OK
+  console.log("âœ… Assets preloaded.");
+  // âŒ Don't auto-begin â€” wait for user to click OK
 });
 
 
@@ -122,12 +124,12 @@ preloadAllAssets().then(() => {
 
 const abortBtn = document.getElementById("abortBtn");
 if (abortBtn) {
-  // 🖼️ Show the button only if needed
+  // ðŸ–¼ï¸ Show the button only if needed
   const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
   const showOnTouch = config.showAbortXOnTouchDevices === true;
   abortBtn.style.display = (showOnTouch && isTouchDevice) ? "block" : "none";
 
-  // 🧠 Always attach the click handler
+  // ðŸ§  Always attach the click handler
   abortBtn.addEventListener("click", abortPhase);
 }
 
@@ -168,8 +170,19 @@ if (breakEveryInput) {
 }
 
 
-  // Train Button
+
+  // Helper function to get selected list
+  function getSelectedList() {
+    const radios = document.getElementsByName("listSelection");
+    for (const radio of radios) {
+      if (radio.checked) return radio.value;
+    }
+    return "1"; // default
+  }
+
+  // Train Button - uses selected list
   document.getElementById("trainBtn").onclick = () => {
+    selectedList = getSelectedList();
     showInstructions("training", () => {
       const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
       if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
@@ -185,8 +198,28 @@ if (breakEveryInput) {
     });
   };
 
-  // Start Button
+  // Demo Button - uses demo list and doesn't save results
+  document.getElementById("demoBtn").onclick = () => {
+    selectedList = "demo";
+    showInstructions("test", () => {
+      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
+        abortBtn.style.display = "block";
+      }
+
+      if (assetsReady) {
+        beginPhase("test", "demo");
+      } else {
+        waitingToBeginPhase = "test";
+        waitingListNum = "demo";
+        waitForAssetsThenBegin();
+      }
+    });
+  };
+
+  // Start Button - uses selected list
   document.getElementById("startBtn").onclick = () => {
+    selectedList = getSelectedList();
     showInstructions("test", () => {
       const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
       if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {

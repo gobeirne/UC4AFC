@@ -10,7 +10,7 @@ export const config = {
   showAbortXOnTouchDevices: true,
   instructions: {
     training:
-      "You’ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
+      "Youâ€™ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
     test:
       "You will hear a word and see four pictures. Click the picture that matches the word you heard. If you're not sure, have a guess."
   },
@@ -28,6 +28,7 @@ export let trialIndex = 0;
 export let phase = "";
 export let participant = "";
 export let responseLog = [];
+export let selectedList = "1"; // Track which list is selected (1, 2, or demo)
 
 // --- DOM Elements ---
 export const trainingImg = document.getElementById("training-img");
