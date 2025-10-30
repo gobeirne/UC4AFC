@@ -2,7 +2,7 @@
   "arrows": false,
   "defaultDelay": 1500,
   "imageRevealOffsetMs": 600,
-  "breakEvery": 33,
+  "breakEvery": 17,
   "showCountdown": true,
   "showAbortXOnTouchDevices": true,
   "saveJson": false,
@@ -11,5 +11,6 @@
     "test": "You will hear a word and see four pictures. Click the picture that matches the word you heard. If you're not sure, have a guess."
   }
 }
+
 
 
