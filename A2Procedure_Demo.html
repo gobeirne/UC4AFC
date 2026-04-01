@@ -1,0 +1,596 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8">
+  <title>A1 and A2 procedure simulation</title>
+  <style>
+	 .title {
+	  	margin-top: 0px;
+		margin-bottom: 0px;
+		}
+
+	.ResultsPlotClass {
+	  max-width: 800px;
+	}
+		</style>
+  <script src="https://cdn.plot.ly/plotly-2.16.1.min.js"></script>
+  
+</head>
+<body>
+
+ <h3 class="title">Simulated adaptive track - A1 and A2 procedures</h3>
+ <small>Modified from <a href="https://doi.org/10.1121/1.1479152">Brand & Kollmeier (2002)</a></small><br><br>
+ 
+    <form class=" " action="index.html" method="post">
+		Number of words per sentence: <input type="number" step="1" class="InputClass" id="WordsPerSentence" value="5" /><br>
+		Number of options per word: <input type="number" step="1" class="InputClass" id="OptionsPerWord" value="10" /><br>
+		SRT of simulated listener (dB SNR):  <input type="number" step="1" class="InputClass" id="SimSRT" value="-15" /><br>
+		Slope of simulated listener: <input type="number" step="0.01" class="InputClass" id="SimSlope" value="0.12" />	<br>
+		Starting SNR (dB SNR): <input type="number"  step="1" class="InputClass" id="StartingSNR" value="-2" /><br>
+		Number of trials in each adaptive track: <input type="number" step="1" class="InputClass" id="NumberOfTrials" value="15" /><br>
+		First target proportion correct to track: <input type="number" step="0.1" class="InputClass" id="pTarget1" value="0.2" /><br>
+		Second target proportion correct to track: <input type="number" step="0.1" class="InputClass" id="pTarget2" value="0.8" /><br>
+ 
+ <button type="button" name="button" onclick="simulateTest()">
+            Go
+        </button>
+    </form>
+    <br>
+	<div class="ResultsPlotClass" id="ResultsPlot"><!-- Plotly chart will be drawn inside this DIV --></div>
+	
+ <pre></br><span id="interleavedoutputtext"></span><p id="track1outputtext"></p><p id="track2outputtext"></p><p id="shortpsychometricdataoutputtext"></p><p id="longpsychometricdataoutputtext"></p></pre>
+  
+ <script type="text/javascript"> 
+ 
+ 
+   // constants
+   const SImax = 1; //maximum possible score
+   const bk_a = 1.5; //best choice as per Brand & Kollmeier (2002)
+   const bk_b = 1.41; //best choice as per Brand & Kollmeier (2002)
+   const bk_smallestSNRstep = 0.25; //best choice as per personal communication from Brand (3rd Feb 2015)
+   const bk_SNRtrackingSlope = 0.1; //best choice as per personal communication from Brand (3rd Feb 2015)
+   const minspeedfactor = 0.25;
+
+   // (Variable initialisations here only serve to illustrate the type of the variable)
+   
+   // Inputs from the form
+   var WordsPerSentence = 0;
+   var OptionsPerWord = 0;
+   var SimSRT = 0;
+   var SimSlope = 0;
+   var StartingSNR = 0;
+   var NumberOfTrials = 0;
+   var pTarget1 = "";
+   var pTarget2 = "";
+   
+   // test state
+   var numberoftracks = 0;
+   var trackbase = [];
+   var A = 0;
+   var FitSRT = 15;
+   var FitSlope = 0.1;
+   var FitSImax = 1;
+   var track1_x = [];
+   var track1_y = [];
+   var track2_x = [];
+   var track2_y = [];
+   var simwordresponsearray = [];
+   var psychometricarray = [];
+   var trackinterleaver = [];
+   var interleavedtrack = [];
+   var psychometricdata = [];
+   var longpsychometricdata = [];
+   var individualworddata_xvalues = [];
+   var individualworddata_yvalues = [];
+   var individualworddata_testfityvalues = [];
+   var individualworddata_testfityvalue_negativeloglikelihood = [];
+   var individualworddata_testfityvalue_negativeloglikelihood_SUM = 0;
+   var psychoplotxvalues = [];
+   var psychoplotyvalues = [];
+   var adaptivetrackplot1_x = [];
+   var adaptivetrackplot1_y = [];
+   var adaptivetrackplot2_x = [];
+   var adaptivetrackplot2_y = [];
+   var bk_rule1_1 = false; // target intelligibility is <=20% or >=80%?
+   var bk_rule2_1 = false; // intelligibility is <=20% if target is or >=80% if target is?
+   var bk_rule3_1 = false; // the speed factor is higher than 0.5?
+   var bk_rule4_1 = false; // rules 1 to 3 are met, therefore double step size?
+   var bk_rule1_2 = false; // target intelligibility is <=20% or >=80%?
+   var bk_rule2_2 = false; // intelligibility is <=20% if target is or >=80% if target is?
+   var bk_rule3_2 = false; // the speed factor is higher than 0.5?
+   var bk_rule4_2 = false; // rules 1 to 3 are met, therefore double step size?
+   var psychoplotx_max = -1000;
+   var psychoplotx_min = +1000;
+   var longiteration = 0;
+   var shortiteration = 0;
+   
+   // trial state
+   var activetrack = 0;
+   var outputstring1 = '';
+   var outputstring2 = '';
+   var interleavedoutputtextstring = '';
+   var longpsychometricdatastring = '';
+   var shortpsychometricdatastring = '';
+   var result1 = 0;
+   var result2 = 0;
+   var track1iteration = 1;
+   var track2iteration = 1;
+   var reversals1 = 0;
+   var reversals2 = 0;
+   var fi1 = 0;
+   var fi2 = 0;
+   var SNR1 = 0;
+   var SNR2 = 0;
+   var deltaL1 = 0;
+   var previousdeltaL1 = 0;
+   var deltaL2 = 0;
+   var previousdeltaL2 = 0;
+   
+   // Define the psychometric function. Later we'll have to fit this function to the SNR & Proportion Correct data to find SRT and Slope.
+   function intelligibility(SNR, SimSRT, SimSlope, SImax) {
+       return (1 / A) * (1 + SImax * ((A - 1) / (1 + Math.exp((-1 * (SNR - SimSRT) / ((SImax * (A - 1)) / (4 * A * SimSlope)))))));
+   }
+   
+   // Define the Durstenfeld shuffle algorithm to randomize an array in-place
+   function shuffleArray(array) {
+       for (let q = array.length - 1; q > 0; q--) {
+           const r = Math.floor(Math.random() * (q + 1));
+           const temp = array[q];
+           array[q] = array[r];
+           array[r] = temp;
+       }
+   }
+   
+   // Function to get a simulated response from the simulated listener. In the actual test, we'd replace this with the real response obtained by the participant at that SNR.
+   function simsentenceproportioncorrect(SNR) {
+       psychometricarray = [];
+       simwordresponsearray = [];
+       for (let j = 1; j < (1 * WordsPerSentence) + 1; j++) {
+           for (let k = 1; k < 1001; k++) {
+               if (k < (1000 * intelligibility(SNR, SimSRT, SimSlope, SImax))) {
+                   psychometricarray.push(1);
+               } else {
+                   psychometricarray.push(0);
+               }
+           }
+           const simulatedresponse = psychometricarray[Math.floor(Math.random() * (psychometricarray.length))];
+           simwordresponsearray.push(simulatedresponse);
+       }
+       return simwordresponsearray.reduce((a, b) => a + b, 0) / simwordresponsearray.length;
+   }
+   
+   Array.prototype.max = function() {
+       return Math.max.apply(null, this);
+   };
+   
+   Array.prototype.min = function() {
+       return Math.min.apply(null, this);
+   };
+
+// Function to sum an array
+	  function sumArray(array) {
+  let sum = 0;
+  for (let sumArray_i = 0; sumArray_i < array.length; sumArray_i += 1) {
+    sum += array[sumArray_i];
+  }
+   return sum;
+}
+
+
+// Function to generate negative log likelihood cost function for fitting
+function generatenegativeloglikelihood(FitSRT, FitSlope, FitSImax) {
+    for (let generatenegativeloglikelihood_i = 1; generatenegativeloglikelihood_i < individualworddata_xvalues.length + 1; generatenegativeloglikelihood_i++) {
+        let testfityvalue = intelligibility(individualworddata_xvalues[generatenegativeloglikelihood_i - 1], FitSRT, FitSlope, FitSImax);
+        individualworddata_testfityvalues.push(testfityvalue);
+        let negativeloglikelihood = -1 * Math.log((Math.pow(testfityvalue, individualworddata_yvalues[generatenegativeloglikelihood_i - 1]) * (Math.pow((1 - testfityvalue), 1 - individualworddata_yvalues[generatenegativeloglikelihood_i - 1]))));
+        individualworddata_testfityvalue_negativeloglikelihood.push(negativeloglikelihood);
+    };
+    individualworddata_testfityvalue_negativeloglikelihood_SUM = sumArray(individualworddata_testfityvalue_negativeloglikelihood);
+    console.log(individualworddata_testfityvalue_negativeloglikelihood_SUM);
+};
+	  
+function simulateTest() {
+    //Get inputs from the form
+    WordsPerSentence = 1 * document.getElementById("WordsPerSentence").value;
+    OptionsPerWord = 1 * document.getElementById("OptionsPerWord").value;
+    SimSRT = 1 * document.getElementById("SimSRT").value;
+    SimSlope = 1 * document.getElementById("SimSlope").value;
+    StartingSNR = 1 * document.getElementById("StartingSNR").value;
+    NumberOfTrials = 1 * document.getElementById("NumberOfTrials").value;
+    pTarget1 = document.getElementById("pTarget1").value;
+    pTarget2 = document.getElementById("pTarget2").value;
+    
+	
+    //Define some other variables
+    if (!pTarget1) {
+        trackbase = [2, 2];
+        numberoftracks = 1;
+    } else if (!pTarget2) {
+        trackbase = [1, 1];
+        numberoftracks = 1;
+    } else {
+        numberoftracks = 2;
+        trackbase = [1, 2, 1, 2];
+    }
+    activetrack = 1;
+    A = Math.pow(OptionsPerWord, WordsPerSentence); // e.g. six possible options per word, three words = 6*6*6 = 216
+    outputstring1 = "";
+    document.getElementById("track1outputtext").innerHTML = outputstring1; //Clear this before writing again later
+    outputstring2 = "";
+    document.getElementById("track2outputtext").innerHTML = outputstring2; //Clear this before writing again later
+    interleavedoutputtextstring = "";
+    document.getElementById("interleavedoutputtext").innerHTML = interleavedoutputtextstring; //Clear this before writing again later
+    track1_x = [];
+    track1_y = [];
+    track2_x = [];
+    track2_y = [];
+    result1 = 1;
+    result2 = 1;
+    track1iteration = 1;
+    track2iteration = 1;
+    reversals1 = 0;
+    reversals2 = 0;
+    fi1 = bk_a * Math.pow(bk_b, ((-1) * reversals1));
+    fi2 = bk_a * Math.pow(bk_b, ((-1) * reversals2));
+    SNR1 = 0;
+    SNR2 = 0;
+    deltaL1 = (fi1 * (result1 - pTarget1)) / bk_SNRtrackingSlope; //aka speed factor
+    deltaL2 = (fi2 * (result2 - pTarget2)) / bk_SNRtrackingSlope; //aka speed factor
+    previousdeltaL1 = deltaL1;
+    previousdeltaL2 = deltaL2;
+    simwordresponsearray = [];
+    psychometricarray = [];
+    trackinterleaver = [];
+    interleavedtrack = [];
+    psychometricdata = [];
+	longpsychometricdata = [];
+    individualworddata_xvalues = [];
+    individualworddata_yvalues = [];
+	individualworddata_testfityvalues = [];
+    individualworddata_testfityvalue_negativeloglikelihood = [];
+	individualworddata_testfityvalue_negativeloglikelihood_SUM = 0;
+    psychoplotxvalues = [];
+    psychoplotyvalues = [];
+    adaptivetrackplot1_x = [];
+    adaptivetrackplot1_y = [];
+    adaptivetrackplot2_x = [];
+    adaptivetrackplot2_y = [];
+	longiteration = 0;
+	shortiteration = 0;
+	
+    // Brand & Kollmeier rules for first track - as per personal communication from Brand (3rd Feb 2015)
+    bk_rule1_1 = (pTarget1 <= 0.2) || (pTarget1 >= 0.8); // target intelligibility is <=20% or >=80%?
+    bk_rule2_1 = (result1 < 0.2 && pTarget1 <= 0.2) || (result1 > 0.8 && pTarget1 >= 0.8); // intelligibility is <=20% if target is or >=80% if target is?
+    bk_rule3_1 = Math.abs(deltaL1) > 0.5; // the speed factor is higher than 0.5?
+    bk_rule4_1 = bk_rule1_1 && bk_rule2_1 && bk_rule3_1; // rules 1 to 3 are met, therefore double step size?
+
+    // Brand & Kollmeier rules for second track - as per personal communication from Brand (3rd Feb 2015)
+    bk_rule1_2 = (pTarget2 <= 0.2) || (pTarget2 >= 0.8); // target intelligibility is <=20% or >=80%?
+    bk_rule2_2 = (result2 < 0.2 && pTarget2 <= 0.2) || (result2 > 0.8 && pTarget2 >= 0.8); // intelligibility is <=20% if target is or >=80% if target is?
+    bk_rule3_2 = Math.abs(deltaL2) > 0.5; // the speed factor is higher than 0.5?
+    bk_rule4_2 = bk_rule1_2 && bk_rule2_2 && bk_rule3_2; // rules 1 to 3 are met, therefore double step size?
+    
+    // Use the Durstenfeld shuffle algorithm above to set up randomisation for the interleaved tracks
+    if (NumberOfTrials % 2 == 0) {
+        for (let n = 1; n < (numberoftracks * (1 / trackbase.length) * NumberOfTrials) + 1; n++) {
+            const temptrackbase = trackbase.slice(0);
+            shuffleArray(temptrackbase);
+            trackinterleaver.push(...temptrackbase);
+        }
+    } else {
+        for (let n = 1; n < (numberoftracks * (1 / trackbase.length) * NumberOfTrials); n++) {
+            const temptrackbase = trackbase.slice(0);
+            shuffleArray(temptrackbase);
+            trackinterleaver.push(...temptrackbase);
+        }
+        temptrackbase = trackbase.slice(trackbase.length / 2);
+        shuffleArray(temptrackbase);
+        trackinterleaver.push(...temptrackbase);
+    }
+
+    track1iteration = 1;
+    SNR1 = 1 * StartingSNR;
+    reversals1 = 0;
+    previousdeltaL1 = 0;
+    outputstring1 = 'Trial\tSNR\tSim responses\tProportion correct';
+    track2iteration = 1;
+    SNR2 = 1 * StartingSNR;
+    reversals2 = 0;
+    previousdeltaL2 = 0;
+    outputstring2 = 'Trial\tSNR\tSim responses\tProportion correct';
+    interleavedoutputtextstring = 'Trial\tID\tSNR\tSim responses\tProportion correct';
+    
+	// Clear previous data before writing new data
+    document.getElementById("shortpsychometricdataoutputtext").innerHTML = "";
+    document.getElementById("longpsychometricdataoutputtext").innerHTML = "";
+	
+    // Set things up to initialise the adaptive track(s).
+    for (let trial = 1; trial < (1 * trackinterleaver.length) + 1; trial++) {
+
+        // read which adaptive track is operating in the current overall iteration, then do it...
+        activetrack = 1 * trackinterleaver[trial - 1];
+        if (activetrack < 2) { // ADAPTIVE TRACK ONE 
+            // First, select the sentence to present (I'll send that later!) then present the stimulus at the current SNR1
+            // [presentation goes here!]
+            // Then, get the participant's response.
+            result1 = simsentenceproportioncorrect(SNR1); // This is where we'd put the result from the real human participant.
+            outputstring1 += '<br>' + track1iteration.toLocaleString('en-nz', {
+                minimumIntegerDigits: 2,
+                useGrouping: false
+            }) + '\t' + SNR1 + '\t' + simwordresponsearray + '\t' + result1;
+            interleavedoutputtextstring += '<br>' + trial + '\t1/' + track1iteration.toLocaleString('en-nz', {
+                minimumIntegerDigits: 2,
+                useGrouping: false
+            }) + '\t' + SNR1 + '\t' + simwordresponsearray + '\t' + result1;
+            psychometricdata.push([SNR1, result1]);
+            track1_x.push(1 * SNR1);
+            track1_y.push(1 * result1);
+            // Choose the next SNR based on the Brand & Kollmeier A1 procedure
+            fi1 = bk_a * Math.pow(bk_b, ((-1) * (reversals1)));
+            deltaL1 = (fi1 * (result1 - pTarget1)) / bk_SNRtrackingSlope;
+            if (Math.abs(deltaL1) < minspeedfactor) {
+                var newdeltaL1 = Math.sign(deltaL1) * minspeedfactor;
+                deltaL1 = newdeltaL1;
+            }
+            let nextSNR1 = SNR1 - deltaL1;
+            if (bk_rule4_1) {
+                nextSNR1 = SNR1 - 2 * deltaL1
+            }
+            if (SNR1 > psychoplotx_max) {
+                psychoplotx_max = SNR1;
+            }
+            if (SNR1 < psychoplotx_min) {
+                psychoplotx_min = SNR1;
+            }
+            adaptivetrackplot1_x.push(trial);
+            adaptivetrackplot1_y.push(SNR1);
+
+			// Add to long array of SNR and individual word performance for fitting
+			for (let i = 1; i < WordsPerSentence + 1; i++) {
+			individualworddata_xvalues.push(SNR1);
+			};
+			individualworddata_yvalues.push(...simwordresponsearray);	
+			
+            SNR1 = (Math.round(nextSNR1 * 100) / 100);
+            if ((track1iteration < 2) || (previousdeltaL1 > 0 && deltaL1 > 0) || (previousdeltaL1 < 0 && deltaL1 < 0)) {
+                //console.log('no reversal')
+            } else {
+                reversals1++;
+                //console.log('R E V E R S A L')
+            }
+            previousdeltaL1 = deltaL1;
+            document.getElementById("track1outputtext").innerHTML = 'Track 1:<br>' + outputstring1;
+            document.getElementById("interleavedoutputtext").innerHTML = 'All data in order of presentation:<br>' + interleavedoutputtextstring;
+            track1iteration++;
+        } else { // ADAPTIVE TRACK TWO
+            // First, select the sentence to present (again, I'll send that later!) then present the stimulus at the current SNR2
+            // [presentation goes here!]
+            // Then, get the participant's response.
+            result2 = simsentenceproportioncorrect(SNR2); // This is where we'd put the result from the real human participant.
+            outputstring2 += '<br>' + track2iteration.toLocaleString('en-nz', {
+                minimumIntegerDigits: 2,
+                useGrouping: false
+            }) + '\t' + SNR2 + '\t' + simwordresponsearray + '\t' + result2;
+            interleavedoutputtextstring += '<br>' + trial + '\t2/' + track2iteration.toLocaleString('en-nz', {
+                minimumIntegerDigits: 2,
+                useGrouping: false
+            }) + '\t' + SNR2 + '\t' + simwordresponsearray + '\t' + result2;
+            psychometricdata.push([SNR2, result2]);
+            track2_x.push(1 * SNR2);
+            track2_y.push(1 * result2);
+            // Choose the next SNR based on the Brand & Kollmeier A1 procedure
+            fi2 = bk_a * Math.pow(bk_b, ((-1) * (reversals2)));
+            deltaL2 = (fi2 * (result2 - pTarget2)) / bk_SNRtrackingSlope;
+            if (Math.abs(deltaL2) < minspeedfactor) {
+                var newdeltaL2 = Math.sign(deltaL2) * minspeedfactor;
+                deltaL2 = newdeltaL2;
+            }
+            let nextSNR2 = SNR2 - deltaL2;
+            if (bk_rule4_2) {
+                nextSNR2 = SNR2 - 2 * deltaL2
+            }
+            if (SNR2 > psychoplotx_max) {
+                psychoplotx_max = SNR2;
+            }
+            if (SNR2 < psychoplotx_min) {
+                psychoplotx_min = SNR2;
+            }
+            adaptivetrackplot2_x.push(trial);
+            adaptivetrackplot2_y.push(SNR2);
+			
+			// Add to long array of SNR and individual word performance for fitting
+			for (let i = 1; i < WordsPerSentence + 1; i++) {
+			individualworddata_xvalues.push(SNR2);
+			};
+			individualworddata_yvalues.push(...simwordresponsearray);	
+			
+            SNR2 = (Math.round(nextSNR2 * 100) / 100);
+            if ((track2iteration < 2) || (previousdeltaL2 > 0 && deltaL2 > 0) || (previousdeltaL2 < 0 && deltaL2 < 0)) {
+                //console.log('no reversal')
+            } else {
+                reversals2++;
+                //console.log('R E V E R S A L')
+            }
+            //console.log(reversals2)
+            previousdeltaL2 = deltaL2;
+            document.getElementById("track2outputtext").innerHTML = 'Track 2:<br>' + outputstring2;
+            document.getElementById("interleavedoutputtext").innerHTML = 'All data in order of presentation:<br>' + interleavedoutputtextstring;
+            track2iteration++;
+        } // activetrack < 2
+
+    } // next trial
+
+    // Next step is to take the psychometric data from the track(s), and then to do a fit to the intelligibility function above to find SRT and Slope.
+    // I've typically used a nonlinear Levenberg-Marquardt fit because I had it to hand, but Thomas Brand said (18th March 2015): "I recommend the minimization of the negative logarithm of the likelihood for the binaural distribution, that means the logarithm of the likelihood given in the 2002 paper. Numerically this is not problematic. Minimizing the squared distances as done by Levenberg-Marquardt is not the mathematically correct criterion as it bases in the maximum likelihood of a Gaussian distribution. However, differences may be very small. I never tested it, as the correct (binomial) cost function is known."
+
+	// output a list of comma-separated sentence data for pasting into fitter
+    for (shortiteration = 1; shortiteration < (1 * psychometricdata.length) + 1; shortiteration++) {
+            shortpsychometricdatastring += '<br>' + psychometricdata[shortiteration-1];
+	};
+	shortiteration = shortiteration-1;
+	document.getElementById("shortpsychometricdataoutputtext").innerHTML = 'Comma-separated sentence-level data for pasting into fitter (n=' + shortiteration + '):' + shortpsychometricdatastring;
+
+	// output a very long list of comma-separated word data for pasting into fitter
+    for (longiteration = 1; longiteration < (1 * individualworddata_xvalues.length) + 1; longiteration++) {
+            longpsychometricdatastring += '<br>' + individualworddata_xvalues[longiteration-1] + ',' + individualworddata_yvalues[longiteration-1];
+	};
+	longiteration = longiteration-1;
+	document.getElementById("longpsychometricdataoutputtext").innerHTML = 'Comma-separated individual word data for pasting into fitter (n=' + longiteration + '):' + longpsychometricdatastring;
+
+    // Sort the psychometric data array for no reason in particular...
+    psychometricdata.sort(function(a, b) {
+        return a[0] - b[0]
+    });
+
+    if (SNR1 > psychoplotx_max) {
+        psychoplotx_max = SNR1;
+    } // do once more to check final value
+    if (SNR1 < psychoplotx_min) {
+        psychoplotx_min = SNR1;
+    } // do once more to check final value
+    if (SNR2 > psychoplotx_max) {
+        psychoplotx_max = SNR2;
+    } // do once more to check final value
+    if (SNR2 < psychoplotx_min) {
+        psychoplotx_min = SNR2;
+    } // do once more to check final value
+    for (var plotxiteration = 0; plotxiteration < 50; plotxiteration++) {
+        psychoplotxvalues.push(plotxiteration * ((Math.round((psychoplotx_max + 3) / 5) * 5 - Math.round((psychoplotx_min - 3) / 5) * 5) / 49) + Math.round((psychoplotx_min - 3) / 5) * 5);
+    }
+    for (var plotyiteration = 0; plotyiteration < 50; plotyiteration++) {
+        psychoplotyvalues.push(intelligibility(psychoplotxvalues[plotyiteration],SimSRT, SimSlope, SImax));
+    }
+
+generatenegativeloglikelihood (FitSRT, FitSlope, FitSImax);
+
+
+    // Plot the psychometric functions and adaptive tracks
+
+    const trace1 = {
+        x: track1_x,
+        y: track1_y,
+        yaxis: "y2",
+        mode: 'markers',
+        type: 'scatter',
+        name: 'track 1 (' + pTarget1 + ') data',
+        marker: {
+            color: 'rgb(147, 121, 208)',
+            opacity: 0.5,
+            size: 10
+        },
+    };
+
+    const trace2 = {
+        x: track2_x,
+        y: track2_y,
+        yaxis: "y2",
+        mode: 'markers',
+        type: 'scatter',
+        name: 'track 2 (' + pTarget2 + ') data',
+        marker: {
+            color: 'rgb(125, 244, 161)',
+            opacity: 0.5,
+            size: 10
+        }
+    };
+
+    const trace3 = {
+        x: [Math.round((psychoplotx_min - 3) / 5) * 5, SimSRT, SimSRT], // in the actual test, these would be the x values of the fitted function
+        y: [intelligibility(SimSRT, SimSRT, SimSlope, SImax), intelligibility(SimSRT, SimSRT, SimSlope, SImax), 0], // in the actual test, these would be the y values of the fitted function
+        mode: 'lines',
+        yaxis: 'y2',
+        type: 'scatter',
+        name: 'SRT = ' + (Math.round(SimSRT * 100) / 100),
+        line: {
+            color: 'rgb(200, 200, 200)',
+            dash: 'dot',
+            width: 3
+        }
+    };
+
+    const trace4 = {
+        x: psychoplotxvalues, // in the actual test, these would be the x values of the fitted function
+        y: psychoplotyvalues, // in the actual test, these would be the y values of the fitted function
+        mode: 'lines',
+        yaxis: 'y2',
+        type: 'scatter',
+        name: 'simulated psychometric function',
+        line: {
+            color: 'rgb(64, 64, 64)',
+            opacity: 0.5,
+            width: 3
+        }
+    };
+
+    const adaptivetrackplot1 = {
+        x: adaptivetrackplot1_y,
+        y: adaptivetrackplot1_x,
+        mode: 'lines+markers',
+        type: 'scatter',
+        name: 'track 1 (' + pTarget1 + ')',
+        line: {
+            color: 'rgb(147, 121, 208)',
+            opacity: 0.5,
+            width: 3
+        }
+    };
+
+    const adaptivetrackplot2 = {
+        x: adaptivetrackplot2_y,
+        y: adaptivetrackplot2_x,
+        mode: 'lines+markers',
+        type: 'scatter',
+        name: 'track 2 (' + pTarget2 + ')',
+        line: {
+            color: 'rgb(125, 244, 161)',
+            opacity: 0.5,
+            width: 3
+        }
+    };
+
+    const data = [trace1, trace2, trace3, trace4, adaptivetrackplot1, adaptivetrackplot2];
+
+    const layout = {
+        width: 600,
+        height: 500,
+        title: "Results",
+		showlegend: true,
+		legend: {
+			x: .95,
+			y: 0.5
+		},
+        xaxis: {
+            nticks: 10,
+            range: [Math.round((psychoplotx_min - 3) / 5) * 5, Math.round((psychoplotx_max + 3) / 5) * 5],
+            domain: [0, .9],
+            title: "SNR (dB SNR)"
+        },
+        yaxis: {
+            range: [0, NumberOfTrials * numberoftracks + 1],
+            domain: [0, 0.45],
+            title: "Presentation"
+        },
+        yaxis2: {
+            range: [0, 1.1],
+            domain: [0.55, 1],
+            title: "proportion correct"
+        }
+
+    }
+
+    Plotly.newPlot('ResultsPlot', data, layout);
+	
+} // simulateTest
+
+
+
+
+
+
+
+
+    </script>
+
+</body>
+</html>
