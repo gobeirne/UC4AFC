@@ -1,5 +1,5 @@
 // File: results.js
-import { responseLog, participant, config, testStartedAt, selectedList } from "./global.js";
+import { responseLog, participant, config, testStartedAt } from "./global.js";
 import { showScreen } from "./ui.js";
 
 export function saveResults(optionalNote = "") {
@@ -22,7 +22,6 @@ export function saveResults(optionalNote = "") {
     : "(unknown)";
 
   const jsonData = {
-    list: selectedList === "demo" ? "Demo" : `List ${selectedList}`,
     participant,
     startedAt: testStartedAt?.toISOString() || null,
     timestamp: now.toISOString(),
@@ -33,7 +32,6 @@ export function saveResults(optionalNote = "") {
   // --- Build .txt output
   const txtLines = [
     `# Participant\t${participant}`,
-    `# List used\t${selectedList === "demo" ? "Demo" : `List ${selectedList}`}`,
     `# test started at ${startTimeFormatted}`,
     "",
     "Trial\tSound\tCorrect\tChosen\tTime_ms"
@@ -66,7 +64,7 @@ export function saveResults(optionalNote = "") {
     a2.download = `UC4AFC_${participant}_${timeStr}.json`;
     a2.click();
   } else {
-    console.warn("ðŸ›‘ Skipping JSON download due to config.saveJson = false");
+    console.warn("[stop] Skipping JSON download due to config.saveJson = false");
   }
 
  // --- Show end screen
@@ -89,7 +87,7 @@ if (saveAgainBtn) {
 
     const txtContent = txtLines.join("\n");
 
-    // Mailto size is limited â€” keep conservative
+    // Mailto size is limited — keep conservative
     const MAX_MAILTO_BODY = 1800;
     let body = txtContent;
     let truncated = false;

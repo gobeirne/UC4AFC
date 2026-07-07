@@ -12,6 +12,7 @@ const ASSETS_TO_CACHE = [
   "./global.js",
   "./config.js",
   "./audioEngine.js",
+  "./calibration.js",
   "./ui.js",
   "./setImage.js",
   "./flow.js",
@@ -254,7 +255,7 @@ self.addEventListener("install", (event) => {
       ).then((results) => {
         results.forEach((result, i) => {
           if (result.status === "rejected") {
-            console.warn(`âš ï¸ Failed to cache: ${ASSETS_TO_CACHE[i]}`);
+            console.warn(`[!] Failed to cache: ${ASSETS_TO_CACHE[i]}`);
           }
         });
       })

@@ -24,27 +24,17 @@
   <p class="small">University of Canterbury Four-Alternative Forced Choice Speech Test</p>
 
   <input id="name" placeholder="Participant name/code" /><br />
-  
-  <div style="margin: 1rem 0;">
-    <label style="margin-right: 1rem;">
-      <input type="radio" name="listSelection" value="1" checked>List 1
-    </label>
-    <label>
-      <input type="radio" name="listSelection" value="2">List 2
-    </label>
-  </div>
 <label hidden>
     Delay (ms): <input id="delay" type="number" value="1500" />
   </label><br hidden>
 
   <button id="trainBtn">Training</button>
-  <button id="demoBtn">Demo</button>
   <button id="startBtn">Start</button><br />
-  <button id="calibrateBtn" disabled>Calibration</button>
+  <button id="calibrateBtn">Calibration</button>
 <label>
   <br>Take a break every
   <input id="breakEvery" type="number" min="0" value="32" style="width:4em;">
-  presentations (of 33 total)
+  presentations
 </label>
  <!-- <p class="footer">
     &copy; 2025 G.O'B.
@@ -58,6 +48,37 @@
   <button id="okBtn">OK</button>
 </div>
 
+<!-- Calibration screen -->
+<div id="calibration" class="screen">
+  <h2>Calibration</h2>
+  <p class="small" style="max-width:34rem; margin:0.5rem auto;">
+    Turn device volume fully up, play the calibration tone, measure output in
+    dB(A) with a sound-level meter, then stop and enter the value. The measured
+    level becomes the reference; presentation level is set with the slider below.
+  </p>
+
+  <div style="margin:1rem 0;">
+    <button id="calToneToggleBtn">Calibration tone</button>
+    <button id="testCalBtn" hidden>Test level</button>
+  </div>
+
+  <div class="volume-panel">
+    <label for="outputLevel">Test output level</label><br>
+    <input id="outputLevel" type="range" min="-100" max="0" step="0.1" value="0" style="width:min(340px,80vw);">
+    <div class="level-readout">
+      <strong id="outputLevelLabel">0 dB FS</strong>
+      <span id="modeBadge">Uncalibrated</span>
+    </div>
+  </div>
+
+  <p id="calStatus" class="small" style="min-height:1.4rem;"></p>
+
+  <div style="margin-top:1.25rem;">
+    <button id="calClearBtn" style="background:#777;">Clear calibration</button>
+    <button id="calBackBtn">Back</button>
+  </div>
+</div>
+
 <!-- Break screen -->
 <div id="break" class="screen" style="display:none;">
   <h2>You're doing a great job!</h2>
@@ -66,7 +87,7 @@
 </div>
 
 <div id="loading" class="screen" style="display:none; text-align:center; padding:2em;">
-  <h2>⏳ Loading assets...</h2>
+  <h2>[wait] Loading assets...</h2>
   <p>This may take a few seconds. Please wait...</p>
   <button id="loading-ok" style="display:none; margin-top: 1em;">OK</button>
 </div>
@@ -78,7 +99,7 @@
 </div>
 
 <div id="test" class="screen">
-  <button id="abortBtn" title="Abort test">❌</button> 
+  <button id="abortBtn" title="Abort test">[X]</button> 
   <audio id="stimulus"></audio>
 <div class="grid-container">
   <div class="grid">
@@ -203,11 +224,11 @@ cake	cage	park	soup	cake	cake.mp3
     const isLocal = location.protocol === "file:";
 
     if (isLocal) {
-      console.warn("🛑 Skipping service worker: running from file://");
+      console.warn("[stop] Skipping service worker: running from file://");
     } else {
       navigator.serviceWorker.register("service-worker.js")
-        .then(reg => console.log("✅ Service Worker registered:", reg.scope))
-        .catch(err => console.warn("⚠️ Service Worker failed to register:", err));
+        .then(reg => console.log("[OK] Service Worker registered:", reg.scope))
+        .catch(err => console.warn("[!] Service Worker failed to register:", err));
     }
   }
 </script>
@@ -215,4 +236,3 @@ cake	cage	park	soup	cake	cake.mp3
 
 </body>
 </html>
-

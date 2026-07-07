@@ -302,6 +302,15 @@ $("runAcceptBtn").onclick = async () => {
   const dbOct=biquadMagDb(secs,2000,sr);
   row("Rolloff ≈ −60 dB one octave up", fmt(dbOct)+" dB", dbOct<-55 && dbOct>-66);
 
+  // Test 5: calibration file playback path (needs sounds/calib.mp3 when served).
+  try {
+    await AudioEngine.startCalibrationTone("sounds/calib.mp3");
+    AudioEngine.stopCalibrationTone();
+    row("Calibration file playback (no throw)", "started+stopped", true);
+  } catch(e) {
+    row("Calibration file playback", "needs sounds/calib.mp3 - " + e.message, false);
+  }
+
   log("Acceptance run complete.");
 };
 

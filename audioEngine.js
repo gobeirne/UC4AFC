@@ -213,6 +213,11 @@ const AudioEngine = (() => {
   // the same cutoff are free. Keyed as `${name}@${cutoffHz}`.
   const filteredCache = new Map();
 
+  // Optional pre-measured momentary LUFS per word name, loaded from a repo file
+  // (see loadLUFSTable). When present, decode() uses this instead of measuring
+  // live, saving per-word measurement cost. name -> momentary LUFS (number).
+  const preMeasured = new Map();
+
   let activeSource = null;
 
   function context() {
@@ -235,8 +240,35 @@ const AudioEngine = (() => {
     return c.state;
   }
 
+  // Load a pre-measured momentary-LUFS table from a repo file. Format: one entry
+  // per line, "name<TAB or whitespace>lufs" (e.g. "nose\t-23.14"). Lines that
+  // start with # are comments. Missing/malformed lines are skipped; words not in
+  // the table simply fall back to live measurement in decode(). Returns the
+  // number of entries loaded (0 on any failure, so callers degrade gracefully).
+  async function loadLUFSTable(url = "stimulus_lufs.txt") {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) return 0;
+      const text = await resp.text();
+      let n = 0;
+      for (const line of text.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t || t.startsWith("#")) continue;
+        const m = t.split(/[\s,]+/);
+        if (m.length < 2) continue;
+        const name = m[0];
+        const lufs = parseFloat(m[1]);
+        if (name && isFinite(lufs)) { preMeasured.set(name, lufs); n++; }
+      }
+      return n;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   // Decode one file (path like "sounds/nose.mp3") and cache raw buffer + its
-  // unfiltered momentary LUFS. Idempotent.
+  // unfiltered momentary LUFS. Uses a pre-measured LUFS value when available
+  // (loadLUFSTable), otherwise measures live. Idempotent.
   async function decode(name, url) {
     if (cache.has(name)) return cache.get(name);
     const c = context();
@@ -244,7 +276,8 @@ const AudioEngine = (() => {
     if (!resp.ok) throw new Error(`decode fetch failed ${resp.status} for ${url}`);
     const arr = await resp.arrayBuffer();
     const raw = await c.decodeAudioData(arr);
-    const momentary = measureLUFS(raw).momentary;
+    const momentary = preMeasured.has(name) ? preMeasured.get(name)
+                                            : measureLUFS(raw).momentary;
     const entry = { raw, momentary };
     cache.set(name, entry);
     return entry;
@@ -358,16 +391,63 @@ const AudioEngine = (() => {
     masterGain.gain.value = LIN(db);
   }
 
+  // ---- Calibration tone ---------------------------------------------------
+  // Plays the provided calibration noise FILE (spectrum- and level-matched to
+  // the stimuli) looped at unity gain through the graph. No synthesis: the file
+  // is the reference. Decoded once and cached under a reserved key.
+  let calibSource = null;
+  const CALIB_KEY = "__calib__";
+
+  async function startCalibrationTone(url = "sounds/calib.mp3", { onStarted = null, extraGainDb = 0 } = {}) {
+    const c = context();
+    stopCalibrationTone();
+
+    // Decode + cache the calibration file (idempotent).
+    let entry = cache.get(CALIB_KEY);
+    if (!entry) {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`calibration fetch failed ${resp.status} for ${url}`);
+      const raw = await c.decodeAudioData(await resp.arrayBuffer());
+      entry = { raw, momentary: measureLUFS(raw).momentary };
+      cache.set(CALIB_KEY, entry);
+    }
+
+    const src = c.createBufferSource();
+    src.buffer = entry.raw;
+    src.loop = true;
+    if (extraGainDb === 0) {
+      src.connect(masterGain);      // unity
+    } else {
+      const g = c.createGain();
+      g.gain.value = LIN(extraGainDb);
+      src.connect(g).connect(masterGain);
+    }
+    calibSource = src;
+    src.start();
+    if (onStarted) requestAnimationFrame(() => onStarted());
+    return entry.momentary;       // informational only
+  }
+
+  function stopCalibrationTone() {
+    if (calibSource) {
+      try { calibSource.stop(); } catch (_) {}
+      try { calibSource.disconnect(); } catch (_) {}
+      calibSource = null;
+    }
+  }
+
   return {
     // lifecycle
     context, resume,
     // assets
-    decode, isDecoded,
+    decode, isDecoded, loadLUFSTable,
     // pipeline
     prepare, measure: measureLUFS,
     butterworthSections: butterworthLowpassSections,
     // playback
     playBuffer, playStimulus, stop, setMasterGainDb,
+    // calibration
+    startCalibrationTone, stopCalibrationTone,
     // caches (exposed for diagnostics / teardown)
     _cache: cache, _filteredCache: filteredCache,
     // utils

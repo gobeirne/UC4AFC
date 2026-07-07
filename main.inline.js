@@ -15,7 +15,7 @@ const config = {
   showAbortXOnTouchDevices: true,
   instructions: {
     training:
-      "Youâ€™ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
+      "You'll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
     test:
       "You will hear a word and see four pictures. Click the picture that matches the word you heard. If you're not sure, have a guess."
   },
@@ -68,7 +68,7 @@ async function loadConfig() {
   const isLocal = location.protocol === "file:";
 
   if (isLocal) {
-    console.warn("ðŸ“ Running locally. Skipping fetch(config.json) and using fallback config.");
+    console.warn(" Running locally. Skipping fetch(config.json) and using fallback config.");
     Object.assign(config, {
       arrows: false,
       defaultDelay: 1500,
@@ -77,7 +77,7 @@ async function loadConfig() {
       saveJson: false,
       imageRevealOffsetMs: 600,
       instructions: {
-        training: "Youâ€™ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
+        training: "You'll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
         test: "You will hear a word and see four pictures. Click the picture that matches the word you heard. If you're not sure, have a guess."
       }
     });
@@ -88,10 +88,10 @@ async function loadConfig() {
     const res = await fetch("config.json");
     const externalConfig = await res.json();
     Object.assign(config, externalConfig);
-    console.log("âœ… Loaded config.json:", config);
+    console.log("[OK] Loaded config.json:", config);
   } catch (err) {
-    console.error("âŒ Failed to load config.json:", err);
-    console.warn("âš ï¸ Could not load config.json. Using fallback config.");
+    console.error("[X] Failed to load config.json:", err);
+    console.warn("[!] Could not load config.json. Using fallback config.");
   }
 }
 
@@ -313,6 +313,11 @@ const AudioEngine = (() => {
   // the same cutoff are free. Keyed as `${name}@${cutoffHz}`.
   const filteredCache = new Map();
 
+  // Optional pre-measured momentary LUFS per word name, loaded from a repo file
+  // (see loadLUFSTable). When present, decode() uses this instead of measuring
+  // live, saving per-word measurement cost. name -> momentary LUFS (number).
+  const preMeasured = new Map();
+
   let activeSource = null;
 
   function context() {
@@ -335,8 +340,35 @@ const AudioEngine = (() => {
     return c.state;
   }
 
+  // Load a pre-measured momentary-LUFS table from a repo file. Format: one entry
+  // per line, "name<TAB or whitespace>lufs" (e.g. "nose\t-23.14"). Lines that
+  // start with # are comments. Missing/malformed lines are skipped; words not in
+  // the table simply fall back to live measurement in decode(). Returns the
+  // number of entries loaded (0 on any failure, so callers degrade gracefully).
+  async function loadLUFSTable(url = "stimulus_lufs.txt") {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) return 0;
+      const text = await resp.text();
+      let n = 0;
+      for (const line of text.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t || t.startsWith("#")) continue;
+        const m = t.split(/[\s,]+/);
+        if (m.length < 2) continue;
+        const name = m[0];
+        const lufs = parseFloat(m[1]);
+        if (name && isFinite(lufs)) { preMeasured.set(name, lufs); n++; }
+      }
+      return n;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   // Decode one file (path like "sounds/nose.mp3") and cache raw buffer + its
-  // unfiltered momentary LUFS. Idempotent.
+  // unfiltered momentary LUFS. Uses a pre-measured LUFS value when available
+  // (loadLUFSTable), otherwise measures live. Idempotent.
   async function decode(name, url) {
     if (cache.has(name)) return cache.get(name);
     const c = context();
@@ -344,7 +376,8 @@ const AudioEngine = (() => {
     if (!resp.ok) throw new Error(`decode fetch failed ${resp.status} for ${url}`);
     const arr = await resp.arrayBuffer();
     const raw = await c.decodeAudioData(arr);
-    const momentary = measureLUFS(raw).momentary;
+    const momentary = preMeasured.has(name) ? preMeasured.get(name)
+                                            : measureLUFS(raw).momentary;
     const entry = { raw, momentary };
     cache.set(name, entry);
     return entry;
@@ -458,16 +491,63 @@ const AudioEngine = (() => {
     masterGain.gain.value = LIN(db);
   }
 
+  // ---- Calibration tone ---------------------------------------------------
+  // Plays the provided calibration noise FILE (spectrum- and level-matched to
+  // the stimuli) looped at unity gain through the graph. No synthesis: the file
+  // is the reference. Decoded once and cached under a reserved key.
+  let calibSource = null;
+  const CALIB_KEY = "__calib__";
+
+  async function startCalibrationTone(url = "sounds/calib.mp3", { onStarted = null, extraGainDb = 0 } = {}) {
+    const c = context();
+    stopCalibrationTone();
+
+    // Decode + cache the calibration file (idempotent).
+    let entry = cache.get(CALIB_KEY);
+    if (!entry) {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`calibration fetch failed ${resp.status} for ${url}`);
+      const raw = await c.decodeAudioData(await resp.arrayBuffer());
+      entry = { raw, momentary: measureLUFS(raw).momentary };
+      cache.set(CALIB_KEY, entry);
+    }
+
+    const src = c.createBufferSource();
+    src.buffer = entry.raw;
+    src.loop = true;
+    if (extraGainDb === 0) {
+      src.connect(masterGain);      // unity
+    } else {
+      const g = c.createGain();
+      g.gain.value = LIN(extraGainDb);
+      src.connect(g).connect(masterGain);
+    }
+    calibSource = src;
+    src.start();
+    if (onStarted) requestAnimationFrame(() => onStarted());
+    return entry.momentary;       // informational only
+  }
+
+  function stopCalibrationTone() {
+    if (calibSource) {
+      try { calibSource.stop(); } catch (_) {}
+      try { calibSource.disconnect(); } catch (_) {}
+      calibSource = null;
+    }
+  }
+
   return {
     // lifecycle
     context, resume,
     // assets
-    decode, isDecoded,
+    decode, isDecoded, loadLUFSTable,
     // pipeline
     prepare, measure: measureLUFS,
     butterworthSections: butterworthLowpassSections,
     // playback
     playBuffer, playStimulus, stop, setMasterGainDb,
+    // calibration
+    startCalibrationTone, stopCalibrationTone,
     // caches (exposed for diagnostics / teardown)
     _cache: cache, _filteredCache: filteredCache,
     // utils
@@ -477,6 +557,129 @@ const AudioEngine = (() => {
 
 // Expose for the non-module bundle (main.inline.js) and for ES import.
 if (typeof window !== "undefined") window.AudioEngine = AudioEngine;
+
+
+// --- calibration.js ---
+// File: calibration.js
+// -----------------------------------------------------------------------------
+// UC4AFC calibration - mirrors the UC_CVCV model.
+//
+// The calibration noise file is spectrum- and level-matched to the stimuli at
+// source. The operator turns device volume fully up, plays the looped
+// calibration file at UNITY, measures the acoustic output in dB(A) on a
+// sound-level meter, and enters that value. That measured value becomes:
+//   * the reference level (playing a stimulus at this level = unity gain), and
+//   * the MAXIMUM of the presentation-level slider.
+//
+// Presentation level -> digital gain (UC_CVCV gainForLevel):
+//   calibrated:   attenuation = measuredDbA - levelDbA;  gain = 10^(-att/20)
+//                 (so level == measuredDbA => 0 dB attenuation => unity)
+//   uncalibrated: unity gain (files are already level-normalised relative to
+//                 each other; device volume sets absolute output)
+//
+// Filtering is handled separately in the audio engine: after the LPF removes
+// energy, each word is matched back to its own original momentary LUFS, which
+// restores it to the shared set-level = the calibration level, preserving
+// calibration independent of the presentation-level gain above.
+// -----------------------------------------------------------------------------
+
+const CAL_KEY = "uc4afc_calibration";
+
+// Calibration state (mirrors UC_CVCV state.calibration).
+const cal = {
+  measuredDbA: null,
+  timestamp: null,
+  isCalibrated: false,
+  sliderMinDb: -100,
+  sliderMaxDb: 0,
+  currentSliderDb: 0
+};
+
+function state() { return cal; }
+
+// Apply a measured calibration level: it becomes the reference and the slider
+// maximum; the slider floor sits 60 dB below (snapped to 5 dB), UC_CVCV-style.
+function applyCalibrationLevel(level, timestamp = new Date().toISOString()) {
+  cal.measuredDbA = level;
+  cal.timestamp = timestamp;
+  cal.isCalibrated = true;
+  cal.sliderMaxDb = level;
+  cal.sliderMinDb = Math.floor(level / 5) * 5 - 60;
+  cal.currentSliderDb = level;
+  persist();
+  return cal;
+}
+
+// Digital linear gain for a target presentation level in dB(A) (UC_CVCV).
+function gainForLevel(levelDbA) {
+  if (cal.isCalibrated && cal.measuredDbA !== null) {
+    const attenuation = Number(cal.measuredDbA) - Number(levelDbA);
+    return Math.pow(10, -attenuation / 20);
+  }
+  return 1.0; // uncalibrated: unity
+}
+
+// dB form of the same, convenient for the engine's extraGainDb parameter.
+function gainDbForLevel(levelDbA) {
+  if (cal.isCalibrated && cal.measuredDbA !== null) {
+    return -(Number(cal.measuredDbA) - Number(levelDbA)); // = levelDbA - measuredDbA
+  }
+  return 0;
+}
+
+function setCurrentSliderDb(db) {
+  cal.currentSliderDb = db;
+  persist();
+}
+
+function isCalibrated() { return cal.isCalibrated; }
+function measuredDbA() { return cal.measuredDbA; }
+
+function clearCalibration() {
+  cal.measuredDbA = null;
+  cal.timestamp = null;
+  cal.isCalibrated = false;
+  cal.sliderMinDb = -100;
+  cal.sliderMaxDb = 0;
+  cal.currentSliderDb = 0;
+  try { localStorage.removeItem(CAL_KEY); } catch (_) {}
+}
+
+function persist() {
+  try {
+    localStorage.setItem(CAL_KEY, JSON.stringify({
+      level: cal.measuredDbA, timestamp: cal.timestamp
+    }));
+  } catch (_) {}
+}
+
+// Restore a stored calibration on load. Returns the record (or null).
+function loadStored() {
+  try {
+    const raw = localStorage.getItem(CAL_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (data.level == null || !isFinite(Number(data.level))) return null;
+    applyCalibrationLevel(Number(data.level), data.timestamp);
+    return { level: Number(data.level), timestamp: data.timestamp };
+  } catch (_) {
+    return null;
+  }
+}
+
+// Header string for the results file.
+function calibrationHeader() {
+  if (!cal.isCalibrated || cal.measuredDbA == null) return "not set";
+  return `${cal.measuredDbA} dB(A)`;
+}
+
+if (typeof window !== "undefined") {
+  window.Calibration = {
+    state, applyCalibrationLevel, gainForLevel, gainDbForLevel,
+    setCurrentSliderDb, isCalibrated, measuredDbA, clearCalibration,
+    loadStored, calibrationHeader
+  };
+}
 
 
 // --- ui.js ---
@@ -604,7 +807,7 @@ function showTrainingItem() {
 
 const item = list[trialIndex];
   if (!item || !isNonEmpty(item.correct) || !isNonEmpty(item.audioFile)) {
-    warn("âš ï¸ Bad training item, skipping trial", { index: trialIndex + 1, item });
+    warn("[!] Bad training item, skipping trial", { index: trialIndex + 1, item });
     trialIndex++;
     return showTrainingItem();
   }
@@ -636,7 +839,7 @@ const item = list[trialIndex];
       }, config.delayMs || 1500);
     }
   }).catch(err => {
-    console.error("âš ï¸ Training audio failed to play:", err);
+    console.error("[!] Training audio failed to play:", err);
   });
 }
 
@@ -675,7 +878,7 @@ if (phase === "test") {
 
   const item = list[trialIndex];
   if (!item) {
-    warn("âš ï¸ Missing trial item at index", trialIndex);
+    warn("[!] Missing trial item at index", trialIndex);
     trialIndex++;
     return nextTrial();
   }
@@ -690,7 +893,7 @@ if (phase === "test") {
   });
 
   if (!isNonEmpty(item.audioFile)) {
-    warn("âš ï¸ Invalid audioFile in trial", trialIndex + 1, item);
+    warn("[!] Invalid audioFile in trial", trialIndex + 1, item);
   }
 
   // Preload NEXT trial's images
@@ -703,7 +906,7 @@ if (phase === "test") {
     nextImagesToPreload = nextShuffled;
 	nextImagesToPreload.forEach(name => {
       if (!isNonEmpty(name)) {
-        warn("âš ï¸ Skipping preload for invalid name (next trial)", { nextIndex: trialIndex + 2, name });
+        warn("[!] Skipping preload for invalid name (next trial)", { nextIndex: trialIndex + 2, name });
         return;
       }
       const preload = new Image();
@@ -804,7 +1007,7 @@ async function loadList() {
       // Split to exactly 6 fields, trim each, and validate
       const parts = line.split(/\t/).map(s => (s ?? "").trim());
       if (parts.length !== 6 || parts.some(p => !p)) {
-        console.warn(`âš ï¸ Bad list row skipped @ line ${i + 1} (${sourceLabel}):`, line);
+        console.warn(`[!] Bad list row skipped @ line ${i + 1} (${sourceLabel}):`, line);
         return null;
       }
       const [a, b, c, d, correct, audioFile] = parts;
@@ -812,7 +1015,7 @@ async function loadList() {
     }).filter(Boolean);
 
     if (rows.length === 0) {
-      console.error(`âŒ No valid rows parsed from ${sourceLabel}.`);
+      console.error(`[X] No valid rows parsed from ${sourceLabel}.`);
     }
     return rows;
   }
@@ -827,21 +1030,21 @@ async function loadList() {
     const rows = parseLines(raw, "inline fallback");
     list.length = 0;
     list.push(...rows);
-    console.warn("ðŸ“¦ Loaded inline fallback list (file://)");
+    console.warn("[pkg] Loaded inline fallback list (file://)");
   } else {
     try {
       const txt = await fetch("UC4AFC_lists.txt").then(r => r.text());
       const rows = parseLines(txt, "UC4AFC_lists.txt");
       list.length = 0;
       list.push(...rows);
-      console.log("âœ… Loaded list from UC4AFC_lists.txt");
+      console.log("[OK] Loaded list from UC4AFC_lists.txt");
     } catch (err) {
-      console.error("âŒ Failed to load UC4AFC_lists.txt:", err);
+      console.error("[X] Failed to load UC4AFC_lists.txt:", err);
       alert("Failed to load stimulus list.");
     }
   }
 
-  // âœ… All assets are preloaded via preloadAllAssets() in main.js
+  // [OK] All assets are preloaded via preloadAllAssets() in main.js
 }
 
 
@@ -857,7 +1060,7 @@ async function preloadAllAssets() {
   const isLocal = location.protocol === "file:";
 
   if (isLocal) {
-    // ðŸš§ Fallback list for local mode
+    // [wip] Fallback list for local mode
 assetList = [
   "images/bag.jpg",
   "images/back.jpg",
@@ -1071,7 +1274,7 @@ assetList = [
   "sounds/van.mp3",
   "sounds/zip.mp3"
 ];
-    console.warn("ðŸ“¦ Using fallback preload asset list (file:// mode)");
+    console.warn("[pkg] Using fallback preload asset list (file:// mode)");
   } else {
     try {
       const res = await fetch("preloadfilelist.txt");
@@ -1079,7 +1282,7 @@ assetList = [
       const raw = await res.text();
       assetList = raw.split(/\r?\n/).filter(x => x.trim().length > 0);
     } catch (err) {
-      console.error("âŒ Failed to load preloadfilelist.txt:", err);
+      console.error("[X] Failed to load preloadfilelist.txt:", err);
       return;
     }
   }
@@ -1090,9 +1293,9 @@ const tasks = assetList.map(src => () => {
   return Promise.resolve();
 }).filter(Boolean);
 
-console.log(`ðŸ“¦ Preloading ${tasks.length} assets...`);
+console.log(`[pkg] Preloading ${tasks.length} assets...`);
 await runWithConcurrency(tasks, 8); // keep this modest on mobile
-console.log(`âœ… Finished preloading ${tasks.length} assets.`);
+console.log(`[OK] Finished preloading ${tasks.length} assets.`);
 
 async function runWithConcurrency(fns, limit = 8) {
   let i = 0;
@@ -1110,12 +1313,12 @@ function preloadImage(src, timeoutMs = 7000) {
 
     const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
     const timer = setTimeout(() => {
-      console.warn(`â±ï¸ Image preload timed out: ${src}`);
+      console.warn(`[time] Image preload timed out: ${src}`);
       done();
     }, timeoutMs);
 
     img.onload = done;
-    img.onerror = () => { console.warn(`âš ï¸ Failed to load image: ${src}`); done(); };
+    img.onerror = () => { console.warn(`[!] Failed to load image: ${src}`); done(); };
     img.src = src;
 
     // On some browsers, decode can resolve earlier/more reliably
@@ -1133,7 +1336,7 @@ function preloadSound(src, timeoutMs = 7000) {
 
     const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
     const timer = setTimeout(() => {
-      console.warn(`â±ï¸ Sound preload timed out: ${src}`);
+      console.warn(`[time] Sound preload timed out: ${src}`);
       done();
     }, timeoutMs);
 
@@ -1141,7 +1344,7 @@ function preloadSound(src, timeoutMs = 7000) {
     once("canplaythrough");
     once("loadeddata");
     once("loadedmetadata");
-    audio.addEventListener("error", () => { console.warn(`âš ï¸ Failed to load sound: ${src}`); done(); }, { once: true });
+    audio.addEventListener("error", () => { console.warn(`[!] Failed to load sound: ${src}`); done(); }, { once: true });
 
     audio.preload = "auto";
     audio.src = src;
@@ -1150,50 +1353,41 @@ function preloadSound(src, timeoutMs = 7000) {
 }
 
 
-// Decode a stimulus mp3 into the AudioEngine cache (buffer + momentary LUFS),
-// so the Web Audio pipeline can filter/gain/play it with no per-trial decode
-// cost. The engine keys buffers by word name, matching item.correct / the
-// filename stem (e.g. "sounds/nose.mp3" -> "nose"). Calibration tones and any
-// non-word audio fall back to the lightweight <audio> warm-up.
-function preloadStimulus(src, timeoutMs = 15000) {
-  const file = src.split("/").pop() || "";
-  const name = file.replace(/\.[^.]+$/, "");
-  const isCalib = /calib/i.test(name);
-
-  if (typeof AudioEngine === "undefined" || isCalib) {
-    return preloadSound(src, timeoutMs);
-  }
-
-  return Promise.race([
-    AudioEngine.decode(name, src).catch(err => {
-      console.warn(`Failed to decode stimulus: ${src}`, err);
-    }),
-    new Promise(resolve => setTimeout(() => {
-      console.warn(`Stimulus decode timed out: ${src}`);
-      resolve();
-    }, timeoutMs))
-  ]);
+// Warm the network cache for a stimulus mp3. We deliberately do NOT call
+// decodeAudioData here: at preload time the AudioContext is still suspended
+// (it only unlocks on the Train/Start user gesture), and on many browsers
+// decodeAudioData will not complete on a suspended context. Decoding is done
+// lazily by the engine on first play, and the cache is warmed in the
+// background after unlock (see warmDecodeCache below).
+function preloadStimulus(src, timeoutMs = 7000) {
+  return preloadSound(src, timeoutMs);
 }
 
+// Decode every stimulus into the engine cache AFTER the context is unlocked.
+// Safe to call repeatedly; decode() is idempotent. Runs with modest
+// concurrency so it doesn't jank the UI on mobile.
+async function warmDecodeCache(soundFiles, limit = 4) {
+  if (typeof AudioEngine === "undefined") return;
+  const c = AudioEngine.context();
+  if (c.state !== "running") return; // only after a user gesture unlocks audio
 
-function startCalibration() {
-  const mode = localStorage.getItem("language") || "Te reo MÄori";
-  const soundFile = mode === "English" ? "NZEng_calib.mp3" : "TeReo_calib.mp3";
-
-  const audio = document.getElementById("stimulus");
-  audio.src = `sounds/${soundFile}`;
-  audio.loop = true;
-
-  audio.play().then(() => {
-    alert("ðŸ“¢ Playing calibration sound.\nSet your device volume to maximum.\nClick OK to stop.");
-  }).catch(err => {
-    console.error("âš ï¸ Calibration audio failed to play:", err);
-    alert("âš ï¸ Audio failed to play. Check browser autoplay permissions.");
-  }).finally(() => {
-    audio.pause();
-    audio.loop = false;
+  const jobs = soundFiles.map(name => async () => {
+    if (AudioEngine.isDecoded(name)) return;
+    try { await AudioEngine.decode(name, `sounds/${name}.mp3`); }
+    catch (err) { console.warn(`Deferred decode failed for ${name}`, err); }
   });
+
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, jobs.length) }, async () => {
+    while (i < jobs.length) await jobs[i++]();
+  });
+  await Promise.all(workers);
+  console.log(`Decoded ${soundFiles.length} stimuli into the engine cache.`);
 }
+
+
+// Legacy startCalibration() stub removed — calibration is now handled by the
+// calibration screen (calibration.js + AudioEngine.startCalibrationTone).
 
 
 // --- results.js ---
@@ -1261,7 +1455,7 @@ function saveResults(optionalNote = "") {
     a2.download = `UC4AFC_${participant}_${timeStr}.json`;
     a2.click();
   } else {
-    console.warn("ðŸ›‘ Skipping JSON download due to config.saveJson = false");
+    console.warn("[stop] Skipping JSON download due to config.saveJson = false");
   }
 
  // --- Show end screen
@@ -1284,7 +1478,7 @@ if (saveAgainBtn) {
 
     const txtContent = txtLines.join("\n");
 
-    // Mailto size is limited â€” keep conservative
+    // Mailto size is limited — keep conservative
     const MAX_MAILTO_BODY = 1800;
     let body = txtContent;
     let truncated = false;
@@ -1324,7 +1518,7 @@ function abortPhase() {
   };
 
 if (phase === "training" && confirm("Abort training?")) {
-  abortTraining(); // ðŸ‘ˆ tells flow.js to stop future audio/images
+  abortTraining(); //  tells flow.js to stop future audio/images
   stopAudio();
   trialIndex = 0;
   responseLog.length = 0;
@@ -1350,7 +1544,7 @@ function waitForAssetsThenBegin() {
   const okBtn = document.getElementById("loading-ok");
   okBtn.disabled = true;
   okBtn.style.display = "inline-block";
-  okBtn.textContent = "Loadingâ€¦";
+  okBtn.textContent = "Loading...";
 
   okBtn.onclick = () => {
     okBtn.disabled = true;
@@ -1365,7 +1559,7 @@ function waitForAssetsThenBegin() {
 
   const check = () => {
     if (assetsReady) {
-      document.querySelector("#loading h2").textContent = "âœ… Ready!";
+      document.querySelector("#loading h2").textContent = "[OK] Ready!";
       document.querySelector("#loading p").textContent = "Assets have been loaded.";
       okBtn.disabled = false;
       okBtn.textContent = "OK";
@@ -1399,7 +1593,7 @@ window.onload = async () => {
 
   await loadConfig();
   
-  // âœ… Initialise arrowSet before list/preload
+  // [OK] Initialise arrowSet before list/preload
   if (location.protocol === "file:") {
     // Local: use the static list embedded in config
     setArrowList(Array.isArray(config.arrowList) ? config.arrowList : []);
@@ -1415,6 +1609,16 @@ window.onload = async () => {
   }
   await loadList();
 
+  // Load the optional pre-measured stimulus LUFS table. If present, filtering
+  // restores each word to its pre-measured original loudness (no live measure);
+  // if absent, decode() measures live. Non-fatal either way.
+  if (typeof AudioEngine !== "undefined" && AudioEngine.loadLUFSTable) {
+    const file = (config && config.lufsTable) ? config.lufsTable : "stimulus_lufs.txt";
+    AudioEngine.loadLUFSTable(file).then(n => {
+      if (n > 0) console.log(`Loaded ${n} pre-measured LUFS values from ${file}.`);
+    });
+  }
+
   showScreen("intro");
   adjustImageSize();
   window.addEventListener("resize", adjustImageSize);
@@ -1422,8 +1626,8 @@ window.onload = async () => {
   // Start preloading in background
 preloadAllAssets().then(() => {
   assetsReady = true;
-  console.log("âœ… Assets preloaded.");
-  // âŒ Don't auto-begin â€” wait for user to click OK
+  console.log("[OK] Assets preloaded.");
+  // [X] Don't auto-begin — wait for user to click OK
 });
 
 
@@ -1431,12 +1635,12 @@ preloadAllAssets().then(() => {
 
 const abortBtn = document.getElementById("abortBtn");
 if (abortBtn) {
-  // ðŸ–¼ï¸ Show the button only if needed
+  //  Show the button only if needed
   const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
   const showOnTouch = config.showAbortXOnTouchDevices === true;
   abortBtn.style.display = (showOnTouch && isTouchDevice) ? "block" : "none";
 
-  // ðŸ§  Always attach the click handler
+  //  Always attach the click handler
   abortBtn.addEventListener("click", abortPhase);
 }
 
@@ -1479,8 +1683,17 @@ if (breakEveryInput) {
 
   // Train Button
   document.getElementById("trainBtn").onclick = () => {
-    // Unlock the AudioContext within this user gesture (required on iOS/Safari)
-    if (typeof AudioEngine !== "undefined") AudioEngine.resume();
+    // Unlock the AudioContext within this user gesture (required on iOS/Safari),
+    // then decode stimuli into the engine cache in the background. First play
+    // still decodes on demand if warming hasn't finished.
+    if (typeof AudioEngine !== "undefined") {
+      AudioEngine.resume().then(() => {
+        if (typeof warmDecodeCache === "function" && Array.isArray(list)) {
+          const names = [...new Set(list.map(r => r && r.correct).filter(Boolean))];
+          warmDecodeCache(names);
+        }
+      });
+    }
     showInstructions("training", () => {
       const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
       if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
@@ -1498,8 +1711,14 @@ if (breakEveryInput) {
 
   // Start Button
   document.getElementById("startBtn").onclick = () => {
-    // Unlock the AudioContext within this user gesture (required on iOS/Safari)
-    if (typeof AudioEngine !== "undefined") AudioEngine.resume();
+    if (typeof AudioEngine !== "undefined") {
+      AudioEngine.resume().then(() => {
+        if (typeof warmDecodeCache === "function" && Array.isArray(list)) {
+          const names = [...new Set(list.map(r => r && r.correct).filter(Boolean))];
+          warmDecodeCache(names);
+        }
+      });
+    }
     showInstructions("test", () => {
       const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
       if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
@@ -1515,7 +1734,177 @@ if (breakEveryInput) {
     });
   };
 
-  document.getElementById("calibrateBtn").onclick = startCalibration;
+  // Calibration screen
+  document.getElementById("calibrateBtn").onclick = () => {
+    if (typeof AudioEngine !== "undefined") AudioEngine.resume();
+    showScreen("calibration");
+    refreshCalStatus();
+  };
+  setupCalibrationScreen();
 };
+
+// --- Calibration screen wiring (mirrors UC_CVCV) -----------------------------
+const CALIB_URL = () => (typeof config !== "undefined" && config && config.calibFile)
+  ? `sounds/${config.calibFile}` : "sounds/calib.mp3";
+
+function refreshCalStatus() {
+  const el = document.getElementById("calStatus");
+  if (!el || typeof Calibration === "undefined") return;
+  if (Calibration.isCalibrated()) {
+    el.textContent = `Calibrated to ${Calibration.measuredDbA()} dB(A). Device volume must be at maximum.`;
+  } else {
+    el.textContent = "";
+  }
+}
+
+// Update the slider bounds/readout/mode badge from calibration state.
+function setupCalibrationSlider() {
+  const slider = document.getElementById("outputLevel");
+  if (!slider || typeof Calibration === "undefined") return;
+  const c = Calibration.state();
+  slider.min = c.sliderMinDb ?? -100;
+  slider.max = c.sliderMaxDb ?? 0;
+  slider.step = 0.1;
+  slider.value = c.currentSliderDb ?? slider.max;
+  updateOutputLevelFromSlider();
+}
+
+function updateOutputLevelFromSlider() {
+  const slider = document.getElementById("outputLevel");
+  const label = document.getElementById("outputLevelLabel");
+  const badge = document.getElementById("modeBadge");
+  if (!slider || typeof Calibration === "undefined") return;
+  const c = Calibration.state();
+  let raw = parseFloat(slider.value);
+
+  if (c.isCalibrated && c.measuredDbA !== null) {
+    const max = parseFloat(slider.max);
+    const tol = 0.25;
+    const snapped = Math.abs(raw - max) <= tol ? max : Math.round(raw / 5) * 5;
+    slider.value = snapped;
+    Calibration.setCurrentSliderDb(snapped);
+    if (label) label.textContent = `${snapped} dB A`;
+    if (badge) { badge.textContent = "Calibrated Mode"; badge.classList.add("calibrated"); }
+  } else {
+    const snapped = Math.round(raw / 5) * 5;
+    slider.value = snapped;
+    Calibration.setCurrentSliderDb(snapped);
+    if (label) label.textContent = `${snapped} dB FS`;
+    if (badge) { badge.textContent = "Uncalibrated Mode"; badge.classList.remove("calibrated"); }
+  }
+}
+
+function setupCalibrationScreen() {
+  const toggleBtn = document.getElementById("calToneToggleBtn");
+  const testBtn   = document.getElementById("testCalBtn");
+  const clearBtn  = document.getElementById("calClearBtn");
+  const backBtn   = document.getElementById("calBackBtn");
+  const slider    = document.getElementById("outputLevel");
+  if (!toggleBtn) return; // screen not present
+
+  let toneOn = false;
+  let testOn = false;
+
+  // Offer any stored calibration on load, and initialise the slider.
+  if (typeof Calibration !== "undefined") {
+    const restored = Calibration.loadStored();
+    if (restored) {
+      if (testBtn) testBtn.hidden = false;
+      const when = restored.timestamp
+        ? new Date(restored.timestamp).toLocaleString("en-NZ", { dateStyle: "short", timeStyle: "short" })
+        : "earlier";
+      const el = document.getElementById("calStatus");
+      if (el) el.textContent = `Calibration restored: ${restored.level} dB(A) from ${when}. Device volume must be at maximum.`;
+    }
+  }
+  setupCalibrationSlider();
+
+  // Toggle: play calibration tone (unity) -> stop & prompt for measured dB(A).
+  toggleBtn.onclick = async () => {
+    if (typeof AudioEngine === "undefined") return;
+
+    if (toneOn) {
+      // Stop and prompt (UC_CVCV flow).
+      AudioEngine.stopCalibrationTone();
+      toneOn = false;
+      toggleBtn.textContent = "Calibration tone";
+      toggleBtn.classList.remove("active");
+      const measured = prompt("Enter measured calibration level (in dB A):");
+      if (measured === null || measured === "" || isNaN(measured)) return;
+      const level = parseFloat(measured);
+      Calibration.applyCalibrationLevel(level);
+      setupCalibrationSlider();
+      if (testBtn) testBtn.hidden = false;
+      refreshCalStatus();
+      return;
+    }
+
+    await AudioEngine.resume();
+    // Stop any test playback first.
+    AudioEngine.stopCalibrationTone();
+    testOn = false;
+    if (testBtn) testBtn.textContent = "Test level";
+    alert("Turn your device volume all the way up, then tap OK to play the calibration tone.");
+    try {
+      await AudioEngine.startCalibrationTone(CALIB_URL());
+      toneOn = true;
+      toggleBtn.textContent = "Stop & Enter Level";
+      toggleBtn.classList.add("active");
+      const el = document.getElementById("calStatus");
+      if (el) el.textContent = "Calibration sound playing.";
+    } catch (err) {
+      alert("No calibration sound file found (" + CALIB_URL() + ").\nAdd calib.mp3 to the sounds/ folder.");
+      console.error(err);
+    }
+  };
+
+  // Test level: replay calibration file at the current slider level.
+  if (testBtn) {
+    testBtn.onclick = async () => {
+      if (typeof Calibration === "undefined" || !Calibration.isCalibrated()) return;
+      if (testOn) {
+        AudioEngine.stopCalibrationTone();
+        testOn = false;
+        testBtn.textContent = "Test level";
+        return;
+      }
+      await AudioEngine.resume();
+      const gainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb);
+      try {
+        await AudioEngine.startCalibrationTone(CALIB_URL(), { extraGainDb: gainDb });
+        testOn = true;
+        testBtn.textContent = "Stop";
+      } catch (err) {
+        alert("No calibration sound file found.");
+        console.error(err);
+      }
+    };
+  }
+
+  if (slider) {
+    slider.addEventListener("input", updateOutputLevelFromSlider);
+    slider.addEventListener("change", updateOutputLevelFromSlider);
+  }
+
+  clearBtn.onclick = () => {
+    if (typeof Calibration !== "undefined") Calibration.clearCalibration();
+    AudioEngine.stopCalibrationTone();
+    toneOn = testOn = false;
+    toggleBtn.textContent = "Calibration tone";
+    toggleBtn.classList.remove("active");
+    if (testBtn) { testBtn.hidden = true; testBtn.textContent = "Test level"; }
+    setupCalibrationSlider();
+    refreshCalStatus();
+  };
+
+  backBtn.onclick = () => {
+    if (typeof AudioEngine !== "undefined") AudioEngine.stopCalibrationTone();
+    toneOn = testOn = false;
+    toggleBtn.textContent = "Calibration tone";
+    toggleBtn.classList.remove("active");
+    if (testBtn) testBtn.textContent = "Test level";
+    showScreen("intro");
+  };
+}
 
 

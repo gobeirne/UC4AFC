@@ -48,7 +48,7 @@
 </head>
 <body>
 
-<h1>ðŸ§© UC4AFC Manual Module Bundler</h1>
+<h1> UC4AFC Manual Module Bundler</h1>
 
 <p>Select your JavaScript module files:</p>
 <input type="file" id="fileInput" multiple accept=".js" />
@@ -56,8 +56,8 @@
 <label>Order of Files (drag to reorder):</label>
 <ul id="orderList"></ul>
 
-<button id="bundleBtn">ðŸ›  Create main.inline.js</button>
-<button id="downloadBtn" disabled>ðŸ’¾ Download</button>
+<button id="bundleBtn">[stop] Create main.inline.js</button>
+<button id="downloadBtn" disabled> Download</button>
 
 <label>Preview Output:</label>
 <textarea id="bundle" readonly></textarea>
@@ -68,6 +68,7 @@ const preferredOrder = [
   "global.js",
   "config.js",
   "audioEngine.js",
+  "calibration.js",
   "ui.js",
   "setImage.js",
   "flow.js",
@@ -78,7 +79,7 @@ const preferredOrder = [
 ];
 
 document.body.insertAdjacentHTML("afterbegin", `
-  <p><strong>ðŸ“š Default Module Order:</strong><br>
+  <p><strong> Default Module Order:</strong><br>
   ${preferredOrder.map(f => `<code>${f}</code>`).join(", ")}</p>
 `);
 
@@ -154,6 +155,7 @@ function stripModules(code, seenGlobals = new Set()) {
     // `export ` prefix, otherwise the prefix is gone and the list survives as
     // a dangling block statement.
     if (/^\s*export\s+\{[^}]*\}\s*;?\s*$/.test(line)) continue;
+    if (/^\s*export\s+default\b/.test(line)) continue;
     line = line.replace(/^export\s+/, "");
 
     if (line.includes("{")) braceDepth += (line.match(/{/g) || []).length;

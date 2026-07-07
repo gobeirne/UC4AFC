@@ -64,7 +64,7 @@ export function showTrainingItem() {
 
 const item = list[trialIndex];
   if (!item || !isNonEmpty(item.correct) || !isNonEmpty(item.audioFile)) {
-    warn("âš ï¸ Bad training item, skipping trial", { index: trialIndex + 1, item });
+    warn("[!] Bad training item, skipping trial", { index: trialIndex + 1, item });
     trialIndex++;
     return showTrainingItem();
   }
@@ -96,7 +96,7 @@ const item = list[trialIndex];
       }, config.delayMs || 1500);
     }
   }).catch(err => {
-    console.error("âš ï¸ Training audio failed to play:", err);
+    console.error("[!] Training audio failed to play:", err);
   });
 }
 
@@ -135,7 +135,7 @@ if (phase === "test") {
 
   const item = list[trialIndex];
   if (!item) {
-    warn("âš ï¸ Missing trial item at index", trialIndex);
+    warn("[!] Missing trial item at index", trialIndex);
     trialIndex++;
     return nextTrial();
   }
@@ -150,7 +150,7 @@ if (phase === "test") {
   });
 
   if (!isNonEmpty(item.audioFile)) {
-    warn("âš ï¸ Invalid audioFile in trial", trialIndex + 1, item);
+    warn("[!] Invalid audioFile in trial", trialIndex + 1, item);
   }
 
   // Preload NEXT trial's images
@@ -163,7 +163,7 @@ if (phase === "test") {
     nextImagesToPreload = nextShuffled;
 	nextImagesToPreload.forEach(name => {
       if (!isNonEmpty(name)) {
-        warn("âš ï¸ Skipping preload for invalid name (next trial)", { nextIndex: trialIndex + 2, name });
+        warn("[!] Skipping preload for invalid name (next trial)", { nextIndex: trialIndex + 2, name });
         return;
       }
       const preload = new Image();

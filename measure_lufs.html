@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>UC4AFC — Pre-measure stimulus LUFS</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto;
+    padding: 0 1rem; color: #16110c; background: #f7f4ee; line-height: 1.5; }
+  h1 { font-size: 1.4rem; }
+  button { font: inherit; font-weight: 600; padding: 0.5rem 1rem; border: none;
+    border-radius: 7px; background: #1f6f6b; color: #fff; cursor: pointer; margin: 0.3rem 0.3rem 0.3rem 0; }
+  button.ghost { background: #fff; color: #16110c; border: 1px solid #cfc8ba; }
+  button:disabled { opacity: 0.5; }
+  input[type=text] { font: inherit; padding: 0.35rem 0.5rem; border: 1px solid #cfc8ba;
+    border-radius: 6px; width: 20rem; }
+  progress { width: 100%; height: 14px; }
+  #out { font-family: ui-monospace, monospace; font-size: 0.8rem; white-space: pre;
+    background: #16110c; color: #dceae8; padding: 1rem; border-radius: 8px;
+    max-height: 320px; overflow: auto; margin-top: 1rem; }
+  .hint { color: #6b655c; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<h1>Pre-measure stimulus LUFS</h1>
+<p class="hint">Decodes every stimulus, measures its 400&nbsp;ms momentary LUFS with the engine's routine, and produces <code>stimulus_lufs.txt</code> for the repo. Run this once (served over http, with <code>sounds/</code> present), then drop the file next to <code>index.html</code>. The app will use it to restore levels after filtering without measuring live.</p>
+
+<p>
+  <label>List file: <input type="text" id="listUrl" value="UC4AFC_lists.txt" /></label>
+</p>
+<p>
+  <button id="runBtn">Measure all</button>
+  <button id="dlBtn" class="ghost" disabled>Download stimulus_lufs.txt</button>
+</p>
+<progress id="prog" value="0" max="1"></progress>
+<div id="status" class="hint"></div>
+<div id="out"></div>
+
+<script type="module">
+import { AudioEngine } from "./audioEngine.js";
+
+const $ = id => document.getElementById(id);
+let outputText = "";
+
+async function fetchWordNames(listUrl) {
+  const txt = await (await fetch(listUrl)).text();
+  const names = new Set();
+  for (const line of txt.split(/\r?\n/)) {
+    const t = line.trim(); if (!t) continue;
+    const parts = t.split(/\t/);
+    if (parts.length >= 6) {
+      const correct = parts[4].trim();
+      const audio = parts[5].trim();
+      // word name = correct field; also derive from audio filename as sanity
+      if (correct) names.add(correct);
+    }
+  }
+  return [...names].sort();
+}
+
+$("runBtn").onclick = async () => {
+  $("runBtn").disabled = true; $("dlBtn").disabled = true;
+  $("out").textContent = ""; outputText = "";
+  await AudioEngine.resume();
+
+  let names;
+  try { names = await fetchWordNames($("listUrl").value.trim()); }
+  catch (e) { $("status").textContent = "Failed to read list: " + e.message; $("runBtn").disabled=false; return; }
+
+  $("prog").max = names.length; $("prog").value = 0;
+  const lines = ["# stimulus_lufs.txt", "# name<TAB>momentaryLUFS  (generated " + new Date().toISOString() + ")"];
+
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i];
+    try {
+      const entry = await AudioEngine.decode(name, `sounds/${name}.mp3`);
+      const lufs = entry.momentary;
+      lines.push(`${name}\t${lufs.toFixed(3)}`);
+      $("out").textContent += `${name}\t${lufs.toFixed(3)}\n`;
+    } catch (e) {
+      lines.push(`# ${name}\tMEASURE_FAILED`);
+      $("out").textContent += `${name}\tFAILED (${e.message})\n`;
+    }
+    $("prog").value = i + 1;
+    $("status").textContent = `Measured ${i+1} / ${names.length}`;
+    $("out").scrollTop = 1e9;
+  }
+
+  outputText = lines.join("\n") + "\n";
+  $("dlBtn").disabled = false;
+  $("runBtn").disabled = false;
+  $("status").textContent = `Done. ${names.length} words measured.`;
+};
+
+$("dlBtn").onclick = () => {
+  const blob = new Blob([outputText], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "stimulus_lufs.txt";
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+</script>
+</body>
+</html>

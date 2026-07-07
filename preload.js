@@ -9,7 +9,7 @@ export async function preloadAllAssets() {
   const isLocal = location.protocol === "file:";
 
   if (isLocal) {
-    // ðŸš§ Fallback list for local mode
+    // [wip] Fallback list for local mode
 assetList = [
   "images/bag.jpg",
   "images/back.jpg",
@@ -223,7 +223,7 @@ assetList = [
   "sounds/van.mp3",
   "sounds/zip.mp3"
 ];
-    console.warn("ðŸ“¦ Using fallback preload asset list (file:// mode)");
+    console.warn("[pkg] Using fallback preload asset list (file:// mode)");
   } else {
     try {
       const res = await fetch("preloadfilelist.txt");
@@ -231,7 +231,7 @@ assetList = [
       const raw = await res.text();
       assetList = raw.split(/\r?\n/).filter(x => x.trim().length > 0);
     } catch (err) {
-      console.error("âŒ Failed to load preloadfilelist.txt:", err);
+      console.error("[X] Failed to load preloadfilelist.txt:", err);
       return;
     }
   }
@@ -242,9 +242,9 @@ const tasks = assetList.map(src => () => {
   return Promise.resolve();
 }).filter(Boolean);
 
-console.log(`ðŸ“¦ Preloading ${tasks.length} assets...`);
+console.log(`[pkg] Preloading ${tasks.length} assets...`);
 await runWithConcurrency(tasks, 8); // keep this modest on mobile
-console.log(`âœ… Finished preloading ${tasks.length} assets.`);
+console.log(`[OK] Finished preloading ${tasks.length} assets.`);
 
 async function runWithConcurrency(fns, limit = 8) {
   let i = 0;
@@ -262,12 +262,12 @@ function preloadImage(src, timeoutMs = 7000) {
 
     const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
     const timer = setTimeout(() => {
-      console.warn(`â±ï¸ Image preload timed out: ${src}`);
+      console.warn(`[time] Image preload timed out: ${src}`);
       done();
     }, timeoutMs);
 
     img.onload = done;
-    img.onerror = () => { console.warn(`âš ï¸ Failed to load image: ${src}`); done(); };
+    img.onerror = () => { console.warn(`[!] Failed to load image: ${src}`); done(); };
     img.src = src;
 
     // On some browsers, decode can resolve earlier/more reliably
@@ -285,7 +285,7 @@ function preloadSound(src, timeoutMs = 7000) {
 
     const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
     const timer = setTimeout(() => {
-      console.warn(`â±ï¸ Sound preload timed out: ${src}`);
+      console.warn(`[time] Sound preload timed out: ${src}`);
       done();
     }, timeoutMs);
 
@@ -293,7 +293,7 @@ function preloadSound(src, timeoutMs = 7000) {
     once("canplaythrough");
     once("loadeddata");
     once("loadedmetadata");
-    audio.addEventListener("error", () => { console.warn(`âš ï¸ Failed to load sound: ${src}`); done(); }, { once: true });
+    audio.addEventListener("error", () => { console.warn(`[!] Failed to load sound: ${src}`); done(); }, { once: true });
 
     audio.preload = "auto";
     audio.src = src;
@@ -302,47 +302,38 @@ function preloadSound(src, timeoutMs = 7000) {
 }
 
 
-// Decode a stimulus mp3 into the AudioEngine cache (buffer + momentary LUFS),
-// so the Web Audio pipeline can filter/gain/play it with no per-trial decode
-// cost. The engine keys buffers by word name, matching item.correct / the
-// filename stem (e.g. "sounds/nose.mp3" -> "nose"). Calibration tones and any
-// non-word audio fall back to the lightweight <audio> warm-up.
-function preloadStimulus(src, timeoutMs = 15000) {
-  const file = src.split("/").pop() || "";
-  const name = file.replace(/\.[^.]+$/, "");
-  const isCalib = /calib/i.test(name);
-
-  if (typeof AudioEngine === "undefined" || isCalib) {
-    return preloadSound(src, timeoutMs);
-  }
-
-  return Promise.race([
-    AudioEngine.decode(name, src).catch(err => {
-      console.warn(`Failed to decode stimulus: ${src}`, err);
-    }),
-    new Promise(resolve => setTimeout(() => {
-      console.warn(`Stimulus decode timed out: ${src}`);
-      resolve();
-    }, timeoutMs))
-  ]);
+// Warm the network cache for a stimulus mp3. We deliberately do NOT call
+// decodeAudioData here: at preload time the AudioContext is still suspended
+// (it only unlocks on the Train/Start user gesture), and on many browsers
+// decodeAudioData will not complete on a suspended context. Decoding is done
+// lazily by the engine on first play, and the cache is warmed in the
+// background after unlock (see warmDecodeCache below).
+function preloadStimulus(src, timeoutMs = 7000) {
+  return preloadSound(src, timeoutMs);
 }
 
+// Decode every stimulus into the engine cache AFTER the context is unlocked.
+// Safe to call repeatedly; decode() is idempotent. Runs with modest
+// concurrency so it doesn't jank the UI on mobile.
+export async function warmDecodeCache(soundFiles, limit = 4) {
+  if (typeof AudioEngine === "undefined") return;
+  const c = AudioEngine.context();
+  if (c.state !== "running") return; // only after a user gesture unlocks audio
 
-export function startCalibration() {
-  const mode = localStorage.getItem("language") || "Te reo MÄori";
-  const soundFile = mode === "English" ? "NZEng_calib.mp3" : "TeReo_calib.mp3";
-
-  const audio = document.getElementById("stimulus");
-  audio.src = `sounds/${soundFile}`;
-  audio.loop = true;
-
-  audio.play().then(() => {
-    alert("ðŸ“¢ Playing calibration sound.\nSet your device volume to maximum.\nClick OK to stop.");
-  }).catch(err => {
-    console.error("âš ï¸ Calibration audio failed to play:", err);
-    alert("âš ï¸ Audio failed to play. Check browser autoplay permissions.");
-  }).finally(() => {
-    audio.pause();
-    audio.loop = false;
+  const jobs = soundFiles.map(name => async () => {
+    if (AudioEngine.isDecoded(name)) return;
+    try { await AudioEngine.decode(name, `sounds/${name}.mp3`); }
+    catch (err) { console.warn(`Deferred decode failed for ${name}`, err); }
   });
+
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, jobs.length) }, async () => {
+    while (i < jobs.length) await jobs[i++]();
+  });
+  await Promise.all(workers);
+  console.log(`Decoded ${soundFiles.length} stimuli into the engine cache.`);
 }
+
+
+// Legacy startCalibration() stub removed — calibration is now handled by the
+// calibration screen (calibration.js + AudioEngine.startCalibrationTone).
