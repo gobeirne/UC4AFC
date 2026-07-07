@@ -12,12 +12,12 @@ import {
   startTime,
   testStartedAt,
   arrowSet
-  selectedList
 } from "./global.js";
 
 import { showScreen, setImage } from "./ui.js";
 import { loadList } from "./list.js";
 import { saveResults } from "./results.js";
+import { AudioEngine } from "./audioEngine.js";
 
 let trainingAborted = false;
 
@@ -35,13 +35,13 @@ export function shuffle(arr) {
 
 let nextImagesToPreload = [];
 
-export function beginPhase(p, listNum = null) {
+export function beginPhase(p) {
   phase = p;
   trainingAborted = false;
   participant = document.getElementById("name").value || "anon";
   testStartedAt = new Date();
 
-  loadList(listNum || selectedList).then(() => {
+  loadList().then(() => {
     shuffle(list);
     trialIndex = 0;
     responseLog.length = 0;
@@ -69,25 +69,25 @@ const item = list[trialIndex];
     return showTrainingItem();
   }
 
-  audio.pause();
-  audio.currentTime = 0;
-  audio.onended = null;
-  audio.src = `sounds/${item.audioFile}`;
+  AudioEngine.stop();
 
-  audio.play().then(() => {
+  const revealMs = config.imageRevealOffsetMs || 600;
+
+  // Play unfiltered (cutoffHz: null) for now; the adaptive track will supply a
+  // cutoff in Step 5. Reveal the training image `revealMs` after the buffer
+  // starts (each file has ~600 ms leading silence, so this lands as the word
+  // arrives), matching the original timing.
+  AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
+    cutoffHz: null,
+    onStarted: () => {
+      if (trainingAborted) return;
+      setTimeout(() => {
+        if (trainingAborted || phase !== "training") return;
+        setImage(trainingImg, item.correct, config.arrows);
+      }, revealMs);
+    }
+  }).then(() => {
     if (trainingAborted) return;
-
-    setTimeout(() => {
-      if (trainingAborted || phase !== "training") return;
-      setImage(trainingImg, item.correct, config.arrows);
-    }, config.imageRevealOffsetMs || 600);
-  }).catch(err => {
-    console.error("âš ï¸ Training audio failed to play:", err);
-  });
-
-  audio.onended = () => {
-    if (trainingAborted) return;
-
     trialIndex++;
     if (phase === "training") {
       setTimeout(() => {
@@ -95,7 +95,9 @@ const item = list[trialIndex];
         showTrainingItem();
       }, config.delayMs || 1500);
     }
-  };
+  }).catch(err => {
+    console.error("âš ï¸ Training audio failed to play:", err);
+  });
 }
 
 export function nextTrial() {
@@ -121,7 +123,7 @@ if (phase === "test") {
 
 	
   if (trialIndex >= list.length) {
-    if (phase === "test" && selectedList !== "demo") {
+    if (phase === "test") {
       saveResults();
     } else {
       showScreen("thankyou");
@@ -147,14 +149,12 @@ if (phase === "test") {
     img.src = "";
   });
 
-  let audioStartedAt = null;
   if (!isNonEmpty(item.audioFile)) {
     warn("âš ï¸ Invalid audioFile in trial", trialIndex + 1, item);
-  } else {
-    audio.src = `sounds/${item.audioFile}`;
   }
 
-  // âœ… Preload NEXT trialâ€™s images
+  // Preload NEXT trial's images
+  // (see below)
   if (trialIndex + 1 < list.length) {
     const nextItem = list[trialIndex + 1];
     const nextShuffled = [...nextItem.images];
@@ -178,51 +178,43 @@ if (phase === "test") {
     nextImagesToPreload = [];
   }
 
-  audio.onloadedmetadata = () => {
-    audio.play().then(() => {
-      const offset = config.imageRevealOffsetMs || 0;
+  const offset = config.imageRevealOffsetMs || 0;
 
-      const checkStart = () => {
-        if (!audioStartedAt && !audio.paused && audio.currentTime > 0) {
-          audioStartedAt = performance.now();
-        }
-
-        if (audioStartedAt) {
-          const elapsed = performance.now() - audioStartedAt;
-          if (elapsed >= offset) {
-			             shuffled.forEach((name, idx) => {
-              if (!isNonEmpty(name)) {
-                warn("âš ï¸ Empty/invalid image name in trial",
-                  trialIndex + 1, { item, position: idx, shuffled });
-              }
-              setImage(optImgs[idx], name, config.arrows);
-              // Only set data-name if valid to avoid propagating "undefined"
-              if (isNonEmpty(name)) {
-                optImgs[idx].setAttribute("data-name", name);
-              } else {
-                optImgs[idx].removeAttribute("data-name");
-              }
-              optImgs[idx].style.display = "block";
-              optImgs[idx].style.opacity = "1.0";
-            });
-
-            startTime = performance.now();
-            return;
-          }
-        }
-
-        requestAnimationFrame(checkStart);
-      };
-
-      requestAnimationFrame(checkStart);
-    }).catch(err => {
-      console.error("Audio play failed:", err);
-      if (!audio._erroredOnce) {
-        alert("âš ï¸ Audio failed to play. Check browser autoplay settings.");
-        audio._erroredOnce = true;
+  // Reveal the four option images `offset` ms after the buffer starts. Each
+  // audio file has ~600 ms of leading silence, so this lands as the word
+  // arrives (identical timing to the previous <audio> polling implementation).
+  const revealOptions = () => {
+    shuffled.forEach((name, idx) => {
+      if (!isNonEmpty(name)) {
+        warn("Empty/invalid image name in trial",
+          trialIndex + 1, { item, position: idx, shuffled });
       }
+      setImage(optImgs[idx], name, config.arrows);
+      if (isNonEmpty(name)) {
+        optImgs[idx].setAttribute("data-name", name);
+      } else {
+        optImgs[idx].removeAttribute("data-name");
+      }
+      optImgs[idx].style.display = "block";
+      optImgs[idx].style.opacity = "1.0";
     });
+    startTime = performance.now();
   };
+
+  // Play unfiltered (cutoffHz: null) for now; Step 5 supplies the adaptive
+  // cutoff. onStarted fires at buffer start(); we then wait `offset` ms.
+  AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
+    cutoffHz: null,
+    onStarted: () => {
+      setTimeout(revealOptions, offset);
+    }
+  }).catch(err => {
+    console.error("Audio play failed:", err);
+    if (!nextTrial._erroredOnce) {
+      alert("Audio failed to play. Check browser autoplay settings.");
+      nextTrial._erroredOnce = true;
+    }
+  });
 }
 
 export function recordResponse(img) {

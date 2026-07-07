@@ -1,12 +1,14 @@
 let assetsReady = false;
 let waitingToBeginPhase = "";
-let waitingListNum = null;
 
 // Abort current training audio and timeouts if needed
 function abortPhase() {
   const abortBtn = document.getElementById("abortBtn");
 
   const stopAudio = () => {
+    // Stop Web Audio playback (current engine path)
+    if (typeof AudioEngine !== "undefined") AudioEngine.stop();
+    // Legacy <audio> element, harmless if unused
     if (audio) {
       audio.pause();
       audio.currentTime = 0;
@@ -48,7 +50,6 @@ function waitForAssetsThenBegin() {
     okBtn.disabled = true;
     okBtn.style.display = "none";
     beginPhase(waitingToBeginPhase);
-    waitingListNum = null;
     waitingToBeginPhase = "";
   };
 
@@ -170,19 +171,10 @@ if (breakEveryInput) {
 }
 
 
-
-  // Helper function to get selected list
-  function getSelectedList() {
-    const radios = document.getElementsByName("listSelection");
-    for (const radio of radios) {
-      if (radio.checked) return radio.value;
-    }
-    return "1"; // default
-  }
-
-  // Train Button - uses selected list
+  // Train Button
   document.getElementById("trainBtn").onclick = () => {
-    selectedList = getSelectedList();
+    // Unlock the AudioContext within this user gesture (required on iOS/Safari)
+    if (typeof AudioEngine !== "undefined") AudioEngine.resume();
     showInstructions("training", () => {
       const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
       if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
@@ -198,28 +190,10 @@ if (breakEveryInput) {
     });
   };
 
-  // Demo Button - uses demo list and doesn't save results
-  document.getElementById("demoBtn").onclick = () => {
-    selectedList = "demo";
-    showInstructions("test", () => {
-      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-      if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
-        abortBtn.style.display = "block";
-      }
-
-      if (assetsReady) {
-        beginPhase("test", "demo");
-      } else {
-        waitingToBeginPhase = "test";
-        waitingListNum = "demo";
-        waitForAssetsThenBegin();
-      }
-    });
-  };
-
-  // Start Button - uses selected list
+  // Start Button
   document.getElementById("startBtn").onclick = () => {
-    selectedList = getSelectedList();
+    // Unlock the AudioContext within this user gesture (required on iOS/Safari)
+    if (typeof AudioEngine !== "undefined") AudioEngine.resume();
     showInstructions("test", () => {
       const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
       if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {

@@ -1,4 +1,4 @@
-const CACHE_NAME = "uc4afc-cache-v1";
+const CACHE_NAME = "uc4afc-cache-v2";
 
 // You can automate this with a build step later
 const ASSETS_TO_CACHE = [
@@ -11,6 +11,7 @@ const ASSETS_TO_CACHE = [
   // JS modules
   "./global.js",
   "./config.js",
+  "./audioEngine.js",
   "./ui.js",
   "./setImage.js",
   "./flow.js",
@@ -253,7 +254,7 @@ self.addEventListener("install", (event) => {
       ).then((results) => {
         results.forEach((result, i) => {
           if (result.status === "rejected") {
-            console.warn(`⚠️ Failed to cache: ${ASSETS_TO_CACHE[i]}`);
+            console.warn(`âš ï¸ Failed to cache: ${ASSETS_TO_CACHE[i]}`);
           }
         });
       })

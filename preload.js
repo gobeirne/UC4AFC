@@ -9,7 +9,7 @@ export async function preloadAllAssets() {
   const isLocal = location.protocol === "file:";
 
   if (isLocal) {
-    // 🚧 Fallback list for local mode
+    // ðŸš§ Fallback list for local mode
 assetList = [
   "images/bag.jpg",
   "images/back.jpg",
@@ -223,7 +223,7 @@ assetList = [
   "sounds/van.mp3",
   "sounds/zip.mp3"
 ];
-    console.warn("📦 Using fallback preload asset list (file:// mode)");
+    console.warn("ðŸ“¦ Using fallback preload asset list (file:// mode)");
   } else {
     try {
       const res = await fetch("preloadfilelist.txt");
@@ -231,20 +231,20 @@ assetList = [
       const raw = await res.text();
       assetList = raw.split(/\r?\n/).filter(x => x.trim().length > 0);
     } catch (err) {
-      console.error("❌ Failed to load preloadfilelist.txt:", err);
+      console.error("âŒ Failed to load preloadfilelist.txt:", err);
       return;
     }
   }
 
 const tasks = assetList.map(src => () => {
   if (src.endsWith(".jpg")) return preloadImage(src);
-  if (src.endsWith(".mp3")) return preloadSound(src);
+  if (src.endsWith(".mp3")) return preloadStimulus(src);
   return Promise.resolve();
 }).filter(Boolean);
 
-console.log(`📦 Preloading ${tasks.length} assets...`);
+console.log(`ðŸ“¦ Preloading ${tasks.length} assets...`);
 await runWithConcurrency(tasks, 8); // keep this modest on mobile
-console.log(`✅ Finished preloading ${tasks.length} assets.`);
+console.log(`âœ… Finished preloading ${tasks.length} assets.`);
 
 async function runWithConcurrency(fns, limit = 8) {
   let i = 0;
@@ -262,12 +262,12 @@ function preloadImage(src, timeoutMs = 7000) {
 
     const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
     const timer = setTimeout(() => {
-      console.warn(`⏱️ Image preload timed out: ${src}`);
+      console.warn(`â±ï¸ Image preload timed out: ${src}`);
       done();
     }, timeoutMs);
 
     img.onload = done;
-    img.onerror = () => { console.warn(`⚠️ Failed to load image: ${src}`); done(); };
+    img.onerror = () => { console.warn(`âš ï¸ Failed to load image: ${src}`); done(); };
     img.src = src;
 
     // On some browsers, decode can resolve earlier/more reliably
@@ -285,7 +285,7 @@ function preloadSound(src, timeoutMs = 7000) {
 
     const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
     const timer = setTimeout(() => {
-      console.warn(`⏱️ Sound preload timed out: ${src}`);
+      console.warn(`â±ï¸ Sound preload timed out: ${src}`);
       done();
     }, timeoutMs);
 
@@ -293,7 +293,7 @@ function preloadSound(src, timeoutMs = 7000) {
     once("canplaythrough");
     once("loadeddata");
     once("loadedmetadata");
-    audio.addEventListener("error", () => { console.warn(`⚠️ Failed to load sound: ${src}`); done(); }, { once: true });
+    audio.addEventListener("error", () => { console.warn(`âš ï¸ Failed to load sound: ${src}`); done(); }, { once: true });
 
     audio.preload = "auto";
     audio.src = src;
@@ -302,8 +302,34 @@ function preloadSound(src, timeoutMs = 7000) {
 }
 
 
+// Decode a stimulus mp3 into the AudioEngine cache (buffer + momentary LUFS),
+// so the Web Audio pipeline can filter/gain/play it with no per-trial decode
+// cost. The engine keys buffers by word name, matching item.correct / the
+// filename stem (e.g. "sounds/nose.mp3" -> "nose"). Calibration tones and any
+// non-word audio fall back to the lightweight <audio> warm-up.
+function preloadStimulus(src, timeoutMs = 15000) {
+  const file = src.split("/").pop() || "";
+  const name = file.replace(/\.[^.]+$/, "");
+  const isCalib = /calib/i.test(name);
+
+  if (typeof AudioEngine === "undefined" || isCalib) {
+    return preloadSound(src, timeoutMs);
+  }
+
+  return Promise.race([
+    AudioEngine.decode(name, src).catch(err => {
+      console.warn(`Failed to decode stimulus: ${src}`, err);
+    }),
+    new Promise(resolve => setTimeout(() => {
+      console.warn(`Stimulus decode timed out: ${src}`);
+      resolve();
+    }, timeoutMs))
+  ]);
+}
+
+
 export function startCalibration() {
-  const mode = localStorage.getItem("language") || "Te reo Māori";
+  const mode = localStorage.getItem("language") || "Te reo MÄori";
   const soundFile = mode === "English" ? "NZEng_calib.mp3" : "TeReo_calib.mp3";
 
   const audio = document.getElementById("stimulus");
@@ -311,10 +337,10 @@ export function startCalibration() {
   audio.loop = true;
 
   audio.play().then(() => {
-    alert("📢 Playing calibration sound.\nSet your device volume to maximum.\nClick OK to stop.");
+    alert("ðŸ“¢ Playing calibration sound.\nSet your device volume to maximum.\nClick OK to stop.");
   }).catch(err => {
-    console.error("⚠️ Calibration audio failed to play:", err);
-    alert("⚠️ Audio failed to play. Check browser autoplay permissions.");
+    console.error("âš ï¸ Calibration audio failed to play:", err);
+    alert("âš ï¸ Audio failed to play. Check browser autoplay permissions.");
   }).finally(() => {
     audio.pause();
     audio.loop = false;

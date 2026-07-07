@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>UC4AFC Audio Engine — Test Harness</title>
+<style>
+  :root {
+    --ink: #14181d;
+    --paper: #f6f4ef;
+    --line: #d8d2c6;
+    --accent: #1f6f6b;      /* teal — deliberately not the cream/terracotta default */
+    --accent-2: #b5482f;
+    --ok: #1f7a44;
+    --bad: #b02a2a;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    margin: 0;
+    padding: 2rem clamp(1rem, 4vw, 4rem);
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 0.25rem; letter-spacing: -0.01em; }
+  .sub { color: #6b665c; font-size: 0.9rem; margin: 0 0 1.5rem; }
+  .panel {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.25rem;
+  }
+  .panel h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--accent); margin: 0 0 0.9rem; }
+  label { display: inline-block; font-size: 0.85rem; margin-right: 0.5rem; }
+  input[type=number], select {
+    font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--line);
+    border-radius: 6px; background: #fff; width: 8rem;
+  }
+  input[type=range] { width: min(340px, 60vw); vertical-align: middle; }
+  button {
+    font: inherit; font-weight: 600; padding: 0.5rem 1rem; border: none;
+    border-radius: 7px; background: var(--accent); color: #fff; cursor: pointer;
+    margin: 0.2rem 0.3rem 0.2rem 0;
+  }
+  button.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .row { margin: 0.6rem 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+  table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--line); }
+  th { color: #6b665c; font-weight: 600; }
+  .pass { color: var(--ok); font-weight: 700; }
+  .fail { color: var(--bad); font-weight: 700; }
+  .val { font-family: var(--mono); }
+  #log { font-family: var(--mono); font-size: 0.8rem; white-space: pre-wrap;
+    background: #14181d; color: #d7e7e5; padding: 1rem; border-radius: 8px;
+    max-height: 260px; overflow: auto; }
+  canvas { width: 100%; height: 160px; background: #fbfaf7; border: 1px solid var(--line);
+    border-radius: 8px; display: block; }
+  .hint { font-size: 0.8rem; color: #6b665c; }
+</style>
+</head>
+<body>
+  <h1>Audio Engine — Test Harness</h1>
+  <p class="sub">Verifies the Web Audio pipeline (decode → 400 ms momentary LUFS → 10th-order Butterworth LPF → loudness-match → play) in a real browser. Steps 1 + 2.</p>
+
+  <div class="panel">
+    <h2>1 · Source</h2>
+    <div class="row">
+      <button id="unlockBtn">Enable audio</button>
+      <span id="ctxState" class="hint">context: not created</span>
+    </div>
+    <div class="row">
+      <label>Synth signal:</label>
+      <select id="synthType">
+        <option value="broadband">Broadband (tones + noise)</option>
+        <option value="speechlike">Speech-like burst (with 600 ms lead silence)</option>
+        <option value="tone1k">1 kHz tone</option>
+      </select>
+      <button id="loadSynthBtn" class="ghost">Load synth</button>
+    </div>
+    <div class="row">
+      <label>…or load a word file:</label>
+      <input type="text" id="wordUrl" placeholder="sounds/nose.mp3" style="width:14rem" />
+      <button id="loadWordBtn" class="ghost">Fetch + decode</button>
+      <span class="hint">(only works when served over http, with assets present)</span>
+    </div>
+    <div class="row"><span id="srcInfo" class="hint">no source loaded</span></div>
+  </div>
+
+  <div class="panel">
+    <h2>2 · Filter &amp; loudness match</h2>
+    <div class="row">
+      <label>Cutoff</label>
+      <input type="range" id="cutoff" min="200" max="12000" step="10" value="1000" />
+      <span class="val" id="cutoffVal">1000 Hz</span>
+      <label style="margin-left:1rem"><input type="checkbox" id="filterOn" checked /> filter on</label>
+    </div>
+    <div class="row">
+      <button id="prepareBtn" disabled>Prepare (filter + match)</button>
+      <button id="playRawBtn" class="ghost" disabled>Play original</button>
+      <button id="playPrepBtn" disabled>Play prepared</button>
+      <button id="stopBtn" class="ghost">Stop</button>
+    </div>
+    <table id="measTable">
+      <tr><th>Quantity</th><th>Value</th><th>Check</th></tr>
+      <tr><td>Original momentary LUFS</td><td class="val" id="mPre">—</td><td></td></tr>
+      <tr><td>Filtered momentary LUFS</td><td class="val" id="mPost">—</td><td></td></tr>
+      <tr><td>Loudness-match gain</td><td class="val" id="mGain">—</td><td></td></tr>
+      <tr><td>Prepared re-measured LUFS</td><td class="val" id="mRe">—</td><td id="mReCheck"></td></tr>
+      <tr><td>Prepared true-peak</td><td class="val" id="mPeak">—</td><td id="mPeakCheck"></td></tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>3 · Butterworth magnitude response</h2>
+    <canvas id="magCanvas" width="900" height="160"></canvas>
+    <p class="hint">Expect −3.01 dB at the cutoff (marked), flat passband, ≈ −60 dB/octave rolloff.</p>
+  </div>
+
+  <div class="panel">
+    <h2>4 · Automated acceptance (§3.6)</h2>
+    <button id="runAcceptBtn">Run acceptance tests</button>
+    <table id="acceptTable">
+      <tr><th>Test</th><th>Result</th><th></th></tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>Log</h2>
+    <div id="log"></div>
+  </div>
+
+<script type="module">
+import { AudioEngine, measureLUFS, butterworthLowpassSections, renderButterworthLowpass }
+  from "./audioEngine.js";
+
+const $ = id => document.getElementById(id);
+const log = (...a) => { $("log").textContent += a.join(" ") + "\n"; $("log").scrollTop = 1e9; };
+const fmt = (x, d=2) => (x==null || !isFinite(x)) ? "—" : x.toFixed(d);
+
+let currentBuffer = null;   // raw AudioBuffer under test
+let currentName = null;
+let prepared = null;
+
+function refreshCtxState() {
+  const c = AudioEngine.context();
+  $("ctxState").textContent = "context: " + c.state + " @ " + c.sampleRate + " Hz";
+}
+
+$("unlockBtn").onclick = async () => {
+  await AudioEngine.resume();
+  refreshCtxState();
+  log("Audio unlocked.");
+};
+
+// --- Synthetic signal generation (into a real AudioBuffer) ---
+function makeSynth(type) {
+  const c = AudioEngine.context();
+  const sr = c.sampleRate;
+  const dur = 1.2;
+  const n = Math.round(sr * dur);
+  const buf = c.createBuffer(1, n, sr);
+  const d = buf.getChannelData(0);
+
+  if (type === "tone1k") {
+    for (let i=0;i<n;i++) d[i] = 0.3*Math.sin(2*Math.PI*1000*i/sr);
+  } else if (type === "broadband") {
+    const fs = [200,600,1200,2500,5000,9000];
+    for (let i=0;i<n;i++){ let s=0; for(const f of fs) s+=Math.sin(2*Math.PI*f*i/sr); s+=(Math.random()*2-1)*0.5; d[i]=(s/(fs.length+0.5))*0.4; }
+  } else { // speechlike: 600ms silence, then a broadband burst that decays
+    const lead = Math.round(0.6*sr);
+    const fs=[300,900,1800,3200,6000];
+    for (let i=lead;i<n;i++){ const t=(i-lead)/sr; const env=Math.exp(-t*3)*(1-Math.exp(-t*80)); let s=0; for(const f of fs) s+=Math.sin(2*Math.PI*f*i/sr); s+=(Math.random()*2-1)*0.6; d[i]=(s/(fs.length+0.6))*env*0.9; }
+  }
+  return buf;
+}
+
+function setSource(buf, name) {
+  currentBuffer = buf; currentName = name; prepared = null;
+  const dur = (buf.length / buf.sampleRate).toFixed(3);
+  const m = measureLUFS(buf).momentary;
+  $("srcInfo").textContent = `source: ${name} · ${dur}s · ${buf.numberOfChannels}ch · momentary ${fmt(m)} LUFS`;
+  $("mPre").textContent = fmt(m);
+  $("mPost").textContent = $("mGain").textContent = $("mRe").textContent = $("mPeak").textContent = "—";
+  $("mReCheck").textContent = $("mPeakCheck").textContent = "";
+  $("prepareBtn").disabled = false;
+  $("playRawBtn").disabled = false;
+  $("playPrepBtn").disabled = true;
+  log(`Loaded ${name}: momentary ${fmt(m)} LUFS, ${dur}s.`);
+}
+
+$("loadSynthBtn").onclick = () => { refreshCtxState(); setSource(makeSynth($("synthType").value), "synth:"+$("synthType").value); };
+
+$("loadWordBtn").onclick = async () => {
+  const url = $("wordUrl").value.trim(); if(!url) return;
+  const name = (url.split("/").pop()||"word").replace(/\.[^.]+$/,"");
+  try {
+    log("Fetching " + url + " …");
+    const entry = await AudioEngine.decode(name, url);
+    setSource(entry.raw, name);
+  } catch(e) { log("ERROR: " + e.message); }
+};
+
+// --- Cutoff UI ---
+$("cutoff").oninput = () => { $("cutoffVal").textContent = $("cutoff").value + " Hz"; drawMag(); };
+
+$("prepareBtn").onclick = async () => {
+  if (!currentBuffer) return;
+  // Inject the raw buffer into the engine cache so prepare() can use it.
+  AudioEngine._cache.set(currentName, { raw: currentBuffer, momentary: measureLUFS(currentBuffer).momentary });
+  const cutoff = $("filterOn").checked ? Number($("cutoff").value) : null;
+  prepared = await AudioEngine.prepare(currentName, cutoff);
+  $("mPre").textContent = fmt(prepared.preLUFS);
+  $("mPost").textContent = fmt(prepared.postLUFS);
+  $("mGain").textContent = fmt(prepared.matchGainDb) + " dB";
+  const re = measureLUFS(prepared.buffer).momentary;
+  $("mRe").textContent = fmt(re);
+  const reOK = Math.abs(re - prepared.preLUFS) < 0.05 || cutoff==null;
+  $("mReCheck").innerHTML = reOK ? '<span class="pass">✓ matches original</span>'
+                                 : '<span class="fail">✗ off by '+fmt(re-prepared.preLUFS)+' dB</span>';
+  $("mPeak").textContent = fmt(prepared.truePeakDB) + " dBFS";
+  $("mPeakCheck").innerHTML = prepared.truePeakDB <= 0.0 ? '<span class="pass">✓ no clip</span>'
+                                                          : '<span class="fail">✗ clips</span>';
+  $("playPrepBtn").disabled = false;
+  // Clear the injected key so we don't leak between sources
+  AudioEngine._filteredCache.clear();
+  log(`Prepared @ ${cutoff==null?"no filter":cutoff+" Hz"}: match ${fmt(prepared.matchGainDb)} dB, re-measured ${fmt(re)} LUFS (${reOK?"OK":"MISMATCH"}).`);
+};
+
+$("playRawBtn").onclick = async () => { await AudioEngine.resume(); refreshCtxState(); AudioEngine.playBuffer(currentBuffer, { onStarted: ()=>log("▶ original") }); };
+$("playPrepBtn").onclick = async () => { if(!prepared) return; await AudioEngine.resume(); AudioEngine.playBuffer(prepared.buffer, { onStarted: ()=>log("▶ prepared") }); };
+$("stopBtn").onclick = () => { AudioEngine.stop(); log("■ stop"); };
+
+// --- Magnitude response plot ---
+function biquadMagDb(secs, f, sr) {
+  const w=2*Math.PI*f/sr, cw=Math.cos(w), c2w=Math.cos(2*w), sw=Math.sin(w), s2w=Math.sin(2*w);
+  let magSq=1;
+  for(const c of secs){ const nRe=c.b0+c.b1*cw+c.b2*c2w, nIm=-(c.b1*sw+c.b2*s2w),
+    dRe=1+c.a1*cw+c.a2*c2w, dIm=-(c.a1*sw+c.a2*s2w);
+    magSq*=(nRe*nRe+nIm*nIm)/(dRe*dRe+dIm*dIm); }
+  return 10*Math.log10(Math.max(magSq,1e-30));
+}
+function drawMag() {
+  const cv=$("magCanvas"), ctx=cv.getContext("2d"); const W=cv.width,H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  const sr = AudioEngine.context().sampleRate;
+  const fc = Number($("cutoff").value);
+  const secs = butterworthLowpassSections(fc, sr);
+  const fmin=50, fmax=Math.min(sr/2, 15000), dbMin=-80, dbMax=6;
+  const xOf = f => (Math.log10(f)-Math.log10(fmin))/(Math.log10(fmax)-Math.log10(fmin))*W;
+  const yOf = db => H-(db-dbMin)/(dbMax-dbMin)*H;
+  // grid
+  ctx.strokeStyle="#e7e2d8"; ctx.fillStyle="#9a948a"; ctx.font="10px monospace";
+  for(const db of [0,-20,-40,-60]){ const y=yOf(db); ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke(); ctx.fillText(db+"dB",4,y-2); }
+  for(const f of [100,1000,10000]){ const x=xOf(f); ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke(); ctx.fillText(f+"Hz",x+2,H-4); }
+  // cutoff marker
+  ctx.strokeStyle="#b5482f"; ctx.setLineDash([4,3]); ctx.beginPath(); ctx.moveTo(xOf(fc),0); ctx.lineTo(xOf(fc),H); ctx.stroke(); ctx.setLineDash([]);
+  // curve
+  ctx.strokeStyle="#1f6f6b"; ctx.lineWidth=2; ctx.beginPath();
+  let first=true;
+  for(let px=0;px<=W;px++){ const f=Math.pow(10, Math.log10(fmin)+(px/W)*(Math.log10(fmax)-Math.log10(fmin)));
+    const db=biquadMagDb(secs,f,sr); const y=yOf(db); if(first){ctx.moveTo(px,y);first=false;}else ctx.lineTo(px,y); }
+  ctx.stroke(); ctx.lineWidth=1;
+  // annotate -3dB at fc
+  const dbAtFc = biquadMagDb(secs, fc, sr);
+  ctx.fillStyle="#b5482f"; ctx.fillText(fmt(dbAtFc)+" dB @ "+fc+"Hz", xOf(fc)+4, 14);
+}
+
+// --- Automated §3.6 acceptance ---
+$("runAcceptBtn").onclick = async () => {
+  const t=$("acceptTable"); t.innerHTML='<tr><th>Test</th><th>Result</th><th></th></tr>';
+  const c=AudioEngine.context(); const sr=c.sampleRate;
+  const sig=makeSynth("broadband");
+  const pre=measureLUFS(sig).momentary;
+  const row=(name,val,ok)=>{ const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${name}</td><td class="val">${val}</td><td>${ok?'<span class="pass">PASS</span>':'<span class="fail">FAIL</span>'}</td>`; t.appendChild(tr); };
+
+  // Test 1: LPF off (very high cutoff) => match ~0
+  const hi=await renderButterworthLowpass(c, sig, 20000);
+  const g1=pre-measureLUFS(hi).momentary;
+  row("LPF off → match gain ≈ 0", fmt(g1)+" dB", Math.abs(g1)<0.5);
+
+  // Test 2: LPF on low => after match, re-measures to original
+  const lo=await renderButterworthLowpass(c, sig, 1000);
+  const g2=pre-measureLUFS(lo).momentary;
+  const matched=c.createBuffer(1, lo.length, sr);
+  { const s=lo.getChannelData(0), o=matched.getChannelData(0), lin=Math.pow(10,g2/20);
+    for(let i=0;i<s.length;i++) o[i]=s[i]*lin; }
+  const re=measureLUFS(matched).momentary;
+  row("LPF on (1kHz) → re-measured = original", fmt(re)+" vs "+fmt(pre), Math.abs(re-pre)<0.05);
+
+  // Test 3: -3dB at cutoff
+  const secs=butterworthLowpassSections(1000, sr);
+  const dbFc=biquadMagDb(secs,1000,sr);
+  row("Butterworth −3.01 dB at cutoff", fmt(dbFc)+" dB", Math.abs(dbFc+3.01)<0.1);
+
+  // Test 4: rolloff ~ -60 dB at one octave above
+  const dbOct=biquadMagDb(secs,2000,sr);
+  row("Rolloff ≈ −60 dB one octave up", fmt(dbOct)+" dB", dbOct<-55 && dbOct>-66);
+
+  log("Acceptance run complete.");
+};
+
+// init
+refreshCtxState();
+drawMag();
+log("Harness ready. Click ‘Enable audio’, load a synth signal, then Prepare/Play.");
+</script>
+</body>
+</html>
