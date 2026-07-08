@@ -26,19 +26,70 @@ export function saveResults(optionalNote = "") {
     startedAt: testStartedAt?.toISOString() || null,
     timestamp: now.toISOString(),
     data: responseLog.slice(),
+    adaptive: (config && config.adaptive && responseLog.some(r => typeof r.cutoffHz === "number"))
+      ? {
+          config: config.adaptive,
+          routing: (config && config.routing) || "binaural",
+          thresholdHz: (() => {
+            for (let i = responseLog.length - 1; i >= 0; i--) {
+              if (typeof responseLog[i].estimateHz === "number") return responseLog[i].estimateHz;
+            }
+            return null;
+          })()
+        }
+      : undefined,
     note: optionalNote || undefined
   };
+
+  // Detect an adaptive run (rows carry cutoffHz) and build a self-documenting
+  // settings + threshold header, mirroring the Monte-Carlo export style.
+  const isAdaptive = responseLog.some(r => typeof r.cutoffHz === "number");
+  const adaptiveCfg = (config && config.adaptive) ? config.adaptive : null;
+  const lastEstimate = (() => {
+    for (let i = responseLog.length - 1; i >= 0; i--) {
+      if (typeof responseLog[i].estimateHz === "number") return responseLog[i].estimateHz;
+    }
+    return null;
+  })();
 
   // --- Build .txt output
   const txtLines = [
     `# Participant\t${participant}`,
-    `# test started at ${startTimeFormatted}`,
-    "",
-    "Trial\tSound\tCorrect\tChosen\tTime_ms"
+    `# test started at ${startTimeFormatted}`
   ];
 
-  for (const r of responseLog) {
-    txtLines.push(`${r.index}\t${r.sound}\t${r.correct}\t${r.chosen}\t${r.timeMs}`);
+  if (isAdaptive && adaptiveCfg) {
+    txtLines.push(
+      `# Procedure\t${adaptiveCfg.procedure}`,
+      `# Alternatives\t${adaptiveCfg.A}`,
+      `# Target\t${((adaptiveCfg.target ?? 0.625) * 100).toFixed(1)}%`,
+      `# Start cutoff (Hz)\t${adaptiveCfg.startCutoffHz}`,
+      `# Trials\t${adaptiveCfg.nTrials}`,
+      `# WUDR steps (dec) work down/up\t${adaptiveCfg.workDown}/${adaptiveCfg.workUp}`,
+      `# WUDR steps (dec) init down/up\t${adaptiveCfg.initDown}/${adaptiveCfg.initUp}`,
+      `# Switch after reversals\t${adaptiveCfg.switchRev}`,
+      `# Routing\t${(config && config.routing) || "binaural"}`,
+      `# Threshold estimate (Hz)\t${lastEstimate != null ? lastEstimate : "n/a"}`
+    );
+  }
+  if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
+    txtLines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
+  }
+
+  txtLines.push("");
+  if (isAdaptive) {
+    txtLines.push("Trial\tSound\tCorrect\tChosen\tCorrect?\tCutoff_Hz\tProcedure\tEstimate_Hz\tTime_ms");
+    for (const r of responseLog) {
+      txtLines.push(
+        `${r.index}\t${r.sound}\t${r.correct}\t${r.chosen}\t` +
+        `${r.isCorrect ? 1 : 0}\t${r.cutoffHz ?? ""}\t${r.procedure ?? ""}\t${r.estimateHz ?? ""}\t${r.timeMs}`
+      );
+    }
+  } else {
+    txtLines.push("Trial\tSound\tCorrect\tChosen\tTime_ms");
+    for (const r of responseLog) {
+      txtLines.push(`${r.index}\t${r.sound}\t${r.correct}\t${r.chosen}\t${r.timeMs}`);
+    }
   }
 
   if (optionalNote) {

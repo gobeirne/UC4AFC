@@ -13,6 +13,8 @@ const ASSETS_TO_CACHE = [
   "./config.js",
   "./audioEngine.js",
   "./calibration.js",
+  "./adaptiveConfig.js",
+  "./adaptive.js",
   "./ui.js",
   "./setImage.js",
   "./flow.js",

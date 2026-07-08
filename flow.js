@@ -18,8 +18,14 @@ import { showScreen, setImage } from "./ui.js";
 import { loadList } from "./list.js";
 import { saveResults } from "./results.js";
 import { AudioEngine } from "./audioEngine.js";
+import { createTrack, resolveTrackConfig } from "./adaptive.js";
 
 let trainingAborted = false;
+
+// Active adaptive track (test phase only). null => no adaptive tracking (plays
+// unfiltered at a fixed level, e.g. training or a non-adaptive run).
+let track = null;
+let currentCutoffHz = null;   // cutoff for the pending test trial (null = unfiltered)
 
 let lastBreakAt = -1;  // remember the index where we last stopped for a break
 
@@ -47,9 +53,26 @@ export function beginPhase(p) {
     responseLog.length = 0;
 
     if (phase === "training") {
+      track = null;
+      currentCutoffHz = null;
       showScreen("main");
       showTrainingItem();
     } else {
+      // Build the adaptive track from the persisted Setup config. If none is
+      // present (app never visited Setup), fall back to defaults via
+      // resolveTrackConfig's own guards.
+      const adaptive = (config && config.adaptive) ? config.adaptive : {};
+      // Start cutoff: absolute Hz, or relative-to-threshold (octaves). We have
+      // no prior threshold in-session, so relative starts resolve against the
+      // absolute starting cutoff for now (documented; Step 3 relative-start
+      // becomes meaningful once a running threshold exists).
+      let startHz = adaptive.startCutoffHz || 1000;
+      if (adaptive.startMode === "relative" && isFinite(adaptive.startRelOctaves)) {
+        startHz = startHz * Math.pow(2, adaptive.startRelOctaves);
+      }
+      const trackCfg = resolveTrackConfig(adaptive, startHz);
+      track = createTrack(trackCfg);
+      currentCutoffHz = track.currentCutoffHz();
       showScreen("test");
       nextTrial();
     }
@@ -79,6 +102,7 @@ const item = list[trialIndex];
   // arrives), matching the original timing.
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
     cutoffHz: null,
+    routing: (config && config.routing) || "binaural",
     onStarted: () => {
       if (trainingAborted) return;
       setTimeout(() => {
@@ -122,7 +146,14 @@ if (phase === "test") {
 }
 
 	
-  if (trialIndex >= list.length) {
+  // Termination: adaptive test ends when the track has collected nTrials
+  // responses. Training (or a non-adaptive run) ends at the end of the list.
+  if (phase === "test" && track) {
+    if (track.done()) {
+      saveResults();
+      return;
+    }
+  } else if (trialIndex >= list.length) {
     if (phase === "test") {
       saveResults();
     } else {
@@ -133,13 +164,20 @@ if (phase === "test") {
     return;
   }
 
-  const item = list[trialIndex];
+  // Word selection: for adaptive runs the number of trials may exceed the list
+  // length, so cycle through the (shuffled) list by wrapping the index. The
+  // adapting quantity is the CUTOFF; which word is presented matters less.
+  const wordIdx = (phase === "test" && track) ? (trialIndex % list.length) : trialIndex;
+  const item = list[wordIdx];
   if (!item) {
-    warn("[!] Missing trial item at index", trialIndex);
+    warn("[!] Missing trial item at index", wordIdx);
     trialIndex++;
     return nextTrial();
   }
-  
+  // Refresh the pending cutoff from the track for this trial.
+  if (phase === "test" && track) {
+    currentCutoffHz = track.currentCutoffHz();
+  }
   const shuffled = [...item.images];
   shuffle(shuffled);
 
@@ -203,8 +241,16 @@ if (phase === "test") {
 
   // Play unfiltered (cutoffHz: null) for now; Step 5 supplies the adaptive
   // cutoff. onStarted fires at buffer start(); we then wait `offset` ms.
+  // Presentation gain from calibration at the single run level (slider level).
+  let extraGainDb = 0;
+  if (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated()) {
+    extraGainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb);
+  }
+
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
-    cutoffHz: null,
+    cutoffHz: (phase === "test" && track) ? currentCutoffHz : null,
+    extraGainDb,
+    routing: (config && config.routing) || "binaural",
     onStarted: () => {
       setTimeout(revealOptions, offset);
     }
@@ -220,16 +266,32 @@ if (phase === "test") {
 export function recordResponse(img) {
   const timeTaken = performance.now() - startTime;
   const chosen = img.getAttribute("data-name");
-  const correct = list[trialIndex].correct;
-  const sound = list[trialIndex].audioFile;
+  // Use the same cycling word index the trial was built with.
+  const wordIdx = (phase === "test" && track) ? (trialIndex % list.length) : trialIndex;
+  const correctName = list[wordIdx].correct;
+  const sound = list[wordIdx].audioFile;
+  const isCorrect = chosen === correctName;
 
-  responseLog.push({
+  const entry = {
     index: trialIndex + 1,
     sound,
-    correct,
+    correct: correctName,
     chosen,
     timeMs: Math.round(timeTaken)
-  });
+  };
+
+  // Adaptive: record the presented cutoff, advance the track, and capture the
+  // running threshold estimate.
+  if (phase === "test" && track) {
+    entry.cutoffHz = Math.round(currentCutoffHz);
+    entry.isCorrect = isCorrect;
+    entry.procedure = (config.adaptive && config.adaptive.procedure) || "wudr";
+    track.update(isCorrect);
+    const est = track.estimate();
+    entry.estimateHz = isFinite(est.thresholdHz) ? Math.round(est.thresholdHz) : null;
+  }
+
+  responseLog.push(entry);
 
   optImgs.forEach(image => {
     image.style.opacity = image === img ? "1.0" : "0.4";
@@ -249,6 +311,12 @@ export function recordResponse(img) {
     }, remaining);
   }, 500);
 }
+
+// Expose the active track's final estimate for results (null if no track).
+export function finalEstimate() {
+  return track ? track.estimate() : null;
+}
+export function activeTrack() { return track; }
 
 export function abortTraining() {
   trainingAborted = true;

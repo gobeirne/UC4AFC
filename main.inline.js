@@ -435,7 +435,7 @@ const AudioEngine = (() => {
   // Returns a promise that resolves when playback ends (or rejects on error).
   // onStarted() fires when audio actually begins producing sound (for the
   // image-reveal timing in flow.js).
-  function playBuffer(buffer, { extraGainDb = 0, onStarted = null } = {}) {
+  function playBuffer(buffer, { extraGainDb = 0, onStarted = null, routing = "binaural" } = {}) {
     const c = context();
     stop(); // ensure only one stimulus at a time
 
@@ -445,7 +445,14 @@ const AudioEngine = (() => {
     const trialGain = c.createGain();
     trialGain.gain.value = LIN(extraGainDb);
 
-    src.connect(trialGain).connect(masterGain);
+    // Route left / right / binaural (UC_CVCV: pan -1 / +1 / 0).
+    if (routing === "left" || routing === "right") {
+      const pan = c.createStereoPanner();
+      pan.pan.value = routing === "left" ? -1 : 1;
+      src.connect(trialGain).connect(pan).connect(masterGain);
+    } else {
+      src.connect(trialGain).connect(masterGain);
+    }
     activeSource = src;
 
     return new Promise((resolve, reject) => {
@@ -471,10 +478,10 @@ const AudioEngine = (() => {
 
   // Convenience: decode-if-needed, prepare at cutoff, play. Mirrors what
   // flow.js needs per trial.
-  async function playStimulus(name, url, { cutoffHz = null, extraGainDb = 0, onStarted = null } = {}) {
+  async function playStimulus(name, url, { cutoffHz = null, extraGainDb = 0, onStarted = null, routing = "binaural" } = {}) {
     if (!cache.has(name)) await decode(name, url);
     const prepared = await prepare(name, cutoffHz);
-    await playBuffer(prepared.buffer, { extraGainDb, onStarted });
+    await playBuffer(prepared.buffer, { extraGainDb, onStarted, routing });
     return prepared;
   }
 
@@ -682,6 +689,409 @@ if (typeof window !== "undefined") {
 }
 
 
+// --- adaptiveConfig.js ---
+// File: adaptiveConfig.js
+// -----------------------------------------------------------------------------
+// UC4AFC adaptive-track Setup configuration (Step 4).
+//
+// Holds the adaptive-procedure defaults, persists the operator's choices to
+// localStorage ("uc4afc_adaptive"), and merges them into the global `config`
+// at startup. The values here are the LPF-mode defaults taken verbatim from
+// UCAST_adaptive_demo (the validated demo/Monte-Carlo source), so the Step 5
+// engine can consume them directly.
+//
+// Axis: equivalent low-pass cutoff in Hz on a log10 axis. Steps are in decades.
+// Target for 4AFC = midpointTarget(4) = 0.625. Alternatives A = 4 (floor 0.25).
+// -----------------------------------------------------------------------------
+
+const ADAPT_KEY = "uc4afc_adaptive";
+
+// Butterworth/axis + procedure defaults (LPF mode), verbatim from the demo.
+const ADAPTIVE_DEFAULTS = {
+  procedure: "wudr",          // "wudr" | "a1" | "a2"
+  A: 4,                       // alternatives (fixed); floor = 1/A = 0.25
+  target: 0.625,             // midpointTarget(4) = (A+1)/(2A)
+
+  // Start
+  startMode: "absolute",      // "absolute" (Hz) | "relative" (octaves re threshold)
+  startCutoffHz: 1000,        // demo lpf.start
+  startRelOctaves: 0,         // used when startMode === "relative"
+
+  // Trials
+  nTrials: 33,                // one list; up to 66 (both lists)
+
+  // Axis bounds (log10 Hz), from the demo lpf mode
+  xlo: Math.log10(80),
+  xhi: Math.log10(6000),
+
+  // WUDR two-phase steps (decades), verbatim from demo lpf mode
+  workDown: +Math.log10(1 / 0.95238).toFixed(4),  // 0.0212  (-4.76%)
+  workUp:   +Math.log10(1.08333).toFixed(4),       // 0.0348  (+8.33%)
+  initDown: +Math.log10(1 / 0.8889).toFixed(4),    // 0.0512  (-11.1%)
+  initUp:   +Math.log10(1.20833).toFixed(4),       // 0.0822  (+20.8%)
+  switchRev: 5,                                     // switch to working after 5 reversals
+
+  // A1
+  a1slope: 10.0,              // tracking-slope constant on the log-Hz axis
+  minStep: 0.01,
+
+  // A2
+  a2slope: 10.0,
+  pLow: 0.40,                 // auto sweet points for 4AFC: 1/A + (1-1/A)*{0.2,0.8}
+  pHigh: 0.85,
+  a2Doubling: true,          // B&K step-doubling toggle
+
+  // Psychometric slope hint for the MLE readout (demo lpf.slope, %/octave)
+  slopeHint: 43
+};
+
+// Derive A2 sweet points from the floor, matching the demo:
+//   p = 1/A + (1 - 1/A) * pOpen, with pOpen in {0.2, 0.8}
+function sweetPointsFor(A) {
+  const floor = 1 / A;
+  return {
+    pLow:  +(floor + (1 - floor) * 0.20).toFixed(4),
+    pHigh: +(floor + (1 - floor) * 0.80).toFixed(4)
+  };
+}
+
+function midpointTarget(A) {
+  const floor = 1 / A;
+  return floor + (1 - floor) * 0.5;
+}
+
+// Load persisted config (merged over defaults). Always returns a full object.
+function loadAdaptiveConfig() {
+  const cfg = { ...ADAPTIVE_DEFAULTS };
+  try {
+    const raw = localStorage.getItem(ADAPT_KEY);
+    if (raw) Object.assign(cfg, JSON.parse(raw));
+  } catch (_) {}
+  // Keep derived values consistent.
+  cfg.target = midpointTarget(cfg.A || 4);
+  return cfg;
+}
+
+function saveAdaptiveConfig(cfg) {
+  try { localStorage.setItem(ADAPT_KEY, JSON.stringify(cfg)); } catch (_) {}
+  return cfg;
+}
+
+function clearAdaptiveConfig() {
+  try { localStorage.removeItem(ADAPT_KEY); } catch (_) {}
+}
+
+// Merge the persisted adaptive config into the global `config` object at
+// startup (mirrors config.js's Object.assign pattern).
+function mergeAdaptiveIntoConfig(config) {
+  if (!config || typeof config !== "object") return;
+  config.adaptive = loadAdaptiveConfig();
+}
+
+if (typeof window !== "undefined") {
+  window.AdaptiveConfig = {
+    DEFAULTS: ADAPTIVE_DEFAULTS,
+    sweetPointsFor, midpointTarget,
+    loadAdaptiveConfig, saveAdaptiveConfig, clearAdaptiveConfig,
+    mergeAdaptiveIntoConfig
+  };
+}
+
+
+// --- adaptive.js ---
+// File: adaptive.js
+// -----------------------------------------------------------------------------
+// UC4AFC adaptive engine (Step 5).
+//
+// The psychometric function, step formulas (WUDR two-phase, A1, A2 with B&K
+// step-doubling), and the maximum-likelihood fit are ported VERBATIM from the
+// validated UCAST_adaptive_demo / UCAST_montecarlo_sweep sources. The only
+// change is structural: the demo runs an entire simulated track in a for-loop
+// (calling simResponse internally); here each procedure's single-iteration step
+// logic is factored into a createTrack() state machine that advances one step
+// per REAL user response.
+//
+// Axis: internal x is on the mode's axis. For UC4AFC (LPF mode) x = log10(Hz),
+// so currentCutoffHz() = 10^x. Steps are in decades. A = 4 (floor 0.25),
+// target = midpointTarget(4) = 0.625.
+// -----------------------------------------------------------------------------
+
+const BK_A = 1.5, BK_B = 1.41;
+
+function midpointTarget(A) { const floor = 1.0 / A; return floor + (1 - floor) * 0.5; }
+
+// --- Psychometric function (verbatim; axis handling folded in) ---------------
+// slope is the gradient at threshold in the mode's slope units (%/octave for
+// LPF). For the log axis we convert %/octave -> per log10(Hz) decade, then to
+// the logistic coefficient k = 4A*m/(A-1) which pins the 4AFC threshold at
+// (A+1)/(2A) = 0.625.
+function slopeToK(slope, A, axisIsLog) {
+  let m = slope / 100.0;                      // proportion per (octave)
+  if (axisIsLog) m = m * Math.log2(10);       // %/octave -> per log10(Hz) decade
+  return (4.0 * A * m) / (A - 1.0);
+}
+
+function intelligibility(x, srtX, slope, A, axisIsLog) {
+  const k = slopeToK(slope, A, axisIsLog);
+  const z = Math.max(-50, Math.min(50, k * (x - srtX)));
+  return (1.0 / A) * (1.0 + (A - 1.0) / (1.0 + Math.exp(-z)));
+}
+
+// --- MLE fit (verbatim: negLL + Nelder-Mead + fitMLE) ------------------------
+function negLL(params, xs, ys, A, axisIsLog) {
+  const srtX = params[0], slope = params[1];
+  if (slope <= 0 || slope > 1000) return 1e12;
+  let nll = 0;
+  for (let i = 0; i < xs.length; i++) {
+    let p = intelligibility(xs[i], srtX, slope, A, axisIsLog);
+    p = Math.min(1 - 1e-9, Math.max(1e-9, p));
+    nll -= ys[i] * Math.log(p) + (1 - ys[i]) * Math.log(1 - p);
+  }
+  return nll;
+}
+
+function nelderMead(obj, start, step, maxit, tol) {
+  const a = 1, g = 2, r = 0.5, s = 0.5;
+  let S = [
+    { x: start.slice(), fx: obj(start) },
+    { x: [start[0] + step[0], start[1]], fx: obj([start[0] + step[0], start[1]]) },
+    { x: [start[0], start[1] + step[1]], fx: obj([start[0], start[1] + step[1]]) }
+  ];
+  for (let it = 0; it < maxit; it++) {
+    S.sort((p, q) => p.fx - q.fx);
+    const spread = Math.max(Math.abs(S[0].fx - S[1].fx), Math.abs(S[0].fx - S[2].fx));
+    if (spread < tol) break;
+    const c = [(S[0].x[0] + S[1].x[0]) / 2, (S[0].x[1] + S[1].x[1]) / 2];
+    const rf = [c[0] + a * (c[0] - S[2].x[0]), c[1] + a * (c[1] - S[2].x[1])];
+    const fr = obj(rf);
+    if (fr < S[0].fx) {
+      const ex = [c[0] + g * (rf[0] - c[0]), c[1] + g * (rf[1] - c[1])]; const fe = obj(ex);
+      S[2] = fe < fr ? { x: ex, fx: fe } : { x: rf, fx: fr }; continue;
+    }
+    if (fr < S[1].fx) { S[2] = { x: rf, fx: fr }; continue; }
+    let cx;
+    if (fr < S[2].fx) cx = [c[0] + r * (rf[0] - c[0]), c[1] + r * (rf[1] - c[1])];
+    else cx = [c[0] - r * (c[0] - S[2].x[0]), c[1] - r * (c[1] - S[2].x[1])];
+    const fc = obj(cx);
+    if (fc < S[2].fx) { S[2] = { x: cx, fx: fc }; continue; }
+    S[1] = { x: [S[0].x[0] + s * (S[1].x[0] - S[0].x[0]), S[0].x[1] + s * (S[1].x[1] - S[0].x[1])], fx: 0 }; S[1].fx = obj(S[1].x);
+    S[2] = { x: [S[0].x[0] + s * (S[2].x[0] - S[0].x[0]), S[0].x[1] + s * (S[2].x[1] - S[0].x[1])], fx: 0 }; S[2].fx = obj(S[2].x);
+  }
+  S.sort((p, q) => p.fx - q.fx);
+  return S[0];
+}
+
+// xlo/xhi/axisIsLog come from the track config. slopeHint in the mode's slope
+// units. Returns { srtX, slope, degenerate }.
+function fitMLE(cfg, xs, ys, slopeHint) {
+  const A = cfg.A, axisIsLog = cfg.axisIsLog;
+  let sum = 0; for (let i = 0; i < ys.length; i++) sum += ys[i];
+  if (sum === 0 || sum === ys.length) {
+    let mx = 0; for (let j = 0; j < xs.length; j++) mx += xs[j]; mx /= xs.length;
+    return { srtX: mx, slope: slopeHint, degenerate: true };
+  }
+  const sorted = xs.slice().sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)];
+  const res = nelderMead(p => negLL(p, xs, ys, A, axisIsLog),
+    [med, slopeHint], [(axisIsLog ? 0.1 : 2), 8], 500, 1e-8);
+  return {
+    srtX: Math.max(cfg.xlo, Math.min(cfg.xhi, res.x[0])),
+    slope: Math.max(1, Math.min(1000, res.x[1])),
+    degenerate: false
+  };
+}
+
+// --- Online track state machine ----------------------------------------------
+// cfg (from adaptiveConfig, resolved to internal x units):
+//   { procedure, A, target, xlo, xhi, axisIsLog, harder,
+//     startX, nTrials,
+//     workDown, workUp, initDown, initUp, switchRev,   // WUDR
+//     a1slope,                                          // A1
+//     a2slope, pLow, pHigh, a2Doubling, minStep,        // A2
+//     slopeHint }
+//
+// Contract:
+//   currentCutoffHz()   -> Hz for the CURRENT (pending) trial
+//   currentX()          -> internal x for the current trial
+//   update(correct)     -> record response, advance one step
+//   estimate()          -> { thresholdHz, srtX, slope, degenerate }
+//   trials()            -> number of responses recorded so far
+//   done()              -> trials() >= nTrials
+//   history()           -> [{ x, cutoffHz, correct }]
+function createTrack(cfg) {
+  const clampX = (x) => Math.max(cfg.xlo, Math.min(cfg.xhi, x));
+  const xToHz = (x) => cfg.axisIsLog ? Math.pow(10, x) : x;
+
+  const xs = [], ys = [];
+  const harder = cfg.harder ?? -1;
+  const minStep = cfg.minStep ?? 0.01;
+
+  // --- WUDR two-phase state ---
+  let x = clampX(cfg.startX);
+  let rev = 0, prevDir = 0;
+
+  // --- A1 state ---
+  let prevDelta = 0;
+
+  // --- A2 state: two interleaved sub-tracks + a precomputed interleaver ---
+  let A2 = null;
+  if (cfg.procedure === "a2") {
+    const floor = 1.0 / cfg.A;
+    const openOf = (pc) => (pc - floor) / (1 - floor);
+    A2 = {
+      floor, openOf,
+      T: [
+        { pTarget: cfg.pLow,  x: clampX(cfg.startX), rev: 0, prevDelta: 0, iter: 0,
+          xs: [], ys: [], isExtreme: (openOf(cfg.pLow)  <= 0.2) || (openOf(cfg.pLow)  >= 0.8) },
+        { pTarget: cfg.pHigh, x: clampX(cfg.startX), rev: 0, prevDelta: 0, iter: 0,
+          xs: [], ys: [], isExtreme: (openOf(cfg.pHigh) <= 0.2) || (openOf(cfg.pHigh) >= 0.8) }
+      ],
+      order: buildInterleaver(cfg.nTrials),
+      trial: 0
+    };
+  }
+
+  function buildInterleaver(n) {
+    // Balanced shuffled pairs of track ids 0/1 (Durstenfeld on [0,1] per pair),
+    // trimmed to exactly n — verbatim from runA2.
+    const order = [];
+    for (let pair = 0; pair < Math.ceil(n / 2); pair++) {
+      const two = [0, 1];
+      for (let k = two.length - 1; k > 0; k--) {
+        const j = Math.floor(Math.random() * (k + 1));
+        const tmp = two[k]; two[k] = two[j]; two[j] = tmp;
+      }
+      order.push(two[0], two[1]);
+    }
+    return order.slice(0, n);
+  }
+
+  function currentX() {
+    if (cfg.procedure === "a2") {
+      const t = A2.T[A2.order[A2.trial]];
+      return clampX(t.x);
+    }
+    return clampX(x);
+  }
+
+  function currentCutoffHz() { return xToHz(currentX()); }
+
+  function update(correct) {
+    const y = correct ? 1 : 0;
+
+    if (cfg.procedure === "wudr") {
+      const cx = clampX(x);
+      xs.push(cx); ys.push(y);
+      // initial steps until MORE than switchRev reversals (the reversal that
+      // reaches switchRev still uses initial steps) — verbatim.
+      const hasInit = (typeof cfg.initDown === "number" && typeof cfg.initUp === "number" && cfg.switchRev > 0);
+      const useInit = hasInit && (rev <= cfg.switchRev);
+      const dn = useInit ? cfg.initDown : cfg.workDown;
+      const upp = useInit ? cfg.initUp : cfg.workUp;
+      const step = (y === 1 ? harder * dn : -harder * upp);
+      const dir = Math.sign(step);
+      if (xs.length > 1 && dir !== 0 && prevDir !== 0 && dir !== prevDir) rev++;
+      if (dir !== 0) prevDir = dir;
+      x = cx + step;
+
+    } else if (cfg.procedure === "a1") {
+      const cx = clampX(x);
+      xs.push(cx); ys.push(y);
+      const phi = BK_A * Math.pow(BK_B, -rev);
+      let delta = (phi * (y - cfg.target)) / cfg.a1slope;
+      if (delta !== 0 && Math.abs(delta) < minStep) delta = Math.sign(delta) * minStep;
+      if (xs.length > 1 && !((prevDelta > 0 && delta > 0) || (prevDelta < 0 && delta < 0))) rev++;
+      prevDelta = delta;
+      x = cx + harder * delta;
+
+    } else { // a2
+      const t = A2.T[A2.order[A2.trial]];
+      t.x = clampX(t.x);
+      t.xs.push(t.x); t.ys.push(y);
+      xs.push(t.x); ys.push(y);
+
+      const phi = BK_A * Math.pow(BK_B, -t.rev);
+      let delta = (phi * (y - t.pTarget)) / cfg.a2slope;
+      if (delta !== 0 && Math.abs(delta) < minStep) delta = Math.sign(delta) * minStep;
+
+      // B&K step-doubling near an extreme sweet point (verbatim).
+      const pOpenTarget = A2.openOf(t.pTarget);
+      const resultOpen = A2.openOf(y);
+      const outside = (pOpenTarget <= 0.2 && resultOpen < 0.2) ||
+                      (pOpenTarget >= 0.8 && resultOpen > 0.8);
+      const fast = Math.abs(delta) > 0.5;
+      const move = (cfg.a2Doubling && t.isExtreme && outside && fast) ? 2 * delta : delta;
+
+      if (t.iter >= 1 && !((t.prevDelta > 0 && delta > 0) || (t.prevDelta < 0 && delta < 0))) t.rev++;
+      t.prevDelta = delta; t.iter++;
+      t.x = t.x + harder * move;
+      A2.trial++;
+    }
+  }
+
+  function estimate() {
+    const fit = fitMLE(cfg, xs.slice(), ys.slice(), cfg.slopeHint);
+    return {
+      srtX: fit.srtX,
+      slope: fit.slope,
+      degenerate: fit.degenerate,
+      thresholdHz: xToHz(fit.srtX)
+    };
+  }
+
+  function history() {
+    return xs.map((xi, i) => ({ x: xi, cutoffHz: xToHz(xi), correct: ys[i] === 1 }));
+  }
+
+  return {
+    currentX, currentCutoffHz, update, estimate,
+    trials: () => xs.length,
+    done: () => xs.length >= cfg.nTrials,
+    history,
+    reversals: () => (cfg.procedure === "a2" ? (A2.T[0].rev + A2.T[1].rev) : rev)
+  };
+}
+
+// Resolve an adaptiveConfig record (from AdaptiveConfig) + a resolved start
+// cutoff (Hz) into the internal cfg the track consumes.
+function resolveTrackConfig(adaptive, startCutoffHz) {
+  const axisIsLog = true; // LPF mode
+  const toX = (hz) => Math.log10(hz);
+  return {
+    procedure: adaptive.procedure || "wudr",
+    A: adaptive.A || 4,
+    target: adaptive.target ?? midpointTarget(adaptive.A || 4),
+    xlo: adaptive.xlo ?? Math.log10(80),
+    xhi: adaptive.xhi ?? Math.log10(6000),
+    axisIsLog,
+    harder: -1,
+    startX: toX(startCutoffHz || adaptive.startCutoffHz || 1000),
+    nTrials: adaptive.nTrials || 33,
+    workDown: adaptive.workDown, workUp: adaptive.workUp,
+    initDown: adaptive.initDown, initUp: adaptive.initUp,
+    switchRev: adaptive.switchRev,
+    a1slope: adaptive.a1slope ?? 10,
+    a2slope: adaptive.a2slope ?? 10,
+    pLow: adaptive.pLow ?? 0.40, pHigh: adaptive.pHigh ?? 0.85,
+    a2Doubling: adaptive.a2Doubling !== false,
+    minStep: adaptive.minStep ?? 0.01,
+    slopeHint: adaptive.slopeHint ?? 43
+  };
+}
+
+if (typeof window !== "undefined") {
+  window.Adaptive = {
+    createTrack, resolveTrackConfig, fitMLE, midpointTarget,
+    intelligibility, slopeToK
+  };
+}
+
+{
+  createTrack, resolveTrackConfig, fitMLE, midpointTarget,
+  intelligibility, slopeToK
+};
+
+
 // --- ui.js ---
 // File: ui.js
 
@@ -764,6 +1174,11 @@ function setImage(imgElement, name, useArrows = true) {
 
 let trainingAborted = false;
 
+// Active adaptive track (test phase only). null => no adaptive tracking (plays
+// unfiltered at a fixed level, e.g. training or a non-adaptive run).
+let track = null;
+let currentCutoffHz = null;   // cutoff for the pending test trial (null = unfiltered)
+
 let lastBreakAt = -1;  // remember the index where we last stopped for a break
 
 const isNonEmpty = v => typeof v === "string" && v.trim().length > 0;
@@ -790,9 +1205,26 @@ function beginPhase(p) {
     responseLog.length = 0;
 
     if (phase === "training") {
+      track = null;
+      currentCutoffHz = null;
       showScreen("main");
       showTrainingItem();
     } else {
+      // Build the adaptive track from the persisted Setup config. If none is
+      // present (app never visited Setup), fall back to defaults via
+      // resolveTrackConfig's own guards.
+      const adaptive = (config && config.adaptive) ? config.adaptive : {};
+      // Start cutoff: absolute Hz, or relative-to-threshold (octaves). We have
+      // no prior threshold in-session, so relative starts resolve against the
+      // absolute starting cutoff for now (documented; Step 3 relative-start
+      // becomes meaningful once a running threshold exists).
+      let startHz = adaptive.startCutoffHz || 1000;
+      if (adaptive.startMode === "relative" && isFinite(adaptive.startRelOctaves)) {
+        startHz = startHz * Math.pow(2, adaptive.startRelOctaves);
+      }
+      const trackCfg = resolveTrackConfig(adaptive, startHz);
+      track = createTrack(trackCfg);
+      currentCutoffHz = track.currentCutoffHz();
       showScreen("test");
       nextTrial();
     }
@@ -822,6 +1254,7 @@ const item = list[trialIndex];
   // arrives), matching the original timing.
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
     cutoffHz: null,
+    routing: (config && config.routing) || "binaural",
     onStarted: () => {
       if (trainingAborted) return;
       setTimeout(() => {
@@ -865,7 +1298,14 @@ if (phase === "test") {
 }
 
 	
-  if (trialIndex >= list.length) {
+  // Termination: adaptive test ends when the track has collected nTrials
+  // responses. Training (or a non-adaptive run) ends at the end of the list.
+  if (phase === "test" && track) {
+    if (track.done()) {
+      saveResults();
+      return;
+    }
+  } else if (trialIndex >= list.length) {
     if (phase === "test") {
       saveResults();
     } else {
@@ -876,13 +1316,20 @@ if (phase === "test") {
     return;
   }
 
-  const item = list[trialIndex];
+  // Word selection: for adaptive runs the number of trials may exceed the list
+  // length, so cycle through the (shuffled) list by wrapping the index. The
+  // adapting quantity is the CUTOFF; which word is presented matters less.
+  const wordIdx = (phase === "test" && track) ? (trialIndex % list.length) : trialIndex;
+  const item = list[wordIdx];
   if (!item) {
-    warn("[!] Missing trial item at index", trialIndex);
+    warn("[!] Missing trial item at index", wordIdx);
     trialIndex++;
     return nextTrial();
   }
-  
+  // Refresh the pending cutoff from the track for this trial.
+  if (phase === "test" && track) {
+    currentCutoffHz = track.currentCutoffHz();
+  }
   const shuffled = [...item.images];
   shuffle(shuffled);
 
@@ -946,8 +1393,16 @@ if (phase === "test") {
 
   // Play unfiltered (cutoffHz: null) for now; Step 5 supplies the adaptive
   // cutoff. onStarted fires at buffer start(); we then wait `offset` ms.
+  // Presentation gain from calibration at the single run level (slider level).
+  let extraGainDb = 0;
+  if (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated()) {
+    extraGainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb);
+  }
+
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
-    cutoffHz: null,
+    cutoffHz: (phase === "test" && track) ? currentCutoffHz : null,
+    extraGainDb,
+    routing: (config && config.routing) || "binaural",
     onStarted: () => {
       setTimeout(revealOptions, offset);
     }
@@ -963,16 +1418,32 @@ if (phase === "test") {
 function recordResponse(img) {
   const timeTaken = performance.now() - startTime;
   const chosen = img.getAttribute("data-name");
-  const correct = list[trialIndex].correct;
-  const sound = list[trialIndex].audioFile;
+  // Use the same cycling word index the trial was built with.
+  const wordIdx = (phase === "test" && track) ? (trialIndex % list.length) : trialIndex;
+  const correctName = list[wordIdx].correct;
+  const sound = list[wordIdx].audioFile;
+  const isCorrect = chosen === correctName;
 
-  responseLog.push({
+  const entry = {
     index: trialIndex + 1,
     sound,
-    correct,
+    correct: correctName,
     chosen,
     timeMs: Math.round(timeTaken)
-  });
+  };
+
+  // Adaptive: record the presented cutoff, advance the track, and capture the
+  // running threshold estimate.
+  if (phase === "test" && track) {
+    entry.cutoffHz = Math.round(currentCutoffHz);
+    entry.isCorrect = isCorrect;
+    entry.procedure = (config.adaptive && config.adaptive.procedure) || "wudr";
+    track.update(isCorrect);
+    const est = track.estimate();
+    entry.estimateHz = isFinite(est.thresholdHz) ? Math.round(est.thresholdHz) : null;
+  }
+
+  responseLog.push(entry);
 
   optImgs.forEach(image => {
     image.style.opacity = image === img ? "1.0" : "0.4";
@@ -992,6 +1463,12 @@ function recordResponse(img) {
     }, remaining);
   }, 500);
 }
+
+// Expose the active track's final estimate for results (null if no track).
+function finalEstimate() {
+  return track ? track.estimate() : null;
+}
+function activeTrack() { return track; }
 
 function abortTraining() {
   trainingAborted = true;
@@ -1417,19 +1894,70 @@ function saveResults(optionalNote = "") {
     startedAt: testStartedAt?.toISOString() || null,
     timestamp: now.toISOString(),
     data: responseLog.slice(),
+    adaptive: (config && config.adaptive && responseLog.some(r => typeof r.cutoffHz === "number"))
+      ? {
+          config: config.adaptive,
+          routing: (config && config.routing) || "binaural",
+          thresholdHz: (() => {
+            for (let i = responseLog.length - 1; i >= 0; i--) {
+              if (typeof responseLog[i].estimateHz === "number") return responseLog[i].estimateHz;
+            }
+            return null;
+          })()
+        }
+      : undefined,
     note: optionalNote || undefined
   };
+
+  // Detect an adaptive run (rows carry cutoffHz) and build a self-documenting
+  // settings + threshold header, mirroring the Monte-Carlo export style.
+  const isAdaptive = responseLog.some(r => typeof r.cutoffHz === "number");
+  const adaptiveCfg = (config && config.adaptive) ? config.adaptive : null;
+  const lastEstimate = (() => {
+    for (let i = responseLog.length - 1; i >= 0; i--) {
+      if (typeof responseLog[i].estimateHz === "number") return responseLog[i].estimateHz;
+    }
+    return null;
+  })();
 
   // --- Build .txt output
   const txtLines = [
     `# Participant\t${participant}`,
-    `# test started at ${startTimeFormatted}`,
-    "",
-    "Trial\tSound\tCorrect\tChosen\tTime_ms"
+    `# test started at ${startTimeFormatted}`
   ];
 
-  for (const r of responseLog) {
-    txtLines.push(`${r.index}\t${r.sound}\t${r.correct}\t${r.chosen}\t${r.timeMs}`);
+  if (isAdaptive && adaptiveCfg) {
+    txtLines.push(
+      `# Procedure\t${adaptiveCfg.procedure}`,
+      `# Alternatives\t${adaptiveCfg.A}`,
+      `# Target\t${((adaptiveCfg.target ?? 0.625) * 100).toFixed(1)}%`,
+      `# Start cutoff (Hz)\t${adaptiveCfg.startCutoffHz}`,
+      `# Trials\t${adaptiveCfg.nTrials}`,
+      `# WUDR steps (dec) work down/up\t${adaptiveCfg.workDown}/${adaptiveCfg.workUp}`,
+      `# WUDR steps (dec) init down/up\t${adaptiveCfg.initDown}/${adaptiveCfg.initUp}`,
+      `# Switch after reversals\t${adaptiveCfg.switchRev}`,
+      `# Routing\t${(config && config.routing) || "binaural"}`,
+      `# Threshold estimate (Hz)\t${lastEstimate != null ? lastEstimate : "n/a"}`
+    );
+  }
+  if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
+    txtLines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
+  }
+
+  txtLines.push("");
+  if (isAdaptive) {
+    txtLines.push("Trial\tSound\tCorrect\tChosen\tCorrect?\tCutoff_Hz\tProcedure\tEstimate_Hz\tTime_ms");
+    for (const r of responseLog) {
+      txtLines.push(
+        `${r.index}\t${r.sound}\t${r.correct}\t${r.chosen}\t` +
+        `${r.isCorrect ? 1 : 0}\t${r.cutoffHz ?? ""}\t${r.procedure ?? ""}\t${r.estimateHz ?? ""}\t${r.timeMs}`
+      );
+    }
+  } else {
+    txtLines.push("Trial\tSound\tCorrect\tChosen\tTime_ms");
+    for (const r of responseLog) {
+      txtLines.push(`${r.index}\t${r.sound}\t${r.correct}\t${r.chosen}\t${r.timeMs}`);
+    }
   }
 
   if (optionalNote) {
@@ -1592,6 +2120,11 @@ window.onload = async () => {
   });
 
   await loadConfig();
+
+  // Merge persisted adaptive Setup config into `config` (mirrors config.js).
+  if (typeof AdaptiveConfig !== "undefined") {
+    AdaptiveConfig.mergeAdaptiveIntoConfig(config);
+  }
   
   // [OK] Initialise arrowSet before list/preload
   if (location.protocol === "file:") {
@@ -1741,6 +2274,11 @@ if (breakEveryInput) {
     refreshCalStatus();
   };
   setupCalibrationScreen();
+
+  // Setup screen (adaptive controls)
+  const setupBtn = document.getElementById("setupBtn");
+  if (setupBtn) setupBtn.onclick = () => { showScreen("setup"); populateSetupForm(); };
+  setupSetupScreen();
 };
 
 // --- Calibration screen wiring (mirrors UC_CVCV) -----------------------------
@@ -1905,6 +2443,139 @@ function setupCalibrationScreen() {
     if (testBtn) testBtn.textContent = "Test level";
     showScreen("intro");
   };
+}
+
+// --- Setup screen wiring (adaptive controls, Step 4) -------------------------
+let _setupProc = "wudr";
+
+function currentAdaptiveCfg() {
+  if (typeof AdaptiveConfig !== "undefined") return AdaptiveConfig.loadAdaptiveConfig();
+  return {};
+}
+
+function showProcBlocks(proc) {
+  const map = { wudr: "wudrBlock", a1: "a1Block", a2: "a2Block" };
+  Object.entries(map).forEach(([p, id]) => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = (p !== proc);
+  });
+  document.querySelectorAll("#procSegmented .seg-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.proc === proc);
+  });
+}
+
+function toggleStartMode(mode) {
+  const abs = document.getElementById("setStartCutoffWrap");
+  const rel = document.getElementById("setStartRelWrap");
+  if (abs) abs.hidden = (mode !== "absolute");
+  if (rel) rel.hidden = (mode !== "relative");
+}
+
+function populateSetupForm() {
+  const cfg = currentAdaptiveCfg();
+  _setupProc = cfg.procedure || "wudr";
+  showProcBlocks(_setupProc);
+
+  const set = (id, v) => { const el = document.getElementById(id); if (el != null && v != null) el.value = v; };
+  set("setStartMode", cfg.startMode || "absolute");
+  toggleStartMode(cfg.startMode || "absolute");
+  set("setStartCutoff", cfg.startCutoffHz ?? 1000);
+  set("setStartRel", cfg.startRelOctaves ?? 0);
+  set("setNTrials", cfg.nTrials ?? 33);
+  set("setA", cfg.A ?? 4);
+  set("setTarget", ((cfg.target ?? 0.625) * 100).toFixed(1) + "%");
+
+  set("setWorkDown", cfg.workDown);
+  set("setWorkUp", cfg.workUp);
+  set("setInitDown", cfg.initDown);
+  set("setInitUp", cfg.initUp);
+  set("setSwitchRev", cfg.switchRev);
+
+  set("setA1Slope", cfg.a1slope);
+  set("setA2Slope", cfg.a2slope);
+  set("setPLow", (cfg.pLow ?? 0.40).toFixed(2));
+  set("setPHigh", (cfg.pHigh ?? 0.85).toFixed(2));
+  const dbl = document.getElementById("setA2Doubling");
+  if (dbl) dbl.checked = cfg.a2Doubling !== false;
+
+  set("setRouting", cfg.routing || (config && config.routing) || "binaural");
+
+  const status = document.getElementById("setupStatus");
+  if (status) status.textContent = "";
+}
+
+function readSetupForm() {
+  const num = (id, dflt) => {
+    const el = document.getElementById(id);
+    const v = el ? parseFloat(el.value) : NaN;
+    return isFinite(v) ? v : dflt;
+  };
+  const val = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
+  const A = 4;
+  const sweet = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.sweetPointsFor(A) : { pLow: 0.40, pHigh: 0.85 };
+  const midpoint = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.midpointTarget(A) : 0.625;
+
+  return {
+    procedure: _setupProc,
+    A,
+    target: midpoint,
+    startMode: val("setStartMode") || "absolute",
+    startCutoffHz: num("setStartCutoff", 1000),
+    startRelOctaves: num("setStartRel", 0),
+    nTrials: Math.max(1, Math.min(66, Math.round(num("setNTrials", 33)))),
+    xlo: Math.log10(80),
+    xhi: Math.log10(6000),
+    workDown: num("setWorkDown", 0.0212),
+    workUp: num("setWorkUp", 0.0348),
+    initDown: num("setInitDown", 0.0512),
+    initUp: num("setInitUp", 0.0822),
+    switchRev: Math.max(0, Math.round(num("setSwitchRev", 5))),
+    a1slope: num("setA1Slope", 10),
+    minStep: 0.01,
+    a2slope: num("setA2Slope", 10),
+    pLow: sweet.pLow,
+    pHigh: sweet.pHigh,
+    a2Doubling: !!(document.getElementById("setA2Doubling") || {}).checked,
+    slopeHint: 43,
+    routing: val("setRouting") || "binaural"
+  };
+}
+
+function setupSetupScreen() {
+  const seg = document.getElementById("procSegmented");
+  if (!seg) return; // screen not present
+
+  seg.querySelectorAll(".seg-btn").forEach(btn => {
+    btn.onclick = () => { _setupProc = btn.dataset.proc; showProcBlocks(_setupProc); };
+  });
+
+  const startMode = document.getElementById("setStartMode");
+  if (startMode) startMode.onchange = () => toggleStartMode(startMode.value);
+
+  const saveBtn = document.getElementById("setupSaveBtn");
+  if (saveBtn) saveBtn.onclick = () => {
+    const cfg = readSetupForm();
+    if (typeof AdaptiveConfig !== "undefined") AdaptiveConfig.saveAdaptiveConfig(cfg);
+    if (typeof config !== "undefined") config.adaptive = cfg;
+    // Routing is also surfaced at the top level of config for flow.js to read.
+    if (typeof config !== "undefined") config.routing = cfg.routing;
+    const status = document.getElementById("setupStatus");
+    if (status) status.textContent = "Saved.";
+  };
+
+  const resetBtn = document.getElementById("setupResetBtn");
+  if (resetBtn) resetBtn.onclick = () => {
+    if (typeof AdaptiveConfig !== "undefined") {
+      AdaptiveConfig.clearAdaptiveConfig();
+      if (typeof config !== "undefined") config.adaptive = AdaptiveConfig.loadAdaptiveConfig();
+    }
+    populateSetupForm();
+    const status = document.getElementById("setupStatus");
+    if (status) status.textContent = "Reset to defaults.";
+  };
+
+  const backBtn = document.getElementById("setupBackBtn");
+  if (backBtn) backBtn.onclick = () => showScreen("intro");
 }
 
 
