@@ -30,6 +30,7 @@
 
   <button id="trainBtn">Training</button>
   <button id="startBtn">Start</button><br />
+  <button id="setupBtn">Setup</button>
   <button id="calibrateBtn">Calibration</button>
 <label>
   <br>Take a break every
@@ -77,6 +78,116 @@
     <button id="calClearBtn" style="background:#777;">Clear calibration</button>
     <button id="calBackBtn">Back</button>
   </div>
+</div>
+
+<!-- Setup screen (adaptive track controls) -->
+<div id="setup" class="screen">
+  <h2>Setup</h2>
+
+  <div class="setup-block">
+    <span class="setup-label">Procedure</span>
+    <div class="segmented" id="procSegmented">
+      <button type="button" data-proc="wudr" class="seg-btn active">WUDR</button>
+      <button type="button" data-proc="a1" class="seg-btn">A1</button>
+      <button type="button" data-proc="a2" class="seg-btn">A2</button>
+    </div>
+  </div>
+
+  <div class="setup-block">
+    <span class="setup-label">Common</span>
+    <div class="setup-grid">
+      <label>Start mode
+        <select id="setStartMode">
+          <option value="absolute">Absolute (Hz)</option>
+          <option value="relative">Relative to threshold (octaves)</option>
+        </select>
+      </label>
+      <label id="setStartCutoffWrap">Starting cutoff (Hz)
+        <input id="setStartCutoff" type="number" min="80" max="6000" step="10" value="1000">
+      </label>
+      <label id="setStartRelWrap" hidden>Start (octaves re threshold)
+        <input id="setStartRel" type="number" step="0.5" value="0">
+      </label>
+      <label>Number of trials
+        <input id="setNTrials" type="number" min="1" max="66" value="33">
+      </label>
+      <label>Alternatives (A)
+        <input id="setA" type="number" value="4" readonly>
+      </label>
+      <label>Target (4AFC midpoint)
+        <input id="setTarget" type="text" value="62.5%" readonly>
+      </label>
+    </div>
+  </div>
+
+  <div class="setup-block" id="wudrBlock">
+    <span class="setup-label">WUDR (two-phase)</span>
+    <div class="setup-grid">
+      <label>Working down step (dec)
+        <input id="setWorkDown" type="number" step="0.0001" value="0.0212">
+      </label>
+      <label>Working up step (dec)
+        <input id="setWorkUp" type="number" step="0.0001" value="0.0348">
+      </label>
+      <label>Initial down step (dec)
+        <input id="setInitDown" type="number" step="0.0001" value="0.0511">
+      </label>
+      <label>Initial up step (dec)
+        <input id="setInitUp" type="number" step="0.0001" value="0.0822">
+      </label>
+      <label>Switch to working after N reversals
+        <input id="setSwitchRev" type="number" min="0" step="1" value="5">
+      </label>
+    </div>
+    <p class="small">Defaults: down &minus;4.76% / up +8.33% (working); down &minus;11.1% / up +20.8% (initial). 0 reversals = single-phase.</p>
+  </div>
+
+  <div class="setup-block" id="a1Block" hidden>
+    <span class="setup-label">A1</span>
+    <div class="setup-grid">
+      <label>Tracking-slope constant
+        <input id="setA1Slope" type="number" step="0.1" value="10">
+      </label>
+    </div>
+  </div>
+
+  <div class="setup-block" id="a2Block" hidden>
+    <span class="setup-label">A2</span>
+    <div class="setup-grid">
+      <label>Tracking-slope constant
+        <input id="setA2Slope" type="number" step="0.1" value="10">
+      </label>
+      <label>Lower sweet point
+        <input id="setPLow" type="text" value="0.40" readonly>
+      </label>
+      <label>Upper sweet point
+        <input id="setPHigh" type="text" value="0.85" readonly>
+      </label>
+    </div>
+    <label class="setup-check"><input type="checkbox" id="setA2Doubling" checked> B&amp;K step-doubling at sweet points</label>
+    <p class="small">Dual tracks interleaved; sweet points auto-derived from the floor (0.40 / 0.85 for 4AFC).</p>
+  </div>
+
+  <div class="setup-block">
+    <span class="setup-label">Presentation routing</span>
+    <div class="setup-grid">
+      <label>Ear / channel
+        <select id="setRouting">
+          <option value="binaural">Binaural</option>
+          <option value="left">Left</option>
+          <option value="right">Right</option>
+        </select>
+      </label>
+    </div>
+    <p class="small">Applies to the stimuli for this run.</p>
+  </div>
+
+  <div style="margin-top:1rem;">
+    <button id="setupSaveBtn">Save</button>
+    <button id="setupResetBtn" style="background:#777;">Reset defaults</button>
+    <button id="setupBackBtn">Back</button>
+  </div>
+  <p id="setupStatus" class="small" style="min-height:1.2rem;"></p>
 </div>
 
 <!-- Break screen -->

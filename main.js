@@ -92,6 +92,11 @@ window.onload = async () => {
   });
 
   await loadConfig();
+
+  // Merge persisted adaptive Setup config into `config` (mirrors config.js).
+  if (typeof AdaptiveConfig !== "undefined") {
+    AdaptiveConfig.mergeAdaptiveIntoConfig(config);
+  }
   
   // [OK] Initialise arrowSet before list/preload
   if (location.protocol === "file:") {
@@ -241,6 +246,11 @@ if (breakEveryInput) {
     refreshCalStatus();
   };
   setupCalibrationScreen();
+
+  // Setup screen (adaptive controls)
+  const setupBtn = document.getElementById("setupBtn");
+  if (setupBtn) setupBtn.onclick = () => { showScreen("setup"); populateSetupForm(); };
+  setupSetupScreen();
 };
 
 // --- Calibration screen wiring (mirrors UC_CVCV) -----------------------------
@@ -405,4 +415,137 @@ function setupCalibrationScreen() {
     if (testBtn) testBtn.textContent = "Test level";
     showScreen("intro");
   };
+}
+
+// --- Setup screen wiring (adaptive controls, Step 4) -------------------------
+let _setupProc = "wudr";
+
+function currentAdaptiveCfg() {
+  if (typeof AdaptiveConfig !== "undefined") return AdaptiveConfig.loadAdaptiveConfig();
+  return {};
+}
+
+function showProcBlocks(proc) {
+  const map = { wudr: "wudrBlock", a1: "a1Block", a2: "a2Block" };
+  Object.entries(map).forEach(([p, id]) => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = (p !== proc);
+  });
+  document.querySelectorAll("#procSegmented .seg-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.proc === proc);
+  });
+}
+
+function toggleStartMode(mode) {
+  const abs = document.getElementById("setStartCutoffWrap");
+  const rel = document.getElementById("setStartRelWrap");
+  if (abs) abs.hidden = (mode !== "absolute");
+  if (rel) rel.hidden = (mode !== "relative");
+}
+
+function populateSetupForm() {
+  const cfg = currentAdaptiveCfg();
+  _setupProc = cfg.procedure || "wudr";
+  showProcBlocks(_setupProc);
+
+  const set = (id, v) => { const el = document.getElementById(id); if (el != null && v != null) el.value = v; };
+  set("setStartMode", cfg.startMode || "absolute");
+  toggleStartMode(cfg.startMode || "absolute");
+  set("setStartCutoff", cfg.startCutoffHz ?? 1000);
+  set("setStartRel", cfg.startRelOctaves ?? 0);
+  set("setNTrials", cfg.nTrials ?? 33);
+  set("setA", cfg.A ?? 4);
+  set("setTarget", ((cfg.target ?? 0.625) * 100).toFixed(1) + "%");
+
+  set("setWorkDown", cfg.workDown);
+  set("setWorkUp", cfg.workUp);
+  set("setInitDown", cfg.initDown);
+  set("setInitUp", cfg.initUp);
+  set("setSwitchRev", cfg.switchRev);
+
+  set("setA1Slope", cfg.a1slope);
+  set("setA2Slope", cfg.a2slope);
+  set("setPLow", (cfg.pLow ?? 0.40).toFixed(2));
+  set("setPHigh", (cfg.pHigh ?? 0.85).toFixed(2));
+  const dbl = document.getElementById("setA2Doubling");
+  if (dbl) dbl.checked = cfg.a2Doubling !== false;
+
+  set("setRouting", cfg.routing || (config && config.routing) || "binaural");
+
+  const status = document.getElementById("setupStatus");
+  if (status) status.textContent = "";
+}
+
+function readSetupForm() {
+  const num = (id, dflt) => {
+    const el = document.getElementById(id);
+    const v = el ? parseFloat(el.value) : NaN;
+    return isFinite(v) ? v : dflt;
+  };
+  const val = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
+  const A = 4;
+  const sweet = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.sweetPointsFor(A) : { pLow: 0.40, pHigh: 0.85 };
+  const midpoint = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.midpointTarget(A) : 0.625;
+
+  return {
+    procedure: _setupProc,
+    A,
+    target: midpoint,
+    startMode: val("setStartMode") || "absolute",
+    startCutoffHz: num("setStartCutoff", 1000),
+    startRelOctaves: num("setStartRel", 0),
+    nTrials: Math.max(1, Math.min(66, Math.round(num("setNTrials", 33)))),
+    xlo: Math.log10(80),
+    xhi: Math.log10(6000),
+    workDown: num("setWorkDown", 0.0212),
+    workUp: num("setWorkUp", 0.0348),
+    initDown: num("setInitDown", 0.0512),
+    initUp: num("setInitUp", 0.0822),
+    switchRev: Math.max(0, Math.round(num("setSwitchRev", 5))),
+    a1slope: num("setA1Slope", 10),
+    minStep: 0.01,
+    a2slope: num("setA2Slope", 10),
+    pLow: sweet.pLow,
+    pHigh: sweet.pHigh,
+    a2Doubling: !!(document.getElementById("setA2Doubling") || {}).checked,
+    slopeHint: 43,
+    routing: val("setRouting") || "binaural"
+  };
+}
+
+function setupSetupScreen() {
+  const seg = document.getElementById("procSegmented");
+  if (!seg) return; // screen not present
+
+  seg.querySelectorAll(".seg-btn").forEach(btn => {
+    btn.onclick = () => { _setupProc = btn.dataset.proc; showProcBlocks(_setupProc); };
+  });
+
+  const startMode = document.getElementById("setStartMode");
+  if (startMode) startMode.onchange = () => toggleStartMode(startMode.value);
+
+  const saveBtn = document.getElementById("setupSaveBtn");
+  if (saveBtn) saveBtn.onclick = () => {
+    const cfg = readSetupForm();
+    if (typeof AdaptiveConfig !== "undefined") AdaptiveConfig.saveAdaptiveConfig(cfg);
+    if (typeof config !== "undefined") config.adaptive = cfg;
+    // Routing is also surfaced at the top level of config for flow.js to read.
+    if (typeof config !== "undefined") config.routing = cfg.routing;
+    const status = document.getElementById("setupStatus");
+    if (status) status.textContent = "Saved.";
+  };
+
+  const resetBtn = document.getElementById("setupResetBtn");
+  if (resetBtn) resetBtn.onclick = () => {
+    if (typeof AdaptiveConfig !== "undefined") {
+      AdaptiveConfig.clearAdaptiveConfig();
+      if (typeof config !== "undefined") config.adaptive = AdaptiveConfig.loadAdaptiveConfig();
+    }
+    populateSetupForm();
+    const status = document.getElementById("setupStatus");
+    if (status) status.textContent = "Reset to defaults.";
+  };
+
+  const backBtn = document.getElementById("setupBackBtn");
+  if (backBtn) backBtn.onclick = () => showScreen("intro");
 }

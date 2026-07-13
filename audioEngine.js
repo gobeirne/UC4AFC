@@ -335,7 +335,7 @@ const AudioEngine = (() => {
   // Returns a promise that resolves when playback ends (or rejects on error).
   // onStarted() fires when audio actually begins producing sound (for the
   // image-reveal timing in flow.js).
-  function playBuffer(buffer, { extraGainDb = 0, onStarted = null } = {}) {
+  function playBuffer(buffer, { extraGainDb = 0, onStarted = null, routing = "binaural" } = {}) {
     const c = context();
     stop(); // ensure only one stimulus at a time
 
@@ -345,7 +345,14 @@ const AudioEngine = (() => {
     const trialGain = c.createGain();
     trialGain.gain.value = LIN(extraGainDb);
 
-    src.connect(trialGain).connect(masterGain);
+    // Route left / right / binaural (UC_CVCV: pan -1 / +1 / 0).
+    if (routing === "left" || routing === "right") {
+      const pan = c.createStereoPanner();
+      pan.pan.value = routing === "left" ? -1 : 1;
+      src.connect(trialGain).connect(pan).connect(masterGain);
+    } else {
+      src.connect(trialGain).connect(masterGain);
+    }
     activeSource = src;
 
     return new Promise((resolve, reject) => {
@@ -371,10 +378,10 @@ const AudioEngine = (() => {
 
   // Convenience: decode-if-needed, prepare at cutoff, play. Mirrors what
   // flow.js needs per trial.
-  async function playStimulus(name, url, { cutoffHz = null, extraGainDb = 0, onStarted = null } = {}) {
+  async function playStimulus(name, url, { cutoffHz = null, extraGainDb = 0, onStarted = null, routing = "binaural" } = {}) {
     if (!cache.has(name)) await decode(name, url);
     const prepared = await prepare(name, cutoffHz);
-    await playBuffer(prepared.buffer, { extraGainDb, onStarted });
+    await playBuffer(prepared.buffer, { extraGainDb, onStarted, routing });
     return prepared;
   }
 
