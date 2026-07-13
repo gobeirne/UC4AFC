@@ -25,7 +25,8 @@ let trainingAborted = false;
 // Active adaptive track (test phase only). null => no adaptive tracking (plays
 // unfiltered at a fixed level, e.g. training or a non-adaptive run).
 let track = null;
-let currentCutoffHz = null;   // cutoff for the pending test trial (null = unfiltered)
+let currentCutoffHz = null;   // pending trial's adaptive value (Hz LPF / dB quiet)
+let quietStartLevel = null;   // quiet-mode start level (dB), for uncalibrated relative gain
 
 let lastBreakAt = -1;  // remember the index where we last stopped for a break
 
@@ -59,20 +60,26 @@ export function beginPhase(p) {
       showTrainingItem();
     } else {
       // Build the adaptive track from the persisted Setup config. If none is
-      // present (app never visited Setup), fall back to defaults via
-      // resolveTrackConfig's own guards.
+      // present (app never visited Setup), resolveTrackConfig's guards apply.
       const adaptive = (config && config.adaptive) ? config.adaptive : {};
-      // Start cutoff: absolute Hz, or relative-to-threshold (octaves). We have
-      // no prior threshold in-session, so relative starts resolve against the
-      // absolute starting cutoff for now (documented; Step 3 relative-start
-      // becomes meaningful once a running threshold exists).
-      let startHz = adaptive.startCutoffHz || 1000;
+      const isQuiet = adaptive.mode === "quiet";
+
+      // Start value: Hz (LPF) or dB (quiet). Relative start shifts the start by
+      // octaves (LPF) or dB (quiet); with no prior in-session threshold it
+      // resolves against the absolute start for now (documented).
+      let startVal = isQuiet
+        ? (adaptive.startValue ?? adaptive.start ?? 65)
+        : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
       if (adaptive.startMode === "relative" && isFinite(adaptive.startRelOctaves)) {
-        startHz = startHz * Math.pow(2, adaptive.startRelOctaves);
+        startVal = isQuiet
+          ? startVal + adaptive.startRelOctaves               // dB shift
+          : startVal * Math.pow(2, adaptive.startRelOctaves); // octave shift
       }
-      const trackCfg = resolveTrackConfig(adaptive, startHz);
+
+      quietStartLevel = isQuiet ? startVal : null;
+      const trackCfg = resolveTrackConfig(adaptive, startVal);
       track = createTrack(trackCfg);
-      currentCutoffHz = track.currentCutoffHz();
+      currentCutoffHz = track.currentValue();
       showScreen("test");
       nextTrial();
     }
@@ -174,9 +181,9 @@ if (phase === "test") {
     trialIndex++;
     return nextTrial();
   }
-  // Refresh the pending cutoff from the track for this trial.
+  // Refresh the pending adaptive value from the track for this trial.
   if (phase === "test" && track) {
-    currentCutoffHz = track.currentCutoffHz();
+    currentCutoffHz = track.currentValue();
   }
   const shuffled = [...item.images];
   shuffle(shuffled);
@@ -239,16 +246,37 @@ if (phase === "test") {
     startTime = performance.now();
   };
 
-  // Play unfiltered (cutoffHz: null) for now; Step 5 supplies the adaptive
-  // cutoff. onStarted fires at buffer start(); we then wait `offset` ms.
-  // Presentation gain from calibration at the single run level (slider level).
+  // Mode-aware presentation:
+  //  LPF  : filter at the adaptive CUTOFF; gain from the fixed run level.
+  //  Quiet: no filter; the adaptive VALUE is the presentation LEVEL (dB),
+  //         applied as gain (calibrated -> absolute dB(A); uncalibrated ->
+  //         relative dB re the start level).
+  const adaptive = (config && config.adaptive) ? config.adaptive : {};
+  const isQuiet = (phase === "test" && track) ? adaptive.mode === "quiet" : false;
+  const calibrated = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+
+  let cutoffHz = null;
   let extraGainDb = 0;
-  if (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated()) {
-    extraGainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb);
+
+  if (phase === "test" && track && isQuiet) {
+    // Quiet mode: value is a dB level.
+    const level = currentCutoffHz; // (mode-neutral value; dB here)
+    if (calibrated) {
+      extraGainDb = Calibration.gainDbForLevel(level);
+    } else {
+      // Uncalibrated: play relative to the start level (start = unity).
+      extraGainDb = level - (quietStartLevel ?? level);
+    }
+  } else {
+    // LPF mode (or non-adaptive): filter at the cutoff; fixed-level gain.
+    cutoffHz = (phase === "test" && track) ? currentCutoffHz : null;
+    if (calibrated) {
+      extraGainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb);
+    }
   }
 
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
-    cutoffHz: (phase === "test" && track) ? currentCutoffHz : null,
+    cutoffHz,
     extraGainDb,
     routing: (config && config.routing) || "binaural",
     onStarted: () => {
@@ -280,15 +308,24 @@ export function recordResponse(img) {
     timeMs: Math.round(timeTaken)
   };
 
-  // Adaptive: record the presented cutoff, advance the track, and capture the
-  // running threshold estimate.
+  // Adaptive: record the presented value (cutoff Hz for LPF, level dB for
+  // quiet), advance the track, and capture the running threshold estimate.
   if (phase === "test" && track) {
-    entry.cutoffHz = Math.round(currentCutoffHz);
+    const adaptive = (config && config.adaptive) ? config.adaptive : {};
+    const unit = track.unit || (adaptive.mode === "quiet" ? "dB" : "Hz");
+    const val = (unit === "Hz") ? Math.round(currentCutoffHz) : +currentCutoffHz.toFixed(1);
+    entry.value = val;
+    entry.unit = unit;
+    entry.mode = adaptive.mode || "lpf";
+    // Back-compat alias so existing LPF-oriented consumers keep working.
+    entry.cutoffHz = val;
     entry.isCorrect = isCorrect;
-    entry.procedure = (config.adaptive && config.adaptive.procedure) || "wudr";
+    entry.procedure = adaptive.procedure || "wudr";
     track.update(isCorrect);
     const est = track.estimate();
-    entry.estimateHz = isFinite(est.thresholdHz) ? Math.round(est.thresholdHz) : null;
+    const estV = est.value;
+    entry.estimate = isFinite(estV) ? ((unit === "Hz") ? Math.round(estV) : +estV.toFixed(1)) : null;
+    entry.estimateHz = entry.estimate; // alias
   }
 
   responseLog.push(entry);

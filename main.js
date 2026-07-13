@@ -419,6 +419,7 @@ function setupCalibrationScreen() {
 
 // --- Setup screen wiring (adaptive controls, Step 4) -------------------------
 let _setupProc = "wudr";
+let _setupMode = "lpf";
 
 function currentAdaptiveCfg() {
   if (typeof AdaptiveConfig !== "undefined") return AdaptiveConfig.loadAdaptiveConfig();
@@ -436,6 +437,45 @@ function showProcBlocks(proc) {
   });
 }
 
+function showModeButtons(mode) {
+  document.querySelectorAll("#modeSegmented .seg-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.mode === mode);
+  });
+  const hint = document.getElementById("modeHint");
+  if (hint) hint.textContent = (mode === "quiet")
+    ? "Adapts presentation level (dB). Uncalibrated runs are relative to the start level."
+    : "Adapts the equivalent low-pass cutoff (Hz).";
+}
+
+// Relabel units and adjust input bounds/steps for the active mode.
+function applyModeLabels(mode) {
+  const isQuiet = (mode === "quiet");
+  const stepUnit = isQuiet ? "dB" : "dec";
+  const setText = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  setText("lblStart", isQuiet ? "Starting level (dB)" : "Starting cutoff (Hz)");
+  setText("lblStartRel", isQuiet ? "Start (dB re threshold)" : "Start (octaves re threshold)");
+  document.querySelectorAll(".lblStepUnit-wd").forEach(e => e.textContent = `Working down step (${stepUnit})`);
+  document.querySelectorAll(".lblStepUnit-wu").forEach(e => e.textContent = `Working up step (${stepUnit})`);
+  document.querySelectorAll(".lblStepUnit-id").forEach(e => e.textContent = `Initial down step (${stepUnit})`);
+  document.querySelectorAll(".lblStepUnit-iu").forEach(e => e.textContent = `Initial up step (${stepUnit})`);
+
+  // Start-cutoff input bounds/step per mode.
+  const sc = document.getElementById("setStartCutoff");
+  if (sc) {
+    if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
+    else { sc.min = 80; sc.max = 6000; sc.step = 10; }
+  }
+  // Step inputs coarser in quiet (dB) than LPF (decades).
+  ["setWorkDown","setWorkUp","setInitDown","setInitUp"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.step = isQuiet ? 0.1 : 0.0001;
+  });
+  const wudrHint = document.getElementById("wudrHint");
+  if (wudrHint) wudrHint.textContent = isQuiet
+    ? "Quiet defaults: down 0.6 dB / up 1.0 dB (working); down 3 / up 5 (initial). 0 reversals = single-phase."
+    : "Defaults: down \u22124.76% / up +8.33% (working); down \u221211.1% / up +20.8% (initial). 0 reversals = single-phase.";
+}
+
 function toggleStartMode(mode) {
   const abs = document.getElementById("setStartCutoffWrap");
   const rel = document.getElementById("setStartRelWrap");
@@ -443,34 +483,39 @@ function toggleStartMode(mode) {
   if (rel) rel.hidden = (mode !== "relative");
 }
 
-function populateSetupForm() {
-  const cfg = currentAdaptiveCfg();
-  _setupProc = cfg.procedure || "wudr";
-  showProcBlocks(_setupProc);
-
+// Populate the whole form from a resolved cfg object.
+function fillFormFromCfg(cfg) {
   const set = (id, v) => { const el = document.getElementById(id); if (el != null && v != null) el.value = v; };
+  const isQuiet = (cfg.mode === "quiet");
   set("setStartMode", cfg.startMode || "absolute");
   toggleStartMode(cfg.startMode || "absolute");
-  set("setStartCutoff", cfg.startCutoffHz ?? 1000);
+  set("setStartCutoff", isQuiet ? (cfg.startValue ?? cfg.start ?? 65) : (cfg.startValue ?? cfg.startCutoffHz ?? 1000));
   set("setStartRel", cfg.startRelOctaves ?? 0);
   set("setNTrials", cfg.nTrials ?? 33);
   set("setA", cfg.A ?? 4);
   set("setTarget", ((cfg.target ?? 0.625) * 100).toFixed(1) + "%");
-
   set("setWorkDown", cfg.workDown);
   set("setWorkUp", cfg.workUp);
   set("setInitDown", cfg.initDown);
   set("setInitUp", cfg.initUp);
   set("setSwitchRev", cfg.switchRev);
-
   set("setA1Slope", cfg.a1slope);
   set("setA2Slope", cfg.a2slope);
   set("setPLow", (cfg.pLow ?? 0.40).toFixed(2));
   set("setPHigh", (cfg.pHigh ?? 0.85).toFixed(2));
   const dbl = document.getElementById("setA2Doubling");
   if (dbl) dbl.checked = cfg.a2Doubling !== false;
-
   set("setRouting", cfg.routing || (config && config.routing) || "binaural");
+}
+
+function populateSetupForm() {
+  const cfg = currentAdaptiveCfg();
+  _setupProc = cfg.procedure || "wudr";
+  _setupMode = cfg.mode || "lpf";
+  showProcBlocks(_setupProc);
+  showModeButtons(_setupMode);
+  applyModeLabels(_setupMode);
+  fillFormFromCfg(cfg);
 
   const status = document.getElementById("setupStatus");
   if (status) status.textContent = "";
@@ -484,31 +529,39 @@ function readSetupForm() {
   };
   const val = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
   const A = 4;
+  const isQuiet = (_setupMode === "quiet");
   const sweet = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.sweetPointsFor(A) : { pLow: 0.40, pHigh: 0.85 };
   const midpoint = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.midpointTarget(A) : 0.625;
+  const startVal = num("setStartCutoff", isQuiet ? 65 : 1000);
 
   return {
+    mode: _setupMode,
     procedure: _setupProc,
     A,
     target: midpoint,
+    axisIsLog: !isQuiet,
+    unit: isQuiet ? "dB" : "Hz",
+    stepUnit: isQuiet ? "dB" : "decades",
+    slopeUnit: isQuiet ? "%/dB" : "%/octave",
     startMode: val("setStartMode") || "absolute",
-    startCutoffHz: num("setStartCutoff", 1000),
+    startValue: startVal,
+    startCutoffHz: isQuiet ? undefined : startVal,  // LPF alias
     startRelOctaves: num("setStartRel", 0),
     nTrials: Math.max(1, Math.min(66, Math.round(num("setNTrials", 33)))),
-    xlo: Math.log10(80),
-    xhi: Math.log10(6000),
-    workDown: num("setWorkDown", 0.0212),
-    workUp: num("setWorkUp", 0.0348),
-    initDown: num("setInitDown", 0.0512),
-    initUp: num("setInitUp", 0.0822),
+    xlo: isQuiet ? 20 : Math.log10(80),
+    xhi: isQuiet ? 85 : Math.log10(6000),
+    workDown: num("setWorkDown", isQuiet ? 0.6 : 0.0212),
+    workUp: num("setWorkUp", isQuiet ? 1.0 : 0.0348),
+    initDown: num("setInitDown", isQuiet ? 3.0 : 0.0511),
+    initUp: num("setInitUp", isQuiet ? 5.0 : 0.0822),
     switchRev: Math.max(0, Math.round(num("setSwitchRev", 5))),
-    a1slope: num("setA1Slope", 10),
-    minStep: 0.01,
-    a2slope: num("setA2Slope", 10),
+    a1slope: num("setA1Slope", isQuiet ? 0.10 : 10),
+    minStep: isQuiet ? 0.25 : 0.01,
+    a2slope: num("setA2Slope", isQuiet ? 0.10 : 10),
     pLow: sweet.pLow,
     pHigh: sweet.pHigh,
     a2Doubling: !!(document.getElementById("setA2Doubling") || {}).checked,
-    slopeHint: 43,
+    slopeHint: isQuiet ? 6 : 43,
     routing: val("setRouting") || "binaural"
   };
 }
@@ -520,6 +573,27 @@ function setupSetupScreen() {
   seg.querySelectorAll(".seg-btn").forEach(btn => {
     btn.onclick = () => { _setupProc = btn.dataset.proc; showProcBlocks(_setupProc); };
   });
+
+  // Mode toggle: switch axis/units and load that mode's preset step values,
+  // preserving procedure / nTrials / start mode / routing from the form.
+  const modeSeg = document.getElementById("modeSegmented");
+  if (modeSeg) {
+    modeSeg.querySelectorAll(".seg-btn").forEach(btn => {
+      btn.onclick = () => {
+        const newMode = btn.dataset.mode;
+        if (newMode === _setupMode) return;
+        _setupMode = newMode;
+        showModeButtons(_setupMode);
+        applyModeLabels(_setupMode);
+        // Apply the preset for the new mode over the current form values.
+        if (typeof AdaptiveConfig !== "undefined") {
+          const current = readSetupForm();
+          const preset = AdaptiveConfig.applyModePreset(current, _setupMode);
+          fillFormFromCfg(preset);
+        }
+      };
+    });
+  }
 
   const startMode = document.getElementById("setStartMode");
   if (startMode) startMode.onchange = () => toggleStartMode(startMode.value);

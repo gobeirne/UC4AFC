@@ -85,6 +85,15 @@
   <h2>Setup</h2>
 
   <div class="setup-block">
+    <span class="setup-label">Mode</span>
+    <div class="segmented" id="modeSegmented">
+      <button type="button" data-mode="lpf" class="seg-btn active">Low-pass filter</button>
+      <button type="button" data-mode="quiet" class="seg-btn">Quiet (level)</button>
+    </div>
+    <p class="small" id="modeHint">Adapts the equivalent low-pass cutoff (Hz).</p>
+  </div>
+
+  <div class="setup-block">
     <span class="setup-label">Procedure</span>
     <div class="segmented" id="procSegmented">
       <button type="button" data-proc="wudr" class="seg-btn active">WUDR</button>
@@ -102,10 +111,10 @@
           <option value="relative">Relative to threshold (octaves)</option>
         </select>
       </label>
-      <label id="setStartCutoffWrap">Starting cutoff (Hz)
+      <label id="setStartCutoffWrap"><span id="lblStart">Starting cutoff (Hz)</span>
         <input id="setStartCutoff" type="number" min="80" max="6000" step="10" value="1000">
       </label>
-      <label id="setStartRelWrap" hidden>Start (octaves re threshold)
+      <label id="setStartRelWrap" hidden><span id="lblStartRel">Start (octaves re threshold)</span>
         <input id="setStartRel" type="number" step="0.5" value="0">
       </label>
       <label>Number of trials
@@ -123,23 +132,23 @@
   <div class="setup-block" id="wudrBlock">
     <span class="setup-label">WUDR (two-phase)</span>
     <div class="setup-grid">
-      <label>Working down step (dec)
+      <label><span class="lblStepUnit-wd">Working down step (dec)</span>
         <input id="setWorkDown" type="number" step="0.0001" value="0.0212">
       </label>
-      <label>Working up step (dec)
+      <label><span class="lblStepUnit-wu">Working up step (dec)</span>
         <input id="setWorkUp" type="number" step="0.0001" value="0.0348">
       </label>
-      <label>Initial down step (dec)
+      <label><span class="lblStepUnit-id">Initial down step (dec)</span>
         <input id="setInitDown" type="number" step="0.0001" value="0.0511">
       </label>
-      <label>Initial up step (dec)
+      <label><span class="lblStepUnit-iu">Initial up step (dec)</span>
         <input id="setInitUp" type="number" step="0.0001" value="0.0822">
       </label>
       <label>Switch to working after N reversals
         <input id="setSwitchRev" type="number" min="0" step="1" value="5">
       </label>
     </div>
-    <p class="small">Defaults: down &minus;4.76% / up +8.33% (working); down &minus;11.1% / up +20.8% (initial). 0 reversals = single-phase.</p>
+    <p class="small" id="wudrHint">Defaults: down &minus;4.76% / up +8.33% (working); down &minus;11.1% / up +20.8% (initial). 0 reversals = single-phase.</p>
   </div>
 
   <div class="setup-block" id="a1Block" hidden>

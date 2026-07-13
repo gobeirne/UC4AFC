@@ -706,44 +706,105 @@ if (typeof window !== "undefined") {
 
 const ADAPT_KEY = "uc4afc_adaptive";
 
-// Butterworth/axis + procedure defaults (LPF mode), verbatim from the demo.
+// Per-mode presets, verbatim from the demo (PRESETS.lpf / PRESETS.quiet).
+// axisIsLog distinguishes the log10(Hz) cutoff axis (LPF) from the linear dB
+// level axis (quiet). unit/stepUnit/slopeUnit are for display + the results
+// header. start is in the axis's natural unit (Hz for LPF, dB for quiet).
+const PRESETS = {
+  lpf: {
+    mode: "lpf",
+    axisIsLog: true,
+    unit: "Hz", stepUnit: "decades", slopeUnit: "%/octave",
+    start: 1000,
+    xlo: Math.log10(80), xhi: Math.log10(6000),
+    // WUDR two-phase steps (decades)
+    workDown: +Math.log10(1 / 0.95238).toFixed(4),  // 0.0212  (-4.76%)
+    workUp:   +Math.log10(1.08333).toFixed(4),       // 0.0348  (+8.33%)
+    initDown: +Math.log10(1 / 0.8889).toFixed(4),    // 0.0511  (-11.1%)
+    initUp:   +Math.log10(1.20833).toFixed(4),       // 0.0822  (+20.8%)
+    switchRev: 5,
+    a1slope: 10.0, a2slope: 10.0, minStep: 0.01,
+    slopeHint: 43                                    // %/octave
+  },
+  quiet: {
+    mode: "quiet",
+    axisIsLog: false,
+    unit: "dB", stepUnit: "dB", slopeUnit: "%/dB",
+    start: 65,
+    xlo: 20, xhi: 85,
+    // WUDR two-phase steps (dB): working 0.6 down / 1.0 up; initial 3 / 5
+    workDown: 0.6, workUp: 1.0,
+    initDown: 3.0, initUp: 5.0,
+    switchRev: 5,
+    a1slope: 0.10, a2slope: 0.10, minStep: 0.25,
+    slopeHint: 6                                     // %/dB
+  }
+};
+
+// Full default config = LPF preset flattened + procedure/common fields. The
+// persisted config always carries a `mode`; switching mode in Setup swaps the
+// mode-specific fields to that preset's values.
 const ADAPTIVE_DEFAULTS = {
+  mode: "lpf",                // "lpf" | "quiet"
   procedure: "wudr",          // "wudr" | "a1" | "a2"
   A: 4,                       // alternatives (fixed); floor = 1/A = 0.25
   target: 0.625,             // midpointTarget(4) = (A+1)/(2A)
 
   // Start
-  startMode: "absolute",      // "absolute" (Hz) | "relative" (octaves re threshold)
-  startCutoffHz: 1000,        // demo lpf.start
-  startRelOctaves: 0,         // used when startMode === "relative"
+  startMode: "absolute",      // "absolute" | "relative"
+  startValue: PRESETS.lpf.start,     // Hz (LPF) or dB (quiet)
+  startCutoffHz: 1000,        // back-compat alias for LPF start (Hz)
+  startRelOctaves: 0,         // relative start: octaves (LPF) or dB (quiet)
 
   // Trials
-  nTrials: 33,                // one list; up to 66 (both lists)
+  nTrials: 33,
 
-  // Axis bounds (log10 Hz), from the demo lpf mode
-  xlo: Math.log10(80),
-  xhi: Math.log10(6000),
+  // Axis bounds (mode units: log10 Hz for LPF, dB for quiet)
+  xlo: PRESETS.lpf.xlo,
+  xhi: PRESETS.lpf.xhi,
+  axisIsLog: true,
+  unit: "Hz", stepUnit: "decades", slopeUnit: "%/octave",
 
-  // WUDR two-phase steps (decades), verbatim from demo lpf mode
-  workDown: +Math.log10(1 / 0.95238).toFixed(4),  // 0.0212  (-4.76%)
-  workUp:   +Math.log10(1.08333).toFixed(4),       // 0.0348  (+8.33%)
-  initDown: +Math.log10(1 / 0.8889).toFixed(4),    // 0.0512  (-11.1%)
-  initUp:   +Math.log10(1.20833).toFixed(4),       // 0.0822  (+20.8%)
-  switchRev: 5,                                     // switch to working after 5 reversals
+  // WUDR two-phase steps (mode units)
+  workDown: PRESETS.lpf.workDown,
+  workUp:   PRESETS.lpf.workUp,
+  initDown: PRESETS.lpf.initDown,
+  initUp:   PRESETS.lpf.initUp,
+  switchRev: 5,
 
   // A1
-  a1slope: 10.0,              // tracking-slope constant on the log-Hz axis
-  minStep: 0.01,
+  a1slope: PRESETS.lpf.a1slope,
+  minStep: PRESETS.lpf.minStep,
 
   // A2
-  a2slope: 10.0,
-  pLow: 0.40,                 // auto sweet points for 4AFC: 1/A + (1-1/A)*{0.2,0.8}
+  a2slope: PRESETS.lpf.a2slope,
+  pLow: 0.40,
   pHigh: 0.85,
-  a2Doubling: true,          // B&K step-doubling toggle
+  a2Doubling: true,
 
-  // Psychometric slope hint for the MLE readout (demo lpf.slope, %/octave)
-  slopeHint: 43
+  // Psychometric slope hint for the MLE readout
+  slopeHint: PRESETS.lpf.slopeHint
 };
+
+// Return a config with the mode-specific fields set to `mode`'s preset,
+// preserving procedure/A/nTrials/startMode and A2 sweet points.
+function applyModePreset(cfg, mode) {
+  const p = PRESETS[mode] || PRESETS.lpf;
+  return {
+    ...cfg,
+    mode: p.mode,
+    axisIsLog: p.axisIsLog,
+    unit: p.unit, stepUnit: p.stepUnit, slopeUnit: p.slopeUnit,
+    startValue: p.start,
+    startCutoffHz: p.mode === "lpf" ? p.start : cfg.startCutoffHz,
+    xlo: p.xlo, xhi: p.xhi,
+    workDown: p.workDown, workUp: p.workUp,
+    initDown: p.initDown, initUp: p.initUp,
+    switchRev: p.switchRev,
+    a1slope: p.a1slope, a2slope: p.a2slope, minStep: p.minStep,
+    slopeHint: p.slopeHint
+  };
+}
 
 // Derive A2 sweet points from the floor, matching the demo:
 //   p = 1/A + (1 - 1/A) * pOpen, with pOpen in {0.2, 0.8}
@@ -791,6 +852,7 @@ function mergeAdaptiveIntoConfig(config) {
 if (typeof window !== "undefined") {
   window.AdaptiveConfig = {
     DEFAULTS: ADAPTIVE_DEFAULTS,
+    PRESETS, applyModePreset,
     sweetPointsFor, midpointTarget,
     loadAdaptiveConfig, saveAdaptiveConfig, clearAdaptiveConfig,
     mergeAdaptiveIntoConfig
@@ -974,7 +1036,8 @@ function createTrack(cfg) {
     return clampX(x);
   }
 
-  function currentCutoffHz() { return xToHz(currentX()); }
+  function currentValue() { return xToHz(currentX()); }   // Hz (LPF) or dB (quiet)
+  function currentCutoffHz() { return currentValue(); }   // LPF-friendly alias
 
   function update(correct) {
     const y = correct ? 1 : 0;
@@ -1031,20 +1094,25 @@ function createTrack(cfg) {
 
   function estimate() {
     const fit = fitMLE(cfg, xs.slice(), ys.slice(), cfg.slopeHint);
+    const value = xToHz(fit.srtX);
     return {
       srtX: fit.srtX,
       slope: fit.slope,
       degenerate: fit.degenerate,
-      thresholdHz: xToHz(fit.srtX)
+      value,                    // Hz (LPF) or dB (quiet)
+      unit: cfg.unit,
+      thresholdHz: value,       // LPF-friendly alias
+      thresholdValue: value
     };
   }
 
   function history() {
-    return xs.map((xi, i) => ({ x: xi, cutoffHz: xToHz(xi), correct: ys[i] === 1 }));
+    return xs.map((xi, i) => ({ x: xi, value: xToHz(xi), cutoffHz: xToHz(xi), correct: ys[i] === 1 }));
   }
 
   return {
-    currentX, currentCutoffHz, update, estimate,
+    currentX, currentValue, currentCutoffHz, update, estimate,
+    unit: cfg.unit, mode: cfg.mode, axisIsLog: cfg.axisIsLog,
     trials: () => xs.length,
     done: () => xs.length >= cfg.nTrials,
     history,
@@ -1053,29 +1121,35 @@ function createTrack(cfg) {
 }
 
 // Resolve an adaptiveConfig record (from AdaptiveConfig) + a resolved start
-// cutoff (Hz) into the internal cfg the track consumes.
-function resolveTrackConfig(adaptive, startCutoffHz) {
-  const axisIsLog = true; // LPF mode
-  const toX = (hz) => Math.log10(hz);
+// value (Hz for LPF, dB for quiet) into the internal cfg the track consumes.
+// Mode-aware: LPF uses a log10(Hz) axis, quiet uses a linear dB axis.
+function resolveTrackConfig(adaptive, startValue) {
+  const axisIsLog = adaptive.axisIsLog !== false && adaptive.mode !== "quiet";
+  const toX = axisIsLog ? (v) => Math.log10(v) : (v) => v;
+  const defStart = startValue
+    || adaptive.startValue
+    || (axisIsLog ? (adaptive.startCutoffHz || 1000) : (adaptive.start || 65));
   return {
+    mode: adaptive.mode || (axisIsLog ? "lpf" : "quiet"),
     procedure: adaptive.procedure || "wudr",
     A: adaptive.A || 4,
     target: adaptive.target ?? midpointTarget(adaptive.A || 4),
-    xlo: adaptive.xlo ?? Math.log10(80),
-    xhi: adaptive.xhi ?? Math.log10(6000),
+    xlo: adaptive.xlo ?? (axisIsLog ? Math.log10(80) : 20),
+    xhi: adaptive.xhi ?? (axisIsLog ? Math.log10(6000) : 85),
     axisIsLog,
+    unit: adaptive.unit || (axisIsLog ? "Hz" : "dB"),
     harder: -1,
-    startX: toX(startCutoffHz || adaptive.startCutoffHz || 1000),
+    startX: toX(defStart),
     nTrials: adaptive.nTrials || 33,
     workDown: adaptive.workDown, workUp: adaptive.workUp,
     initDown: adaptive.initDown, initUp: adaptive.initUp,
     switchRev: adaptive.switchRev,
-    a1slope: adaptive.a1slope ?? 10,
-    a2slope: adaptive.a2slope ?? 10,
+    a1slope: adaptive.a1slope ?? (axisIsLog ? 10 : 0.10),
+    a2slope: adaptive.a2slope ?? (axisIsLog ? 10 : 0.10),
     pLow: adaptive.pLow ?? 0.40, pHigh: adaptive.pHigh ?? 0.85,
     a2Doubling: adaptive.a2Doubling !== false,
-    minStep: adaptive.minStep ?? 0.01,
-    slopeHint: adaptive.slopeHint ?? 43
+    minStep: adaptive.minStep ?? (axisIsLog ? 0.01 : 0.25),
+    slopeHint: adaptive.slopeHint ?? (axisIsLog ? 43 : 6)
   };
 }
 
@@ -1177,7 +1251,8 @@ let trainingAborted = false;
 // Active adaptive track (test phase only). null => no adaptive tracking (plays
 // unfiltered at a fixed level, e.g. training or a non-adaptive run).
 let track = null;
-let currentCutoffHz = null;   // cutoff for the pending test trial (null = unfiltered)
+let currentCutoffHz = null;   // pending trial's adaptive value (Hz LPF / dB quiet)
+let quietStartLevel = null;   // quiet-mode start level (dB), for uncalibrated relative gain
 
 let lastBreakAt = -1;  // remember the index where we last stopped for a break
 
@@ -1211,20 +1286,26 @@ function beginPhase(p) {
       showTrainingItem();
     } else {
       // Build the adaptive track from the persisted Setup config. If none is
-      // present (app never visited Setup), fall back to defaults via
-      // resolveTrackConfig's own guards.
+      // present (app never visited Setup), resolveTrackConfig's guards apply.
       const adaptive = (config && config.adaptive) ? config.adaptive : {};
-      // Start cutoff: absolute Hz, or relative-to-threshold (octaves). We have
-      // no prior threshold in-session, so relative starts resolve against the
-      // absolute starting cutoff for now (documented; Step 3 relative-start
-      // becomes meaningful once a running threshold exists).
-      let startHz = adaptive.startCutoffHz || 1000;
+      const isQuiet = adaptive.mode === "quiet";
+
+      // Start value: Hz (LPF) or dB (quiet). Relative start shifts the start by
+      // octaves (LPF) or dB (quiet); with no prior in-session threshold it
+      // resolves against the absolute start for now (documented).
+      let startVal = isQuiet
+        ? (adaptive.startValue ?? adaptive.start ?? 65)
+        : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
       if (adaptive.startMode === "relative" && isFinite(adaptive.startRelOctaves)) {
-        startHz = startHz * Math.pow(2, adaptive.startRelOctaves);
+        startVal = isQuiet
+          ? startVal + adaptive.startRelOctaves               // dB shift
+          : startVal * Math.pow(2, adaptive.startRelOctaves); // octave shift
       }
-      const trackCfg = resolveTrackConfig(adaptive, startHz);
+
+      quietStartLevel = isQuiet ? startVal : null;
+      const trackCfg = resolveTrackConfig(adaptive, startVal);
       track = createTrack(trackCfg);
-      currentCutoffHz = track.currentCutoffHz();
+      currentCutoffHz = track.currentValue();
       showScreen("test");
       nextTrial();
     }
@@ -1326,9 +1407,9 @@ if (phase === "test") {
     trialIndex++;
     return nextTrial();
   }
-  // Refresh the pending cutoff from the track for this trial.
+  // Refresh the pending adaptive value from the track for this trial.
   if (phase === "test" && track) {
-    currentCutoffHz = track.currentCutoffHz();
+    currentCutoffHz = track.currentValue();
   }
   const shuffled = [...item.images];
   shuffle(shuffled);
@@ -1391,16 +1472,37 @@ if (phase === "test") {
     startTime = performance.now();
   };
 
-  // Play unfiltered (cutoffHz: null) for now; Step 5 supplies the adaptive
-  // cutoff. onStarted fires at buffer start(); we then wait `offset` ms.
-  // Presentation gain from calibration at the single run level (slider level).
+  // Mode-aware presentation:
+  //  LPF  : filter at the adaptive CUTOFF; gain from the fixed run level.
+  //  Quiet: no filter; the adaptive VALUE is the presentation LEVEL (dB),
+  //         applied as gain (calibrated -> absolute dB(A); uncalibrated ->
+  //         relative dB re the start level).
+  const adaptive = (config && config.adaptive) ? config.adaptive : {};
+  const isQuiet = (phase === "test" && track) ? adaptive.mode === "quiet" : false;
+  const calibrated = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+
+  let cutoffHz = null;
   let extraGainDb = 0;
-  if (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated()) {
-    extraGainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb);
+
+  if (phase === "test" && track && isQuiet) {
+    // Quiet mode: value is a dB level.
+    const level = currentCutoffHz; // (mode-neutral value; dB here)
+    if (calibrated) {
+      extraGainDb = Calibration.gainDbForLevel(level);
+    } else {
+      // Uncalibrated: play relative to the start level (start = unity).
+      extraGainDb = level - (quietStartLevel ?? level);
+    }
+  } else {
+    // LPF mode (or non-adaptive): filter at the cutoff; fixed-level gain.
+    cutoffHz = (phase === "test" && track) ? currentCutoffHz : null;
+    if (calibrated) {
+      extraGainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb);
+    }
   }
 
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
-    cutoffHz: (phase === "test" && track) ? currentCutoffHz : null,
+    cutoffHz,
     extraGainDb,
     routing: (config && config.routing) || "binaural",
     onStarted: () => {
@@ -1432,15 +1534,24 @@ function recordResponse(img) {
     timeMs: Math.round(timeTaken)
   };
 
-  // Adaptive: record the presented cutoff, advance the track, and capture the
-  // running threshold estimate.
+  // Adaptive: record the presented value (cutoff Hz for LPF, level dB for
+  // quiet), advance the track, and capture the running threshold estimate.
   if (phase === "test" && track) {
-    entry.cutoffHz = Math.round(currentCutoffHz);
+    const adaptive = (config && config.adaptive) ? config.adaptive : {};
+    const unit = track.unit || (adaptive.mode === "quiet" ? "dB" : "Hz");
+    const val = (unit === "Hz") ? Math.round(currentCutoffHz) : +currentCutoffHz.toFixed(1);
+    entry.value = val;
+    entry.unit = unit;
+    entry.mode = adaptive.mode || "lpf";
+    // Back-compat alias so existing LPF-oriented consumers keep working.
+    entry.cutoffHz = val;
     entry.isCorrect = isCorrect;
-    entry.procedure = (config.adaptive && config.adaptive.procedure) || "wudr";
+    entry.procedure = adaptive.procedure || "wudr";
     track.update(isCorrect);
     const est = track.estimate();
-    entry.estimateHz = isFinite(est.thresholdHz) ? Math.round(est.thresholdHz) : null;
+    const estV = est.value;
+    entry.estimate = isFinite(estV) ? ((unit === "Hz") ? Math.round(estV) : +estV.toFixed(1)) : null;
+    entry.estimateHz = entry.estimate; // alias
   }
 
   responseLog.push(entry);
@@ -1894,13 +2005,15 @@ function saveResults(optionalNote = "") {
     startedAt: testStartedAt?.toISOString() || null,
     timestamp: now.toISOString(),
     data: responseLog.slice(),
-    adaptive: (config && config.adaptive && responseLog.some(r => typeof r.cutoffHz === "number"))
+    adaptive: (config && config.adaptive && responseLog.some(r => typeof r.value === "number" || typeof r.cutoffHz === "number"))
       ? {
           config: config.adaptive,
+          mode: (config.adaptive && config.adaptive.mode) || "lpf",
           routing: (config && config.routing) || "binaural",
-          thresholdHz: (() => {
+          threshold: (() => {
             for (let i = responseLog.length - 1; i >= 0; i--) {
-              if (typeof responseLog[i].estimateHz === "number") return responseLog[i].estimateHz;
+              const e = (typeof responseLog[i].estimate === "number") ? responseLog[i].estimate : responseLog[i].estimateHz;
+              if (typeof e === "number") return e;
             }
             return null;
           })()
@@ -1909,13 +2022,19 @@ function saveResults(optionalNote = "") {
     note: optionalNote || undefined
   };
 
-  // Detect an adaptive run (rows carry cutoffHz) and build a self-documenting
+  // Detect an adaptive run (rows carry a value) and build a self-documenting
   // settings + threshold header, mirroring the Monte-Carlo export style.
-  const isAdaptive = responseLog.some(r => typeof r.cutoffHz === "number");
+  const isAdaptive = responseLog.some(r => typeof r.value === "number" || typeof r.cutoffHz === "number");
   const adaptiveCfg = (config && config.adaptive) ? config.adaptive : null;
+  const mode = (adaptiveCfg && adaptiveCfg.mode) || "lpf";
+  const unit = (mode === "quiet") ? "dB" : "Hz";
+  const stepUnit = (mode === "quiet") ? "dB" : "dec";
+  const valOf = (r) => (typeof r.value === "number" ? r.value : r.cutoffHz);
+  const estOf = (r) => (typeof r.estimate === "number" ? r.estimate : r.estimateHz);
   const lastEstimate = (() => {
     for (let i = responseLog.length - 1; i >= 0; i--) {
-      if (typeof responseLog[i].estimateHz === "number") return responseLog[i].estimateHz;
+      const e = estOf(responseLog[i]);
+      if (typeof e === "number") return e;
     }
     return null;
   })();
@@ -1927,17 +2046,21 @@ function saveResults(optionalNote = "") {
   ];
 
   if (isAdaptive && adaptiveCfg) {
+    const startShown = (mode === "quiet")
+      ? (adaptiveCfg.startValue ?? adaptiveCfg.start ?? "")
+      : (adaptiveCfg.startValue ?? adaptiveCfg.startCutoffHz ?? "");
     txtLines.push(
+      `# Mode\t${mode}`,
       `# Procedure\t${adaptiveCfg.procedure}`,
       `# Alternatives\t${adaptiveCfg.A}`,
       `# Target\t${((adaptiveCfg.target ?? 0.625) * 100).toFixed(1)}%`,
-      `# Start cutoff (Hz)\t${adaptiveCfg.startCutoffHz}`,
+      `# Start (${unit})\t${startShown}`,
       `# Trials\t${adaptiveCfg.nTrials}`,
-      `# WUDR steps (dec) work down/up\t${adaptiveCfg.workDown}/${adaptiveCfg.workUp}`,
-      `# WUDR steps (dec) init down/up\t${adaptiveCfg.initDown}/${adaptiveCfg.initUp}`,
+      `# WUDR steps (${stepUnit}) work down/up\t${adaptiveCfg.workDown}/${adaptiveCfg.workUp}`,
+      `# WUDR steps (${stepUnit}) init down/up\t${adaptiveCfg.initDown}/${adaptiveCfg.initUp}`,
       `# Switch after reversals\t${adaptiveCfg.switchRev}`,
       `# Routing\t${(config && config.routing) || "binaural"}`,
-      `# Threshold estimate (Hz)\t${lastEstimate != null ? lastEstimate : "n/a"}`
+      `# Threshold estimate (${unit})\t${lastEstimate != null ? lastEstimate : "n/a"}`
     );
   }
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
@@ -1946,11 +2069,13 @@ function saveResults(optionalNote = "") {
 
   txtLines.push("");
   if (isAdaptive) {
-    txtLines.push("Trial\tSound\tCorrect\tChosen\tCorrect?\tCutoff_Hz\tProcedure\tEstimate_Hz\tTime_ms");
+    const valCol = (mode === "quiet") ? "Level_dB" : "Cutoff_Hz";
+    const estCol = (mode === "quiet") ? "Estimate_dB" : "Estimate_Hz";
+    txtLines.push(`Trial\tSound\tCorrect\tChosen\tCorrect?\t${valCol}\tProcedure\t${estCol}\tTime_ms`);
     for (const r of responseLog) {
       txtLines.push(
         `${r.index}\t${r.sound}\t${r.correct}\t${r.chosen}\t` +
-        `${r.isCorrect ? 1 : 0}\t${r.cutoffHz ?? ""}\t${r.procedure ?? ""}\t${r.estimateHz ?? ""}\t${r.timeMs}`
+        `${r.isCorrect ? 1 : 0}\t${valOf(r) ?? ""}\t${r.procedure ?? ""}\t${estOf(r) ?? ""}\t${r.timeMs}`
       );
     }
   } else {
@@ -2447,6 +2572,7 @@ function setupCalibrationScreen() {
 
 // --- Setup screen wiring (adaptive controls, Step 4) -------------------------
 let _setupProc = "wudr";
+let _setupMode = "lpf";
 
 function currentAdaptiveCfg() {
   if (typeof AdaptiveConfig !== "undefined") return AdaptiveConfig.loadAdaptiveConfig();
@@ -2464,6 +2590,45 @@ function showProcBlocks(proc) {
   });
 }
 
+function showModeButtons(mode) {
+  document.querySelectorAll("#modeSegmented .seg-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.mode === mode);
+  });
+  const hint = document.getElementById("modeHint");
+  if (hint) hint.textContent = (mode === "quiet")
+    ? "Adapts presentation level (dB). Uncalibrated runs are relative to the start level."
+    : "Adapts the equivalent low-pass cutoff (Hz).";
+}
+
+// Relabel units and adjust input bounds/steps for the active mode.
+function applyModeLabels(mode) {
+  const isQuiet = (mode === "quiet");
+  const stepUnit = isQuiet ? "dB" : "dec";
+  const setText = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  setText("lblStart", isQuiet ? "Starting level (dB)" : "Starting cutoff (Hz)");
+  setText("lblStartRel", isQuiet ? "Start (dB re threshold)" : "Start (octaves re threshold)");
+  document.querySelectorAll(".lblStepUnit-wd").forEach(e => e.textContent = `Working down step (${stepUnit})`);
+  document.querySelectorAll(".lblStepUnit-wu").forEach(e => e.textContent = `Working up step (${stepUnit})`);
+  document.querySelectorAll(".lblStepUnit-id").forEach(e => e.textContent = `Initial down step (${stepUnit})`);
+  document.querySelectorAll(".lblStepUnit-iu").forEach(e => e.textContent = `Initial up step (${stepUnit})`);
+
+  // Start-cutoff input bounds/step per mode.
+  const sc = document.getElementById("setStartCutoff");
+  if (sc) {
+    if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
+    else { sc.min = 80; sc.max = 6000; sc.step = 10; }
+  }
+  // Step inputs coarser in quiet (dB) than LPF (decades).
+  ["setWorkDown","setWorkUp","setInitDown","setInitUp"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.step = isQuiet ? 0.1 : 0.0001;
+  });
+  const wudrHint = document.getElementById("wudrHint");
+  if (wudrHint) wudrHint.textContent = isQuiet
+    ? "Quiet defaults: down 0.6 dB / up 1.0 dB (working); down 3 / up 5 (initial). 0 reversals = single-phase."
+    : "Defaults: down \u22124.76% / up +8.33% (working); down \u221211.1% / up +20.8% (initial). 0 reversals = single-phase.";
+}
+
 function toggleStartMode(mode) {
   const abs = document.getElementById("setStartCutoffWrap");
   const rel = document.getElementById("setStartRelWrap");
@@ -2471,34 +2636,39 @@ function toggleStartMode(mode) {
   if (rel) rel.hidden = (mode !== "relative");
 }
 
-function populateSetupForm() {
-  const cfg = currentAdaptiveCfg();
-  _setupProc = cfg.procedure || "wudr";
-  showProcBlocks(_setupProc);
-
+// Populate the whole form from a resolved cfg object.
+function fillFormFromCfg(cfg) {
   const set = (id, v) => { const el = document.getElementById(id); if (el != null && v != null) el.value = v; };
+  const isQuiet = (cfg.mode === "quiet");
   set("setStartMode", cfg.startMode || "absolute");
   toggleStartMode(cfg.startMode || "absolute");
-  set("setStartCutoff", cfg.startCutoffHz ?? 1000);
+  set("setStartCutoff", isQuiet ? (cfg.startValue ?? cfg.start ?? 65) : (cfg.startValue ?? cfg.startCutoffHz ?? 1000));
   set("setStartRel", cfg.startRelOctaves ?? 0);
   set("setNTrials", cfg.nTrials ?? 33);
   set("setA", cfg.A ?? 4);
   set("setTarget", ((cfg.target ?? 0.625) * 100).toFixed(1) + "%");
-
   set("setWorkDown", cfg.workDown);
   set("setWorkUp", cfg.workUp);
   set("setInitDown", cfg.initDown);
   set("setInitUp", cfg.initUp);
   set("setSwitchRev", cfg.switchRev);
-
   set("setA1Slope", cfg.a1slope);
   set("setA2Slope", cfg.a2slope);
   set("setPLow", (cfg.pLow ?? 0.40).toFixed(2));
   set("setPHigh", (cfg.pHigh ?? 0.85).toFixed(2));
   const dbl = document.getElementById("setA2Doubling");
   if (dbl) dbl.checked = cfg.a2Doubling !== false;
-
   set("setRouting", cfg.routing || (config && config.routing) || "binaural");
+}
+
+function populateSetupForm() {
+  const cfg = currentAdaptiveCfg();
+  _setupProc = cfg.procedure || "wudr";
+  _setupMode = cfg.mode || "lpf";
+  showProcBlocks(_setupProc);
+  showModeButtons(_setupMode);
+  applyModeLabels(_setupMode);
+  fillFormFromCfg(cfg);
 
   const status = document.getElementById("setupStatus");
   if (status) status.textContent = "";
@@ -2512,31 +2682,39 @@ function readSetupForm() {
   };
   const val = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
   const A = 4;
+  const isQuiet = (_setupMode === "quiet");
   const sweet = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.sweetPointsFor(A) : { pLow: 0.40, pHigh: 0.85 };
   const midpoint = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.midpointTarget(A) : 0.625;
+  const startVal = num("setStartCutoff", isQuiet ? 65 : 1000);
 
   return {
+    mode: _setupMode,
     procedure: _setupProc,
     A,
     target: midpoint,
+    axisIsLog: !isQuiet,
+    unit: isQuiet ? "dB" : "Hz",
+    stepUnit: isQuiet ? "dB" : "decades",
+    slopeUnit: isQuiet ? "%/dB" : "%/octave",
     startMode: val("setStartMode") || "absolute",
-    startCutoffHz: num("setStartCutoff", 1000),
+    startValue: startVal,
+    startCutoffHz: isQuiet ? undefined : startVal,  // LPF alias
     startRelOctaves: num("setStartRel", 0),
     nTrials: Math.max(1, Math.min(66, Math.round(num("setNTrials", 33)))),
-    xlo: Math.log10(80),
-    xhi: Math.log10(6000),
-    workDown: num("setWorkDown", 0.0212),
-    workUp: num("setWorkUp", 0.0348),
-    initDown: num("setInitDown", 0.0512),
-    initUp: num("setInitUp", 0.0822),
+    xlo: isQuiet ? 20 : Math.log10(80),
+    xhi: isQuiet ? 85 : Math.log10(6000),
+    workDown: num("setWorkDown", isQuiet ? 0.6 : 0.0212),
+    workUp: num("setWorkUp", isQuiet ? 1.0 : 0.0348),
+    initDown: num("setInitDown", isQuiet ? 3.0 : 0.0511),
+    initUp: num("setInitUp", isQuiet ? 5.0 : 0.0822),
     switchRev: Math.max(0, Math.round(num("setSwitchRev", 5))),
-    a1slope: num("setA1Slope", 10),
-    minStep: 0.01,
-    a2slope: num("setA2Slope", 10),
+    a1slope: num("setA1Slope", isQuiet ? 0.10 : 10),
+    minStep: isQuiet ? 0.25 : 0.01,
+    a2slope: num("setA2Slope", isQuiet ? 0.10 : 10),
     pLow: sweet.pLow,
     pHigh: sweet.pHigh,
     a2Doubling: !!(document.getElementById("setA2Doubling") || {}).checked,
-    slopeHint: 43,
+    slopeHint: isQuiet ? 6 : 43,
     routing: val("setRouting") || "binaural"
   };
 }
@@ -2548,6 +2726,27 @@ function setupSetupScreen() {
   seg.querySelectorAll(".seg-btn").forEach(btn => {
     btn.onclick = () => { _setupProc = btn.dataset.proc; showProcBlocks(_setupProc); };
   });
+
+  // Mode toggle: switch axis/units and load that mode's preset step values,
+  // preserving procedure / nTrials / start mode / routing from the form.
+  const modeSeg = document.getElementById("modeSegmented");
+  if (modeSeg) {
+    modeSeg.querySelectorAll(".seg-btn").forEach(btn => {
+      btn.onclick = () => {
+        const newMode = btn.dataset.mode;
+        if (newMode === _setupMode) return;
+        _setupMode = newMode;
+        showModeButtons(_setupMode);
+        applyModeLabels(_setupMode);
+        // Apply the preset for the new mode over the current form values.
+        if (typeof AdaptiveConfig !== "undefined") {
+          const current = readSetupForm();
+          const preset = AdaptiveConfig.applyModePreset(current, _setupMode);
+          fillFormFromCfg(preset);
+        }
+      };
+    });
+  }
 
   const startMode = document.getElementById("setStartMode");
   if (startMode) startMode.onchange = () => toggleStartMode(startMode.value);

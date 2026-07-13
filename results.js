@@ -26,13 +26,15 @@ export function saveResults(optionalNote = "") {
     startedAt: testStartedAt?.toISOString() || null,
     timestamp: now.toISOString(),
     data: responseLog.slice(),
-    adaptive: (config && config.adaptive && responseLog.some(r => typeof r.cutoffHz === "number"))
+    adaptive: (config && config.adaptive && responseLog.some(r => typeof r.value === "number" || typeof r.cutoffHz === "number"))
       ? {
           config: config.adaptive,
+          mode: (config.adaptive && config.adaptive.mode) || "lpf",
           routing: (config && config.routing) || "binaural",
-          thresholdHz: (() => {
+          threshold: (() => {
             for (let i = responseLog.length - 1; i >= 0; i--) {
-              if (typeof responseLog[i].estimateHz === "number") return responseLog[i].estimateHz;
+              const e = (typeof responseLog[i].estimate === "number") ? responseLog[i].estimate : responseLog[i].estimateHz;
+              if (typeof e === "number") return e;
             }
             return null;
           })()
@@ -41,13 +43,19 @@ export function saveResults(optionalNote = "") {
     note: optionalNote || undefined
   };
 
-  // Detect an adaptive run (rows carry cutoffHz) and build a self-documenting
+  // Detect an adaptive run (rows carry a value) and build a self-documenting
   // settings + threshold header, mirroring the Monte-Carlo export style.
-  const isAdaptive = responseLog.some(r => typeof r.cutoffHz === "number");
+  const isAdaptive = responseLog.some(r => typeof r.value === "number" || typeof r.cutoffHz === "number");
   const adaptiveCfg = (config && config.adaptive) ? config.adaptive : null;
+  const mode = (adaptiveCfg && adaptiveCfg.mode) || "lpf";
+  const unit = (mode === "quiet") ? "dB" : "Hz";
+  const stepUnit = (mode === "quiet") ? "dB" : "dec";
+  const valOf = (r) => (typeof r.value === "number" ? r.value : r.cutoffHz);
+  const estOf = (r) => (typeof r.estimate === "number" ? r.estimate : r.estimateHz);
   const lastEstimate = (() => {
     for (let i = responseLog.length - 1; i >= 0; i--) {
-      if (typeof responseLog[i].estimateHz === "number") return responseLog[i].estimateHz;
+      const e = estOf(responseLog[i]);
+      if (typeof e === "number") return e;
     }
     return null;
   })();
@@ -59,17 +67,21 @@ export function saveResults(optionalNote = "") {
   ];
 
   if (isAdaptive && adaptiveCfg) {
+    const startShown = (mode === "quiet")
+      ? (adaptiveCfg.startValue ?? adaptiveCfg.start ?? "")
+      : (adaptiveCfg.startValue ?? adaptiveCfg.startCutoffHz ?? "");
     txtLines.push(
+      `# Mode\t${mode}`,
       `# Procedure\t${adaptiveCfg.procedure}`,
       `# Alternatives\t${adaptiveCfg.A}`,
       `# Target\t${((adaptiveCfg.target ?? 0.625) * 100).toFixed(1)}%`,
-      `# Start cutoff (Hz)\t${adaptiveCfg.startCutoffHz}`,
+      `# Start (${unit})\t${startShown}`,
       `# Trials\t${adaptiveCfg.nTrials}`,
-      `# WUDR steps (dec) work down/up\t${adaptiveCfg.workDown}/${adaptiveCfg.workUp}`,
-      `# WUDR steps (dec) init down/up\t${adaptiveCfg.initDown}/${adaptiveCfg.initUp}`,
+      `# WUDR steps (${stepUnit}) work down/up\t${adaptiveCfg.workDown}/${adaptiveCfg.workUp}`,
+      `# WUDR steps (${stepUnit}) init down/up\t${adaptiveCfg.initDown}/${adaptiveCfg.initUp}`,
       `# Switch after reversals\t${adaptiveCfg.switchRev}`,
       `# Routing\t${(config && config.routing) || "binaural"}`,
-      `# Threshold estimate (Hz)\t${lastEstimate != null ? lastEstimate : "n/a"}`
+      `# Threshold estimate (${unit})\t${lastEstimate != null ? lastEstimate : "n/a"}`
     );
   }
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
@@ -78,11 +90,13 @@ export function saveResults(optionalNote = "") {
 
   txtLines.push("");
   if (isAdaptive) {
-    txtLines.push("Trial\tSound\tCorrect\tChosen\tCorrect?\tCutoff_Hz\tProcedure\tEstimate_Hz\tTime_ms");
+    const valCol = (mode === "quiet") ? "Level_dB" : "Cutoff_Hz";
+    const estCol = (mode === "quiet") ? "Estimate_dB" : "Estimate_Hz";
+    txtLines.push(`Trial\tSound\tCorrect\tChosen\tCorrect?\t${valCol}\tProcedure\t${estCol}\tTime_ms`);
     for (const r of responseLog) {
       txtLines.push(
         `${r.index}\t${r.sound}\t${r.correct}\t${r.chosen}\t` +
-        `${r.isCorrect ? 1 : 0}\t${r.cutoffHz ?? ""}\t${r.procedure ?? ""}\t${r.estimateHz ?? ""}\t${r.timeMs}`
+        `${r.isCorrect ? 1 : 0}\t${valOf(r) ?? ""}\t${r.procedure ?? ""}\t${estOf(r) ?? ""}\t${r.timeMs}`
       );
     }
   } else {

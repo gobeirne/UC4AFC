@@ -173,7 +173,8 @@ function createTrack(cfg) {
     return clampX(x);
   }
 
-  function currentCutoffHz() { return xToHz(currentX()); }
+  function currentValue() { return xToHz(currentX()); }   // Hz (LPF) or dB (quiet)
+  function currentCutoffHz() { return currentValue(); }   // LPF-friendly alias
 
   function update(correct) {
     const y = correct ? 1 : 0;
@@ -230,20 +231,25 @@ function createTrack(cfg) {
 
   function estimate() {
     const fit = fitMLE(cfg, xs.slice(), ys.slice(), cfg.slopeHint);
+    const value = xToHz(fit.srtX);
     return {
       srtX: fit.srtX,
       slope: fit.slope,
       degenerate: fit.degenerate,
-      thresholdHz: xToHz(fit.srtX)
+      value,                    // Hz (LPF) or dB (quiet)
+      unit: cfg.unit,
+      thresholdHz: value,       // LPF-friendly alias
+      thresholdValue: value
     };
   }
 
   function history() {
-    return xs.map((xi, i) => ({ x: xi, cutoffHz: xToHz(xi), correct: ys[i] === 1 }));
+    return xs.map((xi, i) => ({ x: xi, value: xToHz(xi), cutoffHz: xToHz(xi), correct: ys[i] === 1 }));
   }
 
   return {
-    currentX, currentCutoffHz, update, estimate,
+    currentX, currentValue, currentCutoffHz, update, estimate,
+    unit: cfg.unit, mode: cfg.mode, axisIsLog: cfg.axisIsLog,
     trials: () => xs.length,
     done: () => xs.length >= cfg.nTrials,
     history,
@@ -252,29 +258,35 @@ function createTrack(cfg) {
 }
 
 // Resolve an adaptiveConfig record (from AdaptiveConfig) + a resolved start
-// cutoff (Hz) into the internal cfg the track consumes.
-function resolveTrackConfig(adaptive, startCutoffHz) {
-  const axisIsLog = true; // LPF mode
-  const toX = (hz) => Math.log10(hz);
+// value (Hz for LPF, dB for quiet) into the internal cfg the track consumes.
+// Mode-aware: LPF uses a log10(Hz) axis, quiet uses a linear dB axis.
+function resolveTrackConfig(adaptive, startValue) {
+  const axisIsLog = adaptive.axisIsLog !== false && adaptive.mode !== "quiet";
+  const toX = axisIsLog ? (v) => Math.log10(v) : (v) => v;
+  const defStart = startValue
+    || adaptive.startValue
+    || (axisIsLog ? (adaptive.startCutoffHz || 1000) : (adaptive.start || 65));
   return {
+    mode: adaptive.mode || (axisIsLog ? "lpf" : "quiet"),
     procedure: adaptive.procedure || "wudr",
     A: adaptive.A || 4,
     target: adaptive.target ?? midpointTarget(adaptive.A || 4),
-    xlo: adaptive.xlo ?? Math.log10(80),
-    xhi: adaptive.xhi ?? Math.log10(6000),
+    xlo: adaptive.xlo ?? (axisIsLog ? Math.log10(80) : 20),
+    xhi: adaptive.xhi ?? (axisIsLog ? Math.log10(6000) : 85),
     axisIsLog,
+    unit: adaptive.unit || (axisIsLog ? "Hz" : "dB"),
     harder: -1,
-    startX: toX(startCutoffHz || adaptive.startCutoffHz || 1000),
+    startX: toX(defStart),
     nTrials: adaptive.nTrials || 33,
     workDown: adaptive.workDown, workUp: adaptive.workUp,
     initDown: adaptive.initDown, initUp: adaptive.initUp,
     switchRev: adaptive.switchRev,
-    a1slope: adaptive.a1slope ?? 10,
-    a2slope: adaptive.a2slope ?? 10,
+    a1slope: adaptive.a1slope ?? (axisIsLog ? 10 : 0.10),
+    a2slope: adaptive.a2slope ?? (axisIsLog ? 10 : 0.10),
     pLow: adaptive.pLow ?? 0.40, pHigh: adaptive.pHigh ?? 0.85,
     a2Doubling: adaptive.a2Doubling !== false,
-    minStep: adaptive.minStep ?? 0.01,
-    slopeHint: adaptive.slopeHint ?? 43
+    minStep: adaptive.minStep ?? (axisIsLog ? 0.01 : 0.25),
+    slopeHint: adaptive.slopeHint ?? (axisIsLog ? 43 : 6)
   };
 }
 
