@@ -322,10 +322,22 @@ export function recordResponse(img) {
     entry.isCorrect = isCorrect;
     entry.procedure = adaptive.procedure || "wudr";
     track.update(isCorrect);
+    // Running estimate is gated until the phase switch (estimateReady), and
+    // additionally blanked whenever the fit is degenerate/bound-pinned, so the
+    // live column never shows floor-pinned artefacts. The FINAL threshold is
+    // computed from the complete track (see saveResults) and is unaffected.
     const est = track.estimate();
-    const estV = est.value;
-    entry.estimate = isFinite(estV) ? ((unit === "Hz") ? Math.round(estV) : +estV.toFixed(1)) : null;
+    const showRunning = track.estimateReady() && !est.degenerate && isFinite(est.value);
+    entry.estimate = showRunning ? ((unit === "Hz") ? Math.round(est.value) : +est.value.toFixed(1)) : null;
     entry.estimateHz = entry.estimate; // alias
+
+    // Stop-at-n: the FINAL estimator applied to trials 1..n (this trial). Blank
+    // when degenerate so the post-hoc stopping curve has honest gaps. Reading
+    // this column down the file answers "if we'd stopped at trial n, the
+    // threshold would have been ___".
+    const stopVal = track.stopAtEstimate(); // null when degenerate/pinned
+    entry.stopAtN = (stopVal == null) ? null
+      : ((unit === "Hz") ? Math.round(stopVal) : +stopVal.toFixed(1));
   }
 
   responseLog.push(entry);

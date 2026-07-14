@@ -232,10 +232,16 @@ function createTrack(cfg) {
   function estimate() {
     const fit = fitMLE(cfg, xs.slice(), ys.slice(), cfg.slopeHint);
     const value = xToHz(fit.srtX);
+    // A fit pinned to an axis bound is not identifiable (the near-separable
+    // window collapses the MLE onto xlo/xhi). Flag it alongside the explicit
+    // all-correct/all-incorrect degeneracy from fitMLE.
+    const eps = 1e-6;
+    const pinned = (fit.srtX <= cfg.xlo + eps) || (fit.srtX >= cfg.xhi - eps);
     return {
       srtX: fit.srtX,
       slope: fit.slope,
-      degenerate: fit.degenerate,
+      degenerate: !!fit.degenerate || pinned,
+      pinned,
       value,                    // Hz (LPF) or dB (quiet)
       unit: cfg.unit,
       thresholdHz: value,       // LPF-friendly alias
@@ -243,17 +249,44 @@ function createTrack(cfg) {
     };
   }
 
+  // "If the run stopped at the current trial": the FINAL estimator (fitMLE)
+  // applied to all trials collected so far. Identical estimator to estimate();
+  // this name documents intent for the per-trial stop-at-n column. Returns the
+  // value or null when the fit is degenerate/pinned (so the stopping curve has
+  // honest gaps rather than floor-pinned artefacts).
+  function stopAtEstimate() {
+    const e = estimate();
+    return e.degenerate ? null : e.value;
+  }
+
   function history() {
     return xs.map((xi, i) => ({ x: xi, value: xToHz(xi), cutoffHz: xToHz(xi), correct: ys[i] === 1 }));
   }
 
+  // The RUNNING estimate is only meaningful once the coarse initial phase is
+  // over — before the phase switch (switchRev reversals) an MLE on sparse,
+  // near-monotonic data is degenerate and thrashes (pins to a bound / overshoots).
+  // This gates the PER-TRIAL running estimate only; the FINAL estimate() is
+  // always computed from the complete track and is unaffected. WUDR uses the
+  // phase switch; A1/A2 have no phases, so they reuse switchRev as a reversal
+  // floor for the same "enough information" reason.
+  function estimateReady() {
+    const need = (typeof cfg.switchRev === "number" && cfg.switchRev > 0) ? cfg.switchRev : 0;
+    if (need === 0) return true; // single-phase: no gating requested
+    return reversalCount() >= need;
+  }
+  function reversalCount() {
+    return (cfg.procedure === "a2") ? (A2.T[0].rev + A2.T[1].rev) : rev;
+  }
+
   return {
-    currentX, currentValue, currentCutoffHz, update, estimate,
+    currentX, currentValue, currentCutoffHz, update, estimate, stopAtEstimate,
     unit: cfg.unit, mode: cfg.mode, axisIsLog: cfg.axisIsLog,
     trials: () => xs.length,
     done: () => xs.length >= cfg.nTrials,
     history,
-    reversals: () => (cfg.procedure === "a2" ? (A2.T[0].rev + A2.T[1].rev) : rev)
+    reversals: reversalCount,
+    estimateReady
   };
 }
 

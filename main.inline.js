@@ -1095,10 +1095,16 @@ function createTrack(cfg) {
   function estimate() {
     const fit = fitMLE(cfg, xs.slice(), ys.slice(), cfg.slopeHint);
     const value = xToHz(fit.srtX);
+    // A fit pinned to an axis bound is not identifiable (the near-separable
+    // window collapses the MLE onto xlo/xhi). Flag it alongside the explicit
+    // all-correct/all-incorrect degeneracy from fitMLE.
+    const eps = 1e-6;
+    const pinned = (fit.srtX <= cfg.xlo + eps) || (fit.srtX >= cfg.xhi - eps);
     return {
       srtX: fit.srtX,
       slope: fit.slope,
-      degenerate: fit.degenerate,
+      degenerate: !!fit.degenerate || pinned,
+      pinned,
       value,                    // Hz (LPF) or dB (quiet)
       unit: cfg.unit,
       thresholdHz: value,       // LPF-friendly alias
@@ -1106,17 +1112,44 @@ function createTrack(cfg) {
     };
   }
 
+  // "If the run stopped at the current trial": the FINAL estimator (fitMLE)
+  // applied to all trials collected so far. Identical estimator to estimate();
+  // this name documents intent for the per-trial stop-at-n column. Returns the
+  // value or null when the fit is degenerate/pinned (so the stopping curve has
+  // honest gaps rather than floor-pinned artefacts).
+  function stopAtEstimate() {
+    const e = estimate();
+    return e.degenerate ? null : e.value;
+  }
+
   function history() {
     return xs.map((xi, i) => ({ x: xi, value: xToHz(xi), cutoffHz: xToHz(xi), correct: ys[i] === 1 }));
   }
 
+  // The RUNNING estimate is only meaningful once the coarse initial phase is
+  // over — before the phase switch (switchRev reversals) an MLE on sparse,
+  // near-monotonic data is degenerate and thrashes (pins to a bound / overshoots).
+  // This gates the PER-TRIAL running estimate only; the FINAL estimate() is
+  // always computed from the complete track and is unaffected. WUDR uses the
+  // phase switch; A1/A2 have no phases, so they reuse switchRev as a reversal
+  // floor for the same "enough information" reason.
+  function estimateReady() {
+    const need = (typeof cfg.switchRev === "number" && cfg.switchRev > 0) ? cfg.switchRev : 0;
+    if (need === 0) return true; // single-phase: no gating requested
+    return reversalCount() >= need;
+  }
+  function reversalCount() {
+    return (cfg.procedure === "a2") ? (A2.T[0].rev + A2.T[1].rev) : rev;
+  }
+
   return {
-    currentX, currentValue, currentCutoffHz, update, estimate,
+    currentX, currentValue, currentCutoffHz, update, estimate, stopAtEstimate,
     unit: cfg.unit, mode: cfg.mode, axisIsLog: cfg.axisIsLog,
     trials: () => xs.length,
     done: () => xs.length >= cfg.nTrials,
     history,
-    reversals: () => (cfg.procedure === "a2" ? (A2.T[0].rev + A2.T[1].rev) : rev)
+    reversals: reversalCount,
+    estimateReady
   };
 }
 
@@ -1548,10 +1581,22 @@ function recordResponse(img) {
     entry.isCorrect = isCorrect;
     entry.procedure = adaptive.procedure || "wudr";
     track.update(isCorrect);
+    // Running estimate is gated until the phase switch (estimateReady), and
+    // additionally blanked whenever the fit is degenerate/bound-pinned, so the
+    // live column never shows floor-pinned artefacts. The FINAL threshold is
+    // computed from the complete track (see saveResults) and is unaffected.
     const est = track.estimate();
-    const estV = est.value;
-    entry.estimate = isFinite(estV) ? ((unit === "Hz") ? Math.round(estV) : +estV.toFixed(1)) : null;
+    const showRunning = track.estimateReady() && !est.degenerate && isFinite(est.value);
+    entry.estimate = showRunning ? ((unit === "Hz") ? Math.round(est.value) : +est.value.toFixed(1)) : null;
     entry.estimateHz = entry.estimate; // alias
+
+    // Stop-at-n: the FINAL estimator applied to trials 1..n (this trial). Blank
+    // when degenerate so the post-hoc stopping curve has honest gaps. Reading
+    // this column down the file answers "if we'd stopped at trial n, the
+    // threshold would have been ___".
+    const stopVal = track.stopAtEstimate(); // null when degenerate/pinned
+    entry.stopAtN = (stopVal == null) ? null
+      : ((unit === "Hz") ? Math.round(stopVal) : +stopVal.toFixed(1));
   }
 
   responseLog.push(entry);
@@ -2031,7 +2076,16 @@ function saveResults(optionalNote = "") {
   const stepUnit = (mode === "quiet") ? "dB" : "dec";
   const valOf = (r) => (typeof r.value === "number" ? r.value : r.cutoffHz);
   const estOf = (r) => (typeof r.estimate === "number" ? r.estimate : r.estimateHz);
+  // Final threshold = the COMPLETE-track MLE (flow.finalEstimate), which is the
+  // validated estimator. The per-trial running column is gated at the phase
+  // switch and must NOT be used as the final number. Fall back to the last
+  // running estimate only if the live track is unavailable (e.g. reloaded log).
   const lastEstimate = (() => {
+    let fe = null;
+    try { fe = (typeof finalEstimate === "function") ? finalEstimate() : null; } catch (_) {}
+    if (fe && isFinite(fe.value)) {
+      return (unit === "Hz") ? Math.round(fe.value) : +fe.value.toFixed(1);
+    }
     for (let i = responseLog.length - 1; i >= 0; i--) {
       const e = estOf(responseLog[i]);
       if (typeof e === "number") return e;
@@ -2071,11 +2125,12 @@ function saveResults(optionalNote = "") {
   if (isAdaptive) {
     const valCol = (mode === "quiet") ? "Level_dB" : "Cutoff_Hz";
     const estCol = (mode === "quiet") ? "Estimate_dB" : "Estimate_Hz";
-    txtLines.push(`Trial\tSound\tCorrect\tChosen\tCorrect?\t${valCol}\tProcedure\t${estCol}\tTime_ms`);
+    const stopCol = (mode === "quiet") ? "StopAtN_dB" : "StopAtN_Hz";
+    txtLines.push(`Trial\tSound\tCorrect\tChosen\tCorrect?\t${valCol}\tProcedure\t${estCol}\t${stopCol}\tTime_ms`);
     for (const r of responseLog) {
       txtLines.push(
         `${r.index}\t${r.sound}\t${r.correct}\t${r.chosen}\t` +
-        `${r.isCorrect ? 1 : 0}\t${valOf(r) ?? ""}\t${r.procedure ?? ""}\t${estOf(r) ?? ""}\t${r.timeMs}`
+        `${r.isCorrect ? 1 : 0}\t${valOf(r) ?? ""}\t${r.procedure ?? ""}\t${estOf(r) ?? ""}\t${r.stopAtN ?? ""}\t${r.timeMs}`
       );
     }
   } else {
