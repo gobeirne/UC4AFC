@@ -303,8 +303,15 @@ const DB = (linear) => 20 * Math.log10(Math.max(linear, 1e-20));
 const LIN = (db) => Math.pow(10, db / 20);
 
 const AudioEngine = (() => {
+  // The one true rate. Stimuli are 48 kHz; the calibration file must match
+  // (see Finding 1). Everything downstream assumes this rate.
+  const ASSET_SAMPLE_RATE = 48000;
+
   let ctx = null;
   let masterGain = null;
+  // Populated by context() when the constructed rate differs from the assets.
+  // { contextRate, assetRate, ratio } or null. Read via rateMismatch().
+  let _rateMismatch = null;
 
   // name -> { raw: AudioBuffer, momentary: number }
   const cache = new Map();
@@ -322,14 +329,49 @@ const AudioEngine = (() => {
 
   function context() {
     if (!ctx) {
+      // On iOS the audio-session category IN FORCE AT CONSTRUCTION decides the
+      // hardware rate. If it isn't "playback" when the context is built, iOS
+      // hands out a 24 kHz context and every 48 kHz asset plays at half speed
+      // (ratio exactly 2 — the tell-tale signature), with wrong level AND
+      // spectrum. This MUST be set before the constructor runs, not after.
+      try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (_) {}
+
       const AC = window.AudioContext || window.webkitAudioContext;
-      ctx = new AC();
+      // Ask for the asset rate as a hint; fall back to a plain constructor if
+      // the browser refuses it. Either way the rate is verified below.
+      try { ctx = new AC({ sampleRate: ASSET_SAMPLE_RATE }); }
+      catch (_) { ctx = new AC(); }
+
       masterGain = ctx.createGain();
       masterGain.gain.value = 1.0;
       masterGain.connect(ctx.destination);
+
+      const rate = ctx.sampleRate;
+      if (rate !== ASSET_SAMPLE_RATE) {
+        const ratio = ASSET_SAMPLE_RATE / rate;
+        const halfSpeed = Math.abs(ratio - 2) < 0.01;
+        _rateMismatch = { contextRate: rate, assetRate: ASSET_SAMPLE_RATE, ratio };
+        console.warn(
+          `[audio] AudioContext is ${rate} Hz but assets are ${ASSET_SAMPLE_RATE} Hz — RATE MISMATCH.` +
+          (halfSpeed
+            ? " Exactly half: the iOS 50%-speed signature (a 24 kHz context handed " +
+              "out because the audio session was not 'playback' at construction). " +
+              "Playback will be slow AND the presented level wrong — do not " +
+              "calibrate or test in this state."
+            : " If playback sounds slow/fast or the level looks off, this is why.")
+        );
+      } else {
+        _rateMismatch = null;
+        console.log(`[audio] AudioContext ${rate} Hz (matches assets)`);
+      }
     }
     return ctx;
   }
+
+  // Null when the context rate matches the assets; otherwise
+  // { contextRate, assetRate, ratio }. The UI reads this to warn the clinician
+  // and block calibration, since a mismatch means a silently wrong reference.
+  function rateMismatch() { return _rateMismatch; }
 
   // Must be called from a user gesture on iOS/Safari to unlock audio.
   async function resume() {
@@ -430,6 +472,46 @@ const AudioEngine = (() => {
     return result;
   }
 
+  // Route an input node to the left ear, right ear, or both, WITHOUT the
+  // equal-power boost a StereoPannerNode applies. A StereoPannerNode panned hard
+  // to one side sums both input channels into the output channel — up to +6 dB
+  // in that ear versus the un-panned path — so single-ear presentation measures
+  // hot while the on-screen level reads correct. Here instead:
+  //   * up-mix the source to dual-mono first (a mono file → identical L and R at
+  //     unchanged level, so single-ear presentation of a mono file isn't silent;
+  //     a stereo file passes through per channel), then
+  //   * split to 2 channels, multiply the off-ear by 0 and the on-ear by 1 (no
+  //     panning, no summing, no level compensation), then merge back to stereo.
+  // "left" = right×0, left×1. "right" = left×0, right×1. "binaural" = both×1.
+  // This is the SAME graph the calibration tone uses (Finding 3), so any
+  // channel-handling effect cancels out of the reference rather than biasing it.
+  function makeEarRouter(c, inputNode, ear) {
+    // "speakers" up-mix to 2 channels turns mono into dual-mono. (A raw
+    // ChannelSplitter uses "discrete" interpretation, under which a mono input
+    // maps to ch0=signal, ch1=silence — silencing the right ear for mono files.)
+    const stereoize = c.createGain();
+    stereoize.channelCount = 2;
+    stereoize.channelCountMode = "explicit";
+    stereoize.channelInterpretation = "speakers";
+    inputNode.connect(stereoize);
+
+    const splitter = c.createChannelSplitter(2);
+    const leftGain = c.createGain();
+    const rightGain = c.createGain();
+    const merger = c.createChannelMerger(2);
+    stereoize.connect(splitter);
+    splitter.connect(leftGain, 0).connect(merger, 0, 0);
+    splitter.connect(rightGain, 1).connect(merger, 0, 1);
+    merger.connect(masterGain);
+
+    const apply = (e) => {
+      leftGain.gain.value  = (e === "left"  || e === "binaural") ? 1 : 0;
+      rightGain.gain.value = (e === "right" || e === "binaural") ? 1 : 0;
+    };
+    apply(ear);
+    return { setEar: apply };
+  }
+
   // Play a prepared buffer at a given extra gain (dB). extraGainDb is where
   // the calibration gain (Step 3) will go; for now default 0 dB.
   // Returns a promise that resolves when playback ends (or rejects on error).
@@ -445,14 +527,12 @@ const AudioEngine = (() => {
     const trialGain = c.createGain();
     trialGain.gain.value = LIN(extraGainDb);
 
-    // Route left / right / binaural (UC_CVCV: pan -1 / +1 / 0).
-    if (routing === "left" || routing === "right") {
-      const pan = c.createStereoPanner();
-      pan.pan.value = routing === "left" ? -1 : 1;
-      src.connect(trialGain).connect(pan).connect(masterGain);
-    } else {
-      src.connect(trialGain).connect(masterGain);
-    }
+    // Route left / right / binaural via the splitter/merger router (Finding 2),
+    // never a StereoPannerNode. The router terminates at masterGain, so this is
+    // the same path — including its single sink — that the calibration tone
+    // takes (Finding 3): source → trialGain → earRouter → masterGain → dest.
+    src.connect(trialGain);
+    makeEarRouter(c, trialGain, routing);
     activeSource = src;
 
     return new Promise((resolve, reject) => {
@@ -503,9 +583,10 @@ const AudioEngine = (() => {
   // the stimuli) looped at unity gain through the graph. No synthesis: the file
   // is the reference. Decoded once and cached under a reserved key.
   let calibSource = null;
+  let calibRouter = null;
   const CALIB_KEY = "__calib__";
 
-  async function startCalibrationTone(url = "sounds/calib.mp3", { onStarted = null, extraGainDb = 0 } = {}) {
+  async function startCalibrationTone(url = "sounds/calib.mp3", { onStarted = null, extraGainDb = 0, ear = "binaural" } = {}) {
     const c = context();
     stopCalibrationTone();
 
@@ -522,13 +603,21 @@ const AudioEngine = (() => {
     const src = c.createBufferSource();
     src.buffer = entry.raw;
     src.loop = true;
-    if (extraGainDb === 0) {
-      src.connect(masterGain);      // unity
-    } else {
-      const g = c.createGain();
-      g.gain.value = LIN(extraGainDb);
-      src.connect(g).connect(masterGain);
-    }
+    // The calibration reference MUST be measured on the identical graph the
+    // stimuli play through (Finding 3), or the reference and the presentation
+    // differ by the presence of the routing stage itself. So the cal tone goes
+    // through the same trialGain → earRouter → masterGain path a stimulus uses.
+    // Unity when extraGainDb === 0 (this IS the reference); the "Test level"
+    // button passes a non-zero gain to audition a presentation level.
+    const g = c.createGain();
+    g.gain.value = LIN(extraGainDb);
+    src.connect(g);
+    // Route through the SAME splitter/merger the stimuli use (Finding 3), so the
+    // reference is measured on the identical graph. The ear is honoured because
+    // audiometer calibration is done ONE CHANNEL AT A TIME: the clinician routes
+    // the noise to Left, sets that channel's aux gain, then Right (handover §3).
+    // Sound-field callers pass "binaural" (a single meter at the head).
+    calibRouter = makeEarRouter(c, g, ear === "left" || ear === "right" ? ear : "binaural");
     calibSource = src;
     src.start();
     if (onStarted) requestAnimationFrame(() => onStarted());
@@ -541,6 +630,13 @@ const AudioEngine = (() => {
       try { calibSource.disconnect(); } catch (_) {}
       calibSource = null;
     }
+    calibRouter = null;
+  }
+
+  // Live re-route the running calibration tone to left / right / both, so the
+  // clinician can flip channels without restarting. No-op if nothing is playing.
+  function setCalibrationEar(ear) {
+    if (calibRouter) calibRouter.setEar(ear === "left" || ear === "right" ? ear : "binaural");
   }
 
   return {
@@ -554,7 +650,9 @@ const AudioEngine = (() => {
     // playback
     playBuffer, playStimulus, stop, setMasterGainDb,
     // calibration
-    startCalibrationTone, stopCalibrationTone,
+    startCalibrationTone, stopCalibrationTone, setCalibrationEar,
+    // audio-graph diagnostics
+    rateMismatch,
     // caches (exposed for diagnostics / teardown)
     _cache: cache, _filteredCache: filteredCache,
     // utils
@@ -592,8 +690,26 @@ if (typeof window !== "undefined") window.AudioEngine = AudioEngine;
 
 const CAL_KEY = "uc4afc_calibration";
 
+// The recordings carry ~96 dB of dynamic range (16-bit). Attenuating past this
+// only digs into quantisation noise, so 96 dB is where the useful range ends.
+// This is a property of the recordings, not a clinical limit; adjust if the
+// source bit depth changes. (Ported from UC_CVCV.)
+const MAX_ATTENUATION_DB = 96;
+// dB(A) below this aren't sound pressure levels — a physical sanity floor that
+// stops the range going negative when the reference is under 96 dB(A).
+const ABSOLUTE_FLOOR_DBA = 0;
+// Consider a restored calibration stale past this many days (Finding 6).
+const CAL_STALE_DAYS = 30;
+
+// Snap to the 5 dB grid used for presentation levels.
+function snap5(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n / 5) * 5 : 0;
+}
+
 // Calibration state (mirrors UC_CVCV state.calibration).
 const cal = {
+  method: null,          // "audiometer" | "soundfield" (see CAL_METHODS)
   measuredDbA: null,
   timestamp: null,
   isCalibrated: false,
@@ -602,34 +718,144 @@ const cal = {
   currentSliderDb: 0
 };
 
-function state() { return cal; }
+// The two calibration methods. Both yield the SAME quantity — the SPL at unity
+// gain — but differ in how it's obtained and therefore what the app should say
+// at a limit. The method is NOT implied by the transducer (an audiometer can
+// drive a sound-field speaker), so it's chosen explicitly. (Ported from UC_CVCV.)
+//   audiometer  the figure is a DIAL SETTING; the ceiling is the clinician's to
+//               move, and per-channel aux calibration applies (handover §3/§5).
+//   soundfield  the figure is a METER READING at full device volume; the ceiling
+//               is a hardware fact and there's a single meter at the head.
+const CAL_METHODS = {
+  audiometer: {
+    label: "Audiometer — via aux / tape input",
+    levelLabel: "Audiometer dial setting, dB(A)",
+    perChannel: true,
+    steps: [
+      "Set the device volume to maximum and leave it there for the whole session.",
+      "Route the calibration noise to Left, then adjust the audiometer's aux input gain for that channel until its VU meter reads 0. Switch to Right and repeat.",
+      "Set the audiometer dial to the highest level you expect to present, plus a margin.",
+      "Stop the noise and enter that dial setting below."
+    ]
+  },
+  soundfield: {
+    label: "Sound field — sound level meter",
+    levelLabel: "Measured level, dB(A)",
+    perChannel: false,
+    steps: [
+      "Set the device volume to maximum and leave it there for the whole session.",
+      "Place the sound level meter at the client's head position, facing the speaker.",
+      "Play the calibration noise and read the level in dB(A) with your usual meter settings.",
+      "Stop the noise and enter that reading below."
+    ]
+  }
+};
 
-// Apply a measured calibration level: it becomes the reference and the slider
-// maximum; the slider floor sits 60 dB below (snapped to 5 dB), UC_CVCV-style.
-function applyCalibrationLevel(level, timestamp = new Date().toISOString()) {
-  cal.measuredDbA = level;
-  cal.timestamp = timestamp;
-  cal.isCalibrated = true;
-  cal.sliderMaxDb = level;
-  cal.sliderMinDb = Math.floor(level / 5) * 5 - 60;
-  cal.currentSliderDb = level;
-  persist();
-  return cal;
+function calMethod() { return cal.method || "audiometer"; }
+function calMethodInfo() { return CAL_METHODS[calMethod()] || CAL_METHODS.audiometer; }
+function isPerChannel() { return calMethodInfo().perChannel === true; }
+
+// Method-specific advice when a level limit is hit, so the operator is always
+// told something they can act on.
+function moreLevelAdvice() {
+  return calMethod() === "audiometer"
+    ? "raise the audiometer dial and recalibrate"
+    : "this setup is already at full output — more level needs a different speaker or amplifier, or a closer position";
+}
+function lessLevelAdvice() {
+  return calMethod() === "audiometer"
+    ? "lower the audiometer dial and recalibrate"
+    : "this is the bottom of the recordings' range — there's nothing quieter to present";
 }
 
-// Digital linear gain for a target presentation level in dB(A) (UC_CVCV).
+function state() { return cal; }
+
+// Bounds for any dB(A) level that can be presented. null when uncalibrated (the
+// dB FS path is a different quantity and is left alone). Ceiling = reference
+// (unity — nothing louder can play without clipping); floor = reference minus
+// the recording's dynamic range, but never below the physical floor of 0 dB(A).
+// Both ends are placed ON the 5 dB grid (ceiling rounded DOWN, floor rounded UP)
+// so every selectable position is genuinely inside the bounds. This replaces the
+// old `Math.floor(level/5)*5 - 60` span, which drifted off 60 dB, dropped below
+// audibility, and went NEGATIVE for references under 60 dB(A). (Ported from
+// UC_CVCV levelBounds.)
+function levelBounds() {
+  if (!cal.isCalibrated || cal.measuredDbA === null) return null;
+  const reference = Number(cal.measuredDbA);
+  const max = Math.floor(reference / 5) * 5;
+  const attenuationFloor = reference - MAX_ATTENUATION_DB;
+  const min = Math.ceil(Math.max(ABSOLUTE_FLOOR_DBA, attenuationFloor) / 5) * 5;
+  return { reference, min, max, usable: min <= max, span: max - min };
+}
+
+// Snap to the grid, then hold inside the bounds. Uncalibrated → grid only
+// (gain is unity anyway). This is the clamp the AUDIO PATH uses, not just the
+// slider, so no out-of-range level can reach the gain maths. (UC_CVCV clampLevel.)
+function clampLevel(value) {
+  const snapped = snap5(value);
+  const b = levelBounds();
+  if (!b || !b.usable) return snapped;
+  return Math.min(b.max, Math.max(b.min, snapped));
+}
+
+// Apply a measured calibration level: it becomes the reference and the slider
+// ceiling; the floor is reference − recording dynamic range, floored at 0 dB(A),
+// both ends on the 5 dB grid (Finding 5). Returns true on success. A figure that
+// yields no usable range (below the physical floor — i.e. not a real dB(A) SPL)
+// is refused and calibration stays off, rather than handing back a slider whose
+// floor is negative.
+function applyCalibrationLevel(level, timestamp = new Date().toISOString(), method) {
+  const reference = Number(level);
+  if (!Number.isFinite(reference)) return false;
+
+  cal.method = method || calMethod();
+  cal.measuredDbA = reference;
+  cal.timestamp = timestamp;
+  cal.isCalibrated = true;
+
+  const b = levelBounds();
+  if (!b || !b.usable) {
+    // Only reachable when the reference is below the physical floor: the figure
+    // entered is not a sound pressure level. Refuse but keep the chosen method.
+    const wasMethod = cal.method;
+    cal.measuredDbA = null;
+    cal.isCalibrated = false;
+    cal.sliderMinDb = -100;
+    cal.sliderMaxDb = 0;
+    cal.currentSliderDb = 0;
+    cal.method = wasMethod;
+    return false;
+  }
+
+  cal.sliderMinDb = b.min;
+  cal.sliderMaxDb = b.max;
+  cal.currentSliderDb = b.max;
+  persist();
+  return true;
+}
+
+// Digital linear gain for a target presentation level in dB(A). The requested
+// level is CLAMPED to the calibrated bounds first (Finding 5) so a stray value
+// can never reach the gain maths, and the result is capped at unity — nothing
+// can play louder than the reference without clipping. A cap that fires is
+// logged, because it means a level reached here without being clamped upstream.
 function gainForLevel(levelDbA) {
   if (cal.isCalibrated && cal.measuredDbA !== null) {
-    const attenuation = Number(cal.measuredDbA) - Number(levelDbA);
-    return Math.pow(10, -attenuation / 20);
+    const target = clampLevel(levelDbA);
+    const attenuation = Number(cal.measuredDbA) - Number(target);
+    let g = Math.pow(10, -attenuation / 20);
+    if (g > 1.0) { console.warn(`[cal] gain ${g.toFixed(3)} > 1 capped at unity`); g = 1.0; }
+    return g;
   }
   return 1.0; // uncalibrated: unity
 }
 
 // dB form of the same, convenient for the engine's extraGainDb parameter.
+// Also clamped and capped at 0 dB (unity).
 function gainDbForLevel(levelDbA) {
   if (cal.isCalibrated && cal.measuredDbA !== null) {
-    return -(Number(cal.measuredDbA) - Number(levelDbA)); // = levelDbA - measuredDbA
+    const target = clampLevel(levelDbA);
+    return Math.min(0, Number(target) - Number(cal.measuredDbA));
   }
   return 0;
 }
@@ -639,10 +865,14 @@ function setCurrentSliderDb(db) {
   persist();
 }
 
+// Set the intended method before a measurement (from the screen's selector).
+function setMethod(m) { if (m === "audiometer" || m === "soundfield") cal.method = m; }
+
 function isCalibrated() { return cal.isCalibrated; }
 function measuredDbA() { return cal.measuredDbA; }
 
 function clearCalibration() {
+  cal.method = null;
   cal.measuredDbA = null;
   cal.timestamp = null;
   cal.isCalibrated = false;
@@ -655,36 +885,61 @@ function clearCalibration() {
 function persist() {
   try {
     localStorage.setItem(CAL_KEY, JSON.stringify({
-      level: cal.measuredDbA, timestamp: cal.timestamp
+      level: cal.measuredDbA, timestamp: cal.timestamp, method: cal.method
     }));
   } catch (_) {}
 }
 
-// Restore a stored calibration on load. Returns the record (or null).
-function loadStored() {
+// Read a stored calibration WITHOUT activating it (Finding 6). The old code
+// restored any saved figure as an active calibration on load, with no age check
+// and no confirmation — and an active calibration asserts device volume is at
+// maximum, which can't be verified after the fact. Instead we hand the record
+// back to the screen, which asks the operator to confirm before it becomes
+// active. Returns { level, timestamp, ageDays, stale } or null.
+function readStored() {
   try {
     const raw = localStorage.getItem(CAL_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
-    if (data.level == null || !isFinite(Number(data.level))) return null;
-    applyCalibrationLevel(Number(data.level), data.timestamp);
-    return { level: Number(data.level), timestamp: data.timestamp };
+    const level = Number(data.level);
+    if (data.level == null || !isFinite(level)) return null;
+    let ageDays = null, stale = false;
+    if (data.timestamp) {
+      const ms = Date.now() - new Date(data.timestamp).getTime();
+      if (isFinite(ms)) { ageDays = ms / 86400000; stale = ageDays > CAL_STALE_DAYS; }
+    }
+    return { level, timestamp: data.timestamp || null, method: data.method || null, ageDays, stale };
   } catch (_) {
     return null;
   }
 }
 
+// Activate a previously-read stored calibration (called after the operator
+// confirms). Returns true on success.
+function confirmStored(rec) {
+  if (!rec || !isFinite(Number(rec.level))) return false;
+  return applyCalibrationLevel(Number(rec.level), rec.timestamp || undefined, rec.method || undefined);
+}
+
+// Back-compat shim: some callers may still call loadStored(). It now only READS
+// (never auto-activates), so nothing gets silently restored.
+function loadStored() { return readStored(); }
+
 // Header string for the results file.
 function calibrationHeader() {
   if (!cal.isCalibrated || cal.measuredDbA == null) return "not set";
-  return `${cal.measuredDbA} dB(A)`;
+  const m = calMethod() === "audiometer" ? "audiometer (aux input)" : "sound field (level meter)";
+  return `${cal.measuredDbA} dB(A) — ${m}`;
 }
 
 if (typeof window !== "undefined") {
   window.Calibration = {
     state, applyCalibrationLevel, gainForLevel, gainDbForLevel,
     setCurrentSliderDb, isCalibrated, measuredDbA, clearCalibration,
-    loadStored, calibrationHeader
+    loadStored, readStored, confirmStored, calibrationHeader,
+    levelBounds, clampLevel,
+    calMethod, calMethodInfo, isPerChannel, setMethod,
+    moreLevelAdvice, lessLevelAdvice, CAL_METHODS
   };
 }
 
@@ -1095,16 +1350,10 @@ function createTrack(cfg) {
   function estimate() {
     const fit = fitMLE(cfg, xs.slice(), ys.slice(), cfg.slopeHint);
     const value = xToHz(fit.srtX);
-    // A fit pinned to an axis bound is not identifiable (the near-separable
-    // window collapses the MLE onto xlo/xhi). Flag it alongside the explicit
-    // all-correct/all-incorrect degeneracy from fitMLE.
-    const eps = 1e-6;
-    const pinned = (fit.srtX <= cfg.xlo + eps) || (fit.srtX >= cfg.xhi - eps);
     return {
       srtX: fit.srtX,
       slope: fit.slope,
-      degenerate: !!fit.degenerate || pinned,
-      pinned,
+      degenerate: fit.degenerate,
       value,                    // Hz (LPF) or dB (quiet)
       unit: cfg.unit,
       thresholdHz: value,       // LPF-friendly alias
@@ -1112,44 +1361,17 @@ function createTrack(cfg) {
     };
   }
 
-  // "If the run stopped at the current trial": the FINAL estimator (fitMLE)
-  // applied to all trials collected so far. Identical estimator to estimate();
-  // this name documents intent for the per-trial stop-at-n column. Returns the
-  // value or null when the fit is degenerate/pinned (so the stopping curve has
-  // honest gaps rather than floor-pinned artefacts).
-  function stopAtEstimate() {
-    const e = estimate();
-    return e.degenerate ? null : e.value;
-  }
-
   function history() {
     return xs.map((xi, i) => ({ x: xi, value: xToHz(xi), cutoffHz: xToHz(xi), correct: ys[i] === 1 }));
   }
 
-  // The RUNNING estimate is only meaningful once the coarse initial phase is
-  // over — before the phase switch (switchRev reversals) an MLE on sparse,
-  // near-monotonic data is degenerate and thrashes (pins to a bound / overshoots).
-  // This gates the PER-TRIAL running estimate only; the FINAL estimate() is
-  // always computed from the complete track and is unaffected. WUDR uses the
-  // phase switch; A1/A2 have no phases, so they reuse switchRev as a reversal
-  // floor for the same "enough information" reason.
-  function estimateReady() {
-    const need = (typeof cfg.switchRev === "number" && cfg.switchRev > 0) ? cfg.switchRev : 0;
-    if (need === 0) return true; // single-phase: no gating requested
-    return reversalCount() >= need;
-  }
-  function reversalCount() {
-    return (cfg.procedure === "a2") ? (A2.T[0].rev + A2.T[1].rev) : rev;
-  }
-
   return {
-    currentX, currentValue, currentCutoffHz, update, estimate, stopAtEstimate,
+    currentX, currentValue, currentCutoffHz, update, estimate,
     unit: cfg.unit, mode: cfg.mode, axisIsLog: cfg.axisIsLog,
     trials: () => xs.length,
     done: () => xs.length >= cfg.nTrials,
     history,
-    reversals: reversalCount,
-    estimateReady
+    reversals: () => (cfg.procedure === "a2" ? (A2.T[0].rev + A2.T[1].rev) : rev)
   };
 }
 
@@ -1581,22 +1803,10 @@ function recordResponse(img) {
     entry.isCorrect = isCorrect;
     entry.procedure = adaptive.procedure || "wudr";
     track.update(isCorrect);
-    // Running estimate is gated until the phase switch (estimateReady), and
-    // additionally blanked whenever the fit is degenerate/bound-pinned, so the
-    // live column never shows floor-pinned artefacts. The FINAL threshold is
-    // computed from the complete track (see saveResults) and is unaffected.
     const est = track.estimate();
-    const showRunning = track.estimateReady() && !est.degenerate && isFinite(est.value);
-    entry.estimate = showRunning ? ((unit === "Hz") ? Math.round(est.value) : +est.value.toFixed(1)) : null;
+    const estV = est.value;
+    entry.estimate = isFinite(estV) ? ((unit === "Hz") ? Math.round(estV) : +estV.toFixed(1)) : null;
     entry.estimateHz = entry.estimate; // alias
-
-    // Stop-at-n: the FINAL estimator applied to trials 1..n (this trial). Blank
-    // when degenerate so the post-hoc stopping curve has honest gaps. Reading
-    // this column down the file answers "if we'd stopped at trial n, the
-    // threshold would have been ___".
-    const stopVal = track.stopAtEstimate(); // null when degenerate/pinned
-    entry.stopAtN = (stopVal == null) ? null
-      : ((unit === "Hz") ? Math.round(stopVal) : +stopVal.toFixed(1));
   }
 
   responseLog.push(entry);
@@ -2076,16 +2286,7 @@ function saveResults(optionalNote = "") {
   const stepUnit = (mode === "quiet") ? "dB" : "dec";
   const valOf = (r) => (typeof r.value === "number" ? r.value : r.cutoffHz);
   const estOf = (r) => (typeof r.estimate === "number" ? r.estimate : r.estimateHz);
-  // Final threshold = the COMPLETE-track MLE (flow.finalEstimate), which is the
-  // validated estimator. The per-trial running column is gated at the phase
-  // switch and must NOT be used as the final number. Fall back to the last
-  // running estimate only if the live track is unavailable (e.g. reloaded log).
   const lastEstimate = (() => {
-    let fe = null;
-    try { fe = (typeof finalEstimate === "function") ? finalEstimate() : null; } catch (_) {}
-    if (fe && isFinite(fe.value)) {
-      return (unit === "Hz") ? Math.round(fe.value) : +fe.value.toFixed(1);
-    }
     for (let i = responseLog.length - 1; i >= 0; i--) {
       const e = estOf(responseLog[i]);
       if (typeof e === "number") return e;
@@ -2125,12 +2326,11 @@ function saveResults(optionalNote = "") {
   if (isAdaptive) {
     const valCol = (mode === "quiet") ? "Level_dB" : "Cutoff_Hz";
     const estCol = (mode === "quiet") ? "Estimate_dB" : "Estimate_Hz";
-    const stopCol = (mode === "quiet") ? "StopAtN_dB" : "StopAtN_Hz";
-    txtLines.push(`Trial\tSound\tCorrect\tChosen\tCorrect?\t${valCol}\tProcedure\t${estCol}\t${stopCol}\tTime_ms`);
+    txtLines.push(`Trial\tSound\tCorrect\tChosen\tCorrect?\t${valCol}\tProcedure\t${estCol}\tTime_ms`);
     for (const r of responseLog) {
       txtLines.push(
         `${r.index}\t${r.sound}\t${r.correct}\t${r.chosen}\t` +
-        `${r.isCorrect ? 1 : 0}\t${valOf(r) ?? ""}\t${r.procedure ?? ""}\t${estOf(r) ?? ""}\t${r.stopAtN ?? ""}\t${r.timeMs}`
+        `${r.isCorrect ? 1 : 0}\t${valOf(r) ?? ""}\t${r.procedure ?? ""}\t${estOf(r) ?? ""}\t${r.timeMs}`
       );
     }
   } else {
@@ -2465,6 +2665,27 @@ if (breakEveryInput) {
 const CALIB_URL = () => (typeof config !== "undefined" && config && config.calibFile)
   ? `sounds/${config.calibFile}` : "sounds/calib.mp3";
 
+// Finding 4: if the audio context came back at the wrong rate, calibrating now
+// would set a silently wrong reference (on iOS, half speed + wrong level). Paint
+// the warning where the operator will see it and report whether calibration is
+// blocked. Returns true when a mismatch is present (caller must not proceed).
+function calRateBlocked() {
+  if (typeof AudioEngine === "undefined" || !AudioEngine.rateMismatch) return false;
+  const m = AudioEngine.rateMismatch();
+  const el = document.getElementById("calStatus");
+  if (!m) return false;
+  const halfSpeed = Math.abs(m.ratio - 2) < 0.01;
+  if (el) el.textContent =
+    `⚠ Audio is running at ${m.contextRate} Hz but the recordings are ` +
+    `${m.assetRate} Hz. ` +
+    (halfSpeed
+      ? "This halves playback speed and makes the level wrong. Fully close the " +
+        "app and reopen it (on iPhone/iPad, swipe it away from the app switcher first). "
+      : "Playback speed and level may be wrong; try reopening the app. ") +
+    "Calibration is disabled until this clears.";
+  return true;
+}
+
 function refreshCalStatus() {
   const el = document.getElementById("calStatus");
   if (!el || typeof Calibration === "undefined") return;
@@ -2482,8 +2703,13 @@ function setupCalibrationSlider() {
   const c = Calibration.state();
   slider.min = c.sliderMinDb ?? -100;
   slider.max = c.sliderMaxDb ?? 0;
-  slider.step = 0.1;
-  slider.value = c.currentSliderDb ?? slider.max;
+  // Both ends sit on the 5 dB grid now (Finding 5); make travel match the snap.
+  slider.step = c.isCalibrated ? 5 : 0.1;
+  // Clamp the starting position into the calibrated bounds so it can never open
+  // below the floor or above the reference.
+  let start = c.currentSliderDb ?? c.sliderMaxDb ?? 0;
+  if (c.isCalibrated && Calibration.clampLevel) start = Calibration.clampLevel(start);
+  slider.value = start;
   updateOutputLevelFromSlider();
 }
 
@@ -2496,9 +2722,9 @@ function updateOutputLevelFromSlider() {
   let raw = parseFloat(slider.value);
 
   if (c.isCalibrated && c.measuredDbA !== null) {
-    const max = parseFloat(slider.max);
-    const tol = 0.25;
-    const snapped = Math.abs(raw - max) <= tol ? max : Math.round(raw / 5) * 5;
+    // Clamp to the calibrated bounds (Finding 5): never above the reference,
+    // never below the recording floor.
+    const snapped = Calibration.clampLevel ? Calibration.clampLevel(raw) : Math.round(raw / 5) * 5;
     slider.value = snapped;
     Calibration.setCurrentSliderDb(snapped);
     if (label) label.textContent = `${snapped} dB A`;
@@ -2512,6 +2738,43 @@ function updateOutputLevelFromSlider() {
   }
 }
 
+// Render the calibration screen for the currently-selected method: swap in the
+// method's step list, show the per-channel ear selector only for audiometer, and
+// keep the noise routed to the right channel(s). Audiometer calibration is done
+// one channel at a time (handover §3); sound field uses a single meter at the
+// head, so the ear selector is hidden and the noise plays to both.
+function renderCalMethodUI() {
+  if (typeof Calibration === "undefined") return;
+  const sel = document.getElementById("calMethodSelect");
+  const method = sel ? sel.value : Calibration.calMethod();
+  Calibration.setMethod(method);
+  const info = (Calibration.CAL_METHODS && Calibration.CAL_METHODS[method]) || null;
+
+  const ol = document.getElementById("calSteps");
+  if (ol && info) {
+    ol.innerHTML = "";
+    info.steps.forEach(s => { const li = document.createElement("li"); li.textContent = s; ol.appendChild(li); });
+  }
+
+  const perChannel = method === "audiometer";
+  const earWrap = document.getElementById("calEarWrap");
+  const earHint = document.getElementById("calEarHint");
+  if (earWrap) earWrap.style.display = perChannel ? "" : "none";
+  if (earHint) earHint.textContent = perChannel
+    ? "Calibrate each channel separately: route to Left, set the aux gain, then Right."
+    : "";
+  const earSel = document.getElementById("calEarSelect");
+  if (!perChannel && earSel) { earSel.value = "binaural"; }
+}
+
+// The ear currently selected for the (audiometer) calibration noise.
+function currentCalEar() {
+  const earSel = document.getElementById("calEarSelect");
+  const method = document.getElementById("calMethodSelect");
+  if (method && method.value !== "audiometer") return "binaural";
+  return earSel ? earSel.value : "binaural";
+}
+
 function setupCalibrationScreen() {
   const toggleBtn = document.getElementById("calToneToggleBtn");
   const testBtn   = document.getElementById("testCalBtn");
@@ -2523,16 +2786,59 @@ function setupCalibrationScreen() {
   let toneOn = false;
   let testOn = false;
 
-  // Offer any stored calibration on load, and initialise the slider.
-  if (typeof Calibration !== "undefined") {
-    const restored = Calibration.loadStored();
-    if (restored) {
-      if (testBtn) testBtn.hidden = false;
-      const when = restored.timestamp
-        ? new Date(restored.timestamp).toLocaleString("en-NZ", { dateStyle: "short", timeStyle: "short" })
-        : "earlier";
+  // Method selector: re-render steps/labels and (if noise is playing) keep it
+  // routed correctly. Ear selector: re-route the running noise live so the
+  // clinician can flip channels without restarting (handover §3).
+  const methodSel = document.getElementById("calMethodSelect");
+  const earSel = document.getElementById("calEarSelect");
+  if (methodSel) {
+    methodSel.value = (typeof Calibration !== "undefined") ? Calibration.calMethod() : "audiometer";
+    methodSel.onchange = () => {
+      renderCalMethodUI();
+      if (toneOn) AudioEngine.setCalibrationEar(currentCalEar());
+    };
+  }
+  if (earSel) {
+    earSel.onchange = () => {
+      if (typeof AudioEngine !== "undefined") AudioEngine.setCalibrationEar(currentCalEar());
       const el = document.getElementById("calStatus");
-      if (el) el.textContent = `Calibration restored: ${restored.level} dB(A) from ${when}. Device volume must be at maximum.`;
+      if (toneOn && el) {
+        const where = earSel.value === "left" ? "left channel only"
+                    : earSel.value === "right" ? "right channel only" : "both channels";
+        el.textContent = `Calibration noise playing — ${where}.`;
+      }
+    };
+  }
+  renderCalMethodUI();
+
+  // Finding 6: read any stored calibration but DON'T activate it silently. A
+  // stored figure asserts the device was at max volume when it was taken, which
+  // can't be verified after the fact; and a stale one may no longer hold. Ask
+  // the operator to confirm (with an explicit warning past the age threshold).
+  if (typeof Calibration !== "undefined" && Calibration.readStored) {
+    const rec = Calibration.readStored();
+    if (rec) {
+      const when = rec.timestamp
+        ? new Date(rec.timestamp).toLocaleString("en-NZ", { dateStyle: "short", timeStyle: "short" })
+        : "an earlier session";
+      const age = rec.ageDays != null ? ` (${Math.round(rec.ageDays)} day(s) ago)` : "";
+      const warn = rec.stale
+        ? "\n\nThis calibration is old and may no longer be valid — re-calibrating is recommended."
+        : "";
+      const ok = window.confirm(
+        `A stored calibration of ${rec.level} dB(A) from ${when}${age} was found.\n\n` +
+        "Re-use it? It assumes the device volume is at maximum, exactly as when it " +
+        "was measured. Choose Cancel to stay uncalibrated and measure again." + warn
+      );
+      if (ok && Calibration.confirmStored(rec)) {
+        if (testBtn) testBtn.hidden = false;
+        const msel = document.getElementById("calMethodSelect");
+        if (msel && rec.method) { msel.value = rec.method; renderCalMethodUI(); }
+        const el = document.getElementById("calStatus");
+        const mlabel = Calibration.calMethod() === "audiometer" ? "audiometer" : "sound field";
+        if (el) el.textContent =
+          `Calibration in use: ${rec.level} dB(A) (${mlabel}) from ${when}. Device volume must be at maximum.`;
+      }
     }
   }
   setupCalibrationSlider();
@@ -2547,10 +2853,25 @@ function setupCalibrationScreen() {
       toneOn = false;
       toggleBtn.textContent = "Calibration tone";
       toggleBtn.classList.remove("active");
-      const measured = prompt("Enter measured calibration level (in dB A):");
+      const method = methodSel ? methodSel.value : Calibration.calMethod();
+      const promptLabel = method === "audiometer"
+        ? "Enter the audiometer dial setting (in dB A):"
+        : "Enter the measured level at the client's head (in dB A):";
+      const measured = prompt(promptLabel);
       if (measured === null || measured === "" || isNaN(measured)) return;
       const level = parseFloat(measured);
-      Calibration.applyCalibrationLevel(level);
+      const ok = Calibration.applyCalibrationLevel(level, undefined, method);
+      if (!ok) {
+        const el = document.getElementById("calStatus");
+        if (el) el.textContent =
+          `${level} dB(A) is not a usable reference. Check the figure is ` +
+          (method === "audiometer"
+            ? "the audiometer dial setting"
+            : "the meter reading at the client's position") +
+          `, in dB(A). Staying uncalibrated.`;
+        setupCalibrationSlider();
+        return;
+      }
       setupCalibrationSlider();
       if (testBtn) testBtn.hidden = false;
       refreshCalStatus();
@@ -2558,18 +2879,26 @@ function setupCalibrationScreen() {
     }
 
     await AudioEngine.resume();
+    // resume() constructs the context, so the rate check is now populated.
+    // Refuse to calibrate at the wrong rate (Finding 4).
+    if (calRateBlocked()) return;
     // Stop any test playback first.
     AudioEngine.stopCalibrationTone();
     testOn = false;
     if (testBtn) testBtn.textContent = "Test level";
-    alert("Turn your device volume all the way up, then tap OK to play the calibration tone.");
+    alert("Turn your device volume all the way up, then tap OK to play the calibration noise.");
     try {
-      await AudioEngine.startCalibrationTone(CALIB_URL());
+      const ear = currentCalEar();
+      await AudioEngine.startCalibrationTone(CALIB_URL(), { ear });
       toneOn = true;
       toggleBtn.textContent = "Stop & Enter Level";
       toggleBtn.classList.add("active");
       const el = document.getElementById("calStatus");
-      if (el) el.textContent = "Calibration sound playing.";
+      if (el) {
+        const where = ear === "left" ? "left channel only"
+                    : ear === "right" ? "right channel only" : "both channels";
+        el.textContent = `Calibration noise playing — ${where}.`;
+      }
     } catch (err) {
       alert("No calibration sound file found (" + CALIB_URL() + ").\nAdd calib.mp3 to the sounds/ folder.");
       console.error(err);
@@ -2587,9 +2916,10 @@ function setupCalibrationScreen() {
         return;
       }
       await AudioEngine.resume();
+      if (calRateBlocked()) return;
       const gainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb);
       try {
-        await AudioEngine.startCalibrationTone(CALIB_URL(), { extraGainDb: gainDb });
+        await AudioEngine.startCalibrationTone(CALIB_URL(), { extraGainDb: gainDb, ear: currentCalEar() });
         testOn = true;
         testBtn.textContent = "Stop";
       } catch (err) {

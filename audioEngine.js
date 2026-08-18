@@ -203,8 +203,15 @@ const DB = (linear) => 20 * Math.log10(Math.max(linear, 1e-20));
 const LIN = (db) => Math.pow(10, db / 20);
 
 const AudioEngine = (() => {
+  // The one true rate. Stimuli are 48 kHz; the calibration file must match
+  // (see Finding 1). Everything downstream assumes this rate.
+  const ASSET_SAMPLE_RATE = 48000;
+
   let ctx = null;
   let masterGain = null;
+  // Populated by context() when the constructed rate differs from the assets.
+  // { contextRate, assetRate, ratio } or null. Read via rateMismatch().
+  let _rateMismatch = null;
 
   // name -> { raw: AudioBuffer, momentary: number }
   const cache = new Map();
@@ -222,14 +229,49 @@ const AudioEngine = (() => {
 
   function context() {
     if (!ctx) {
+      // On iOS the audio-session category IN FORCE AT CONSTRUCTION decides the
+      // hardware rate. If it isn't "playback" when the context is built, iOS
+      // hands out a 24 kHz context and every 48 kHz asset plays at half speed
+      // (ratio exactly 2 — the tell-tale signature), with wrong level AND
+      // spectrum. This MUST be set before the constructor runs, not after.
+      try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (_) {}
+
       const AC = window.AudioContext || window.webkitAudioContext;
-      ctx = new AC();
+      // Ask for the asset rate as a hint; fall back to a plain constructor if
+      // the browser refuses it. Either way the rate is verified below.
+      try { ctx = new AC({ sampleRate: ASSET_SAMPLE_RATE }); }
+      catch (_) { ctx = new AC(); }
+
       masterGain = ctx.createGain();
       masterGain.gain.value = 1.0;
       masterGain.connect(ctx.destination);
+
+      const rate = ctx.sampleRate;
+      if (rate !== ASSET_SAMPLE_RATE) {
+        const ratio = ASSET_SAMPLE_RATE / rate;
+        const halfSpeed = Math.abs(ratio - 2) < 0.01;
+        _rateMismatch = { contextRate: rate, assetRate: ASSET_SAMPLE_RATE, ratio };
+        console.warn(
+          `[audio] AudioContext is ${rate} Hz but assets are ${ASSET_SAMPLE_RATE} Hz — RATE MISMATCH.` +
+          (halfSpeed
+            ? " Exactly half: the iOS 50%-speed signature (a 24 kHz context handed " +
+              "out because the audio session was not 'playback' at construction). " +
+              "Playback will be slow AND the presented level wrong — do not " +
+              "calibrate or test in this state."
+            : " If playback sounds slow/fast or the level looks off, this is why.")
+        );
+      } else {
+        _rateMismatch = null;
+        console.log(`[audio] AudioContext ${rate} Hz (matches assets)`);
+      }
     }
     return ctx;
   }
+
+  // Null when the context rate matches the assets; otherwise
+  // { contextRate, assetRate, ratio }. The UI reads this to warn the clinician
+  // and block calibration, since a mismatch means a silently wrong reference.
+  function rateMismatch() { return _rateMismatch; }
 
   // Must be called from a user gesture on iOS/Safari to unlock audio.
   async function resume() {
@@ -330,6 +372,46 @@ const AudioEngine = (() => {
     return result;
   }
 
+  // Route an input node to the left ear, right ear, or both, WITHOUT the
+  // equal-power boost a StereoPannerNode applies. A StereoPannerNode panned hard
+  // to one side sums both input channels into the output channel — up to +6 dB
+  // in that ear versus the un-panned path — so single-ear presentation measures
+  // hot while the on-screen level reads correct. Here instead:
+  //   * up-mix the source to dual-mono first (a mono file → identical L and R at
+  //     unchanged level, so single-ear presentation of a mono file isn't silent;
+  //     a stereo file passes through per channel), then
+  //   * split to 2 channels, multiply the off-ear by 0 and the on-ear by 1 (no
+  //     panning, no summing, no level compensation), then merge back to stereo.
+  // "left" = right×0, left×1. "right" = left×0, right×1. "binaural" = both×1.
+  // This is the SAME graph the calibration tone uses (Finding 3), so any
+  // channel-handling effect cancels out of the reference rather than biasing it.
+  function makeEarRouter(c, inputNode, ear) {
+    // "speakers" up-mix to 2 channels turns mono into dual-mono. (A raw
+    // ChannelSplitter uses "discrete" interpretation, under which a mono input
+    // maps to ch0=signal, ch1=silence — silencing the right ear for mono files.)
+    const stereoize = c.createGain();
+    stereoize.channelCount = 2;
+    stereoize.channelCountMode = "explicit";
+    stereoize.channelInterpretation = "speakers";
+    inputNode.connect(stereoize);
+
+    const splitter = c.createChannelSplitter(2);
+    const leftGain = c.createGain();
+    const rightGain = c.createGain();
+    const merger = c.createChannelMerger(2);
+    stereoize.connect(splitter);
+    splitter.connect(leftGain, 0).connect(merger, 0, 0);
+    splitter.connect(rightGain, 1).connect(merger, 0, 1);
+    merger.connect(masterGain);
+
+    const apply = (e) => {
+      leftGain.gain.value  = (e === "left"  || e === "binaural") ? 1 : 0;
+      rightGain.gain.value = (e === "right" || e === "binaural") ? 1 : 0;
+    };
+    apply(ear);
+    return { setEar: apply };
+  }
+
   // Play a prepared buffer at a given extra gain (dB). extraGainDb is where
   // the calibration gain (Step 3) will go; for now default 0 dB.
   // Returns a promise that resolves when playback ends (or rejects on error).
@@ -345,14 +427,12 @@ const AudioEngine = (() => {
     const trialGain = c.createGain();
     trialGain.gain.value = LIN(extraGainDb);
 
-    // Route left / right / binaural (UC_CVCV: pan -1 / +1 / 0).
-    if (routing === "left" || routing === "right") {
-      const pan = c.createStereoPanner();
-      pan.pan.value = routing === "left" ? -1 : 1;
-      src.connect(trialGain).connect(pan).connect(masterGain);
-    } else {
-      src.connect(trialGain).connect(masterGain);
-    }
+    // Route left / right / binaural via the splitter/merger router (Finding 2),
+    // never a StereoPannerNode. The router terminates at masterGain, so this is
+    // the same path — including its single sink — that the calibration tone
+    // takes (Finding 3): source → trialGain → earRouter → masterGain → dest.
+    src.connect(trialGain);
+    makeEarRouter(c, trialGain, routing);
     activeSource = src;
 
     return new Promise((resolve, reject) => {
@@ -403,9 +483,10 @@ const AudioEngine = (() => {
   // the stimuli) looped at unity gain through the graph. No synthesis: the file
   // is the reference. Decoded once and cached under a reserved key.
   let calibSource = null;
+  let calibRouter = null;
   const CALIB_KEY = "__calib__";
 
-  async function startCalibrationTone(url = "sounds/calib.mp3", { onStarted = null, extraGainDb = 0 } = {}) {
+  async function startCalibrationTone(url = "sounds/calib.mp3", { onStarted = null, extraGainDb = 0, ear = "binaural" } = {}) {
     const c = context();
     stopCalibrationTone();
 
@@ -422,13 +503,21 @@ const AudioEngine = (() => {
     const src = c.createBufferSource();
     src.buffer = entry.raw;
     src.loop = true;
-    if (extraGainDb === 0) {
-      src.connect(masterGain);      // unity
-    } else {
-      const g = c.createGain();
-      g.gain.value = LIN(extraGainDb);
-      src.connect(g).connect(masterGain);
-    }
+    // The calibration reference MUST be measured on the identical graph the
+    // stimuli play through (Finding 3), or the reference and the presentation
+    // differ by the presence of the routing stage itself. So the cal tone goes
+    // through the same trialGain → earRouter → masterGain path a stimulus uses.
+    // Unity when extraGainDb === 0 (this IS the reference); the "Test level"
+    // button passes a non-zero gain to audition a presentation level.
+    const g = c.createGain();
+    g.gain.value = LIN(extraGainDb);
+    src.connect(g);
+    // Route through the SAME splitter/merger the stimuli use (Finding 3), so the
+    // reference is measured on the identical graph. The ear is honoured because
+    // audiometer calibration is done ONE CHANNEL AT A TIME: the clinician routes
+    // the noise to Left, sets that channel's aux gain, then Right (handover §3).
+    // Sound-field callers pass "binaural" (a single meter at the head).
+    calibRouter = makeEarRouter(c, g, ear === "left" || ear === "right" ? ear : "binaural");
     calibSource = src;
     src.start();
     if (onStarted) requestAnimationFrame(() => onStarted());
@@ -441,6 +530,13 @@ const AudioEngine = (() => {
       try { calibSource.disconnect(); } catch (_) {}
       calibSource = null;
     }
+    calibRouter = null;
+  }
+
+  // Live re-route the running calibration tone to left / right / both, so the
+  // clinician can flip channels without restarting. No-op if nothing is playing.
+  function setCalibrationEar(ear) {
+    if (calibRouter) calibRouter.setEar(ear === "left" || ear === "right" ? ear : "binaural");
   }
 
   return {
@@ -454,7 +550,9 @@ const AudioEngine = (() => {
     // playback
     playBuffer, playStimulus, stop, setMasterGainDb,
     // calibration
-    startCalibrationTone, stopCalibrationTone,
+    startCalibrationTone, stopCalibrationTone, setCalibrationEar,
+    // audio-graph diagnostics
+    rateMismatch,
     // caches (exposed for diagnostics / teardown)
     _cache: cache, _filteredCache: filteredCache,
     // utils

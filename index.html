@@ -53,13 +53,32 @@
 <div id="calibration" class="screen">
   <h2>Calibration</h2>
   <p class="small" style="max-width:34rem; margin:0.5rem auto;">
-    Turn device volume fully up, play the calibration tone, measure output in
-    dB(A) with a sound-level meter, then stop and enter the value. The measured
-    level becomes the reference; presentation level is set with the slider below.
+    Turn device volume fully up, play the calibration noise, set the level by
+    your chosen method, then stop and enter the value. The measured level becomes
+    the reference; presentation level is set with the slider below.
   </p>
 
+  <div class="cal-method" style="max-width:34rem; margin:0.75rem auto; text-align:left;">
+    <label for="calMethodSelect"><strong>Calibration method</strong></label><br>
+    <select id="calMethodSelect" style="margin:0.35rem 0;">
+      <option value="audiometer">Audiometer — via aux / tape input</option>
+      <option value="soundfield">Sound field — sound level meter</option>
+    </select>
+    <ol id="calSteps" class="small" style="margin:0.5rem 0 0 1.1rem; padding:0;"></ol>
+  </div>
+
+  <div id="calEarWrap" class="cal-ear" style="max-width:34rem; margin:0.75rem auto; text-align:left;">
+    <label for="calEarSelect"><strong>Calibrate channel</strong></label>
+    <select id="calEarSelect" style="margin-left:0.5rem;">
+      <option value="left">Left</option>
+      <option value="right">Right</option>
+      <option value="binaural">Both</option>
+    </select>
+    <div id="calEarHint" class="small" style="margin-top:0.35rem;"></div>
+  </div>
+
   <div style="margin:1rem 0;">
-    <button id="calToneToggleBtn">Calibration tone</button>
+    <button id="calToneToggleBtn">Calibration noise</button>
     <button id="testCalBtn" hidden>Test level</button>
   </div>
 
