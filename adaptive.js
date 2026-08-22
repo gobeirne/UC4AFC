@@ -232,16 +232,10 @@ function createTrack(cfg) {
   function estimate() {
     const fit = fitMLE(cfg, xs.slice(), ys.slice(), cfg.slopeHint);
     const value = xToHz(fit.srtX);
-    // A fit pinned to an axis bound is not identifiable (the near-separable
-    // window collapses the MLE onto xlo/xhi). Flag it alongside the explicit
-    // all-correct/all-incorrect degeneracy from fitMLE.
-    const eps = 1e-6;
-    const pinned = (fit.srtX <= cfg.xlo + eps) || (fit.srtX >= cfg.xhi - eps);
     return {
       srtX: fit.srtX,
       slope: fit.slope,
-      degenerate: !!fit.degenerate || pinned,
-      pinned,
+      degenerate: fit.degenerate,
       value,                    // Hz (LPF) or dB (quiet)
       unit: cfg.unit,
       thresholdHz: value,       // LPF-friendly alias
@@ -249,44 +243,17 @@ function createTrack(cfg) {
     };
   }
 
-  // "If the run stopped at the current trial": the FINAL estimator (fitMLE)
-  // applied to all trials collected so far. Identical estimator to estimate();
-  // this name documents intent for the per-trial stop-at-n column. Returns the
-  // value or null when the fit is degenerate/pinned (so the stopping curve has
-  // honest gaps rather than floor-pinned artefacts).
-  function stopAtEstimate() {
-    const e = estimate();
-    return e.degenerate ? null : e.value;
-  }
-
   function history() {
     return xs.map((xi, i) => ({ x: xi, value: xToHz(xi), cutoffHz: xToHz(xi), correct: ys[i] === 1 }));
   }
 
-  // The RUNNING estimate is only meaningful once the coarse initial phase is
-  // over — before the phase switch (switchRev reversals) an MLE on sparse,
-  // near-monotonic data is degenerate and thrashes (pins to a bound / overshoots).
-  // This gates the PER-TRIAL running estimate only; the FINAL estimate() is
-  // always computed from the complete track and is unaffected. WUDR uses the
-  // phase switch; A1/A2 have no phases, so they reuse switchRev as a reversal
-  // floor for the same "enough information" reason.
-  function estimateReady() {
-    const need = (typeof cfg.switchRev === "number" && cfg.switchRev > 0) ? cfg.switchRev : 0;
-    if (need === 0) return true; // single-phase: no gating requested
-    return reversalCount() >= need;
-  }
-  function reversalCount() {
-    return (cfg.procedure === "a2") ? (A2.T[0].rev + A2.T[1].rev) : rev;
-  }
-
   return {
-    currentX, currentValue, currentCutoffHz, update, estimate, stopAtEstimate,
+    currentX, currentValue, currentCutoffHz, update, estimate,
     unit: cfg.unit, mode: cfg.mode, axisIsLog: cfg.axisIsLog,
     trials: () => xs.length,
     done: () => xs.length >= cfg.nTrials,
     history,
-    reversals: reversalCount,
-    estimateReady
+    reversals: () => (cfg.procedure === "a2" ? (A2.T[0].rev + A2.T[1].rev) : rev)
   };
 }
 
@@ -294,20 +261,24 @@ function createTrack(cfg) {
 // value (Hz for LPF, dB for quiet) into the internal cfg the track consumes.
 // Mode-aware: LPF uses a log10(Hz) axis, quiet uses a linear dB axis.
 function resolveTrackConfig(adaptive, startValue) {
-  const axisIsLog = adaptive.axisIsLog !== false && adaptive.mode !== "quiet";
+  // Both quiet (dB level) and snr (dB SNR) are LINEAR-axis modes; only LPF is
+  // log10(Hz). Anything not explicitly linear stays on the log axis (LPF).
+  const linearMode = adaptive.mode === "quiet" || adaptive.mode === "snr";
+  const axisIsLog = adaptive.axisIsLog !== false && !linearMode;
+  const isSnr = adaptive.mode === "snr";
   const toX = axisIsLog ? (v) => Math.log10(v) : (v) => v;
-  const defStart = startValue
-    || adaptive.startValue
-    || (axisIsLog ? (adaptive.startCutoffHz || 1000) : (adaptive.start || 65));
+  const defStart = (startValue != null ? startValue : undefined)
+    ?? adaptive.startValue
+    ?? (axisIsLog ? (adaptive.startCutoffHz || 1000) : (adaptive.start ?? (isSnr ? 2 : 65)));
   return {
     mode: adaptive.mode || (axisIsLog ? "lpf" : "quiet"),
     procedure: adaptive.procedure || "wudr",
     A: adaptive.A || 4,
     target: adaptive.target ?? midpointTarget(adaptive.A || 4),
-    xlo: adaptive.xlo ?? (axisIsLog ? Math.log10(80) : 20),
-    xhi: adaptive.xhi ?? (axisIsLog ? Math.log10(6000) : 85),
+    xlo: adaptive.xlo ?? (axisIsLog ? Math.log10(80) : (isSnr ? -20 : 20)),
+    xhi: adaptive.xhi ?? (axisIsLog ? Math.log10(6000) : (isSnr ? 10 : 85)),
     axisIsLog,
-    unit: adaptive.unit || (axisIsLog ? "Hz" : "dB"),
+    unit: adaptive.unit || (axisIsLog ? "Hz" : (isSnr ? "dB SNR" : "dB")),
     harder: -1,
     startX: toX(defStart),
     nTrials: adaptive.nTrials || 33,

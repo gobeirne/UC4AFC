@@ -442,38 +442,46 @@ function showModeButtons(mode) {
     b.classList.toggle("active", b.dataset.mode === mode);
   });
   const hint = document.getElementById("modeHint");
-  if (hint) hint.textContent = (mode === "quiet")
-    ? "Adapts presentation level (dB). Uncalibrated runs are relative to the start level."
-    : "Adapts the equivalent low-pass cutoff (Hz).";
+  if (hint) hint.textContent =
+    (mode === "quiet") ? "Adapts presentation level (dB). Uncalibrated runs are relative to the start level."
+  : (mode === "snr")   ? "Adapts signal-to-noise ratio (dB). Masking noise is fixed at the presentation level; the signal moves."
+  : "Adapts the equivalent low-pass cutoff (Hz).";
+  // The SNR-only block (step multiplier) is shown only in SNR mode.
+  const snrBlock = document.getElementById("snrBlock");
+  if (snrBlock) snrBlock.hidden = (mode !== "snr");
 }
 
 // Relabel units and adjust input bounds/steps for the active mode.
 function applyModeLabels(mode) {
   const isQuiet = (mode === "quiet");
-  const stepUnit = isQuiet ? "dB" : "dec";
+  const isSnr = (mode === "snr");
+  const isLinear = isQuiet || isSnr;   // dB axis (either level or SNR)
+  const stepUnit = isLinear ? "dB" : "dec";
   const setText = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
-  setText("lblStart", isQuiet ? "Starting level (dB)" : "Starting cutoff (Hz)");
-  setText("lblStartRel", isQuiet ? "Start (dB re threshold)" : "Start (octaves re threshold)");
+  setText("lblStart", isSnr ? "Starting SNR (dB)" : isQuiet ? "Starting level (dB)" : "Starting cutoff (Hz)");
+  setText("lblStartRel", isSnr ? "Start (dB re threshold)" : isQuiet ? "Start (dB re threshold)" : "Start (octaves re threshold)");
   document.querySelectorAll(".lblStepUnit-wd").forEach(e => e.textContent = `Working down step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-wu").forEach(e => e.textContent = `Working up step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-id").forEach(e => e.textContent = `Initial down step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-iu").forEach(e => e.textContent = `Initial up step (${stepUnit})`);
 
-  // Start-cutoff input bounds/step per mode.
+  // Start input bounds/step per mode.
   const sc = document.getElementById("setStartCutoff");
   if (sc) {
-    if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
+    if (isSnr) { sc.min = -20; sc.max = 10; sc.step = 1; }
+    else if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
     else { sc.min = 80; sc.max = 6000; sc.step = 10; }
   }
-  // Step inputs coarser in quiet (dB) than LPF (decades).
+  // Step inputs: fine in SNR (small dB), medium in quiet, very fine in LPF.
   ["setWorkDown","setWorkUp","setInitDown","setInitUp"].forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.step = isQuiet ? 0.1 : 0.0001;
+    if (el) el.step = isSnr ? 0.01 : isQuiet ? 0.1 : 0.0001;
   });
   const wudrHint = document.getElementById("wudrHint");
-  if (wudrHint) wudrHint.textContent = isQuiet
-    ? "Quiet defaults: down 0.6 dB / up 1.0 dB (working); down 3 / up 5 (initial). 0 reversals = single-phase."
-    : "Defaults: down \u22124.76% / up +8.33% (working); down \u221211.1% / up +20.8% (initial). 0 reversals = single-phase.";
+  if (wudrHint) wudrHint.textContent =
+    isSnr   ? "SNR steps = quiet dB steps \u00d7 the multiplier below. 0 reversals = single-phase."
+  : isQuiet ? "Quiet defaults: down 0.6 dB / up 1.0 dB (working); down 3 / up 5 (initial). 0 reversals = single-phase."
+  : "Defaults: down \u22124.76% / up +8.33% (working); down \u221211.1% / up +20.8% (initial). 0 reversals = single-phase.";
 }
 
 function toggleStartMode(mode) {
@@ -487,9 +495,14 @@ function toggleStartMode(mode) {
 function fillFormFromCfg(cfg) {
   const set = (id, v) => { const el = document.getElementById(id); if (el != null && v != null) el.value = v; };
   const isQuiet = (cfg.mode === "quiet");
+  const isSnr = (cfg.mode === "snr");
   set("setStartMode", cfg.startMode || "absolute");
   toggleStartMode(cfg.startMode || "absolute");
-  set("setStartCutoff", isQuiet ? (cfg.startValue ?? cfg.start ?? 65) : (cfg.startValue ?? cfg.startCutoffHz ?? 1000));
+  set("setStartCutoff",
+    isSnr   ? (cfg.startValue ?? cfg.start ?? 2)
+  : isQuiet ? (cfg.startValue ?? cfg.start ?? 65)
+  : (cfg.startValue ?? cfg.startCutoffHz ?? 1000));
+  set("setSnrStepMult", cfg.stepMult ?? 0.2);
   set("setStartRel", cfg.startRelOctaves ?? 0);
   set("setNTrials", cfg.nTrials ?? 33);
   set("setA", cfg.A ?? 4);
@@ -530,38 +543,48 @@ function readSetupForm() {
   const val = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
   const A = 4;
   const isQuiet = (_setupMode === "quiet");
+  const isSnr = (_setupMode === "snr");
+  const isLinear = isQuiet || isSnr;   // dB axis (level or SNR)
   const sweet = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.sweetPointsFor(A) : { pLow: 0.40, pHigh: 0.85 };
   const midpoint = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.midpointTarget(A) : 0.625;
-  const startVal = num("setStartCutoff", isQuiet ? 65 : 1000);
+  const startVal = num("setStartCutoff", isSnr ? 2 : isQuiet ? 65 : 1000);
+
+  // In SNR mode the WUDR steps are derived from the multiplier (single source of
+  // truth), not read from the step inputs. Other modes read the step inputs.
+  const stepMult = isSnr ? num("setSnrStepMult", 0.2) : undefined;
+  const snrSteps = (isSnr && typeof AdaptiveConfig !== "undefined")
+    ? AdaptiveConfig.snrStepsForMult(stepMult)
+    : null;
 
   return {
     mode: _setupMode,
     procedure: _setupProc,
     A,
     target: midpoint,
-    axisIsLog: !isQuiet,
-    unit: isQuiet ? "dB" : "Hz",
-    stepUnit: isQuiet ? "dB" : "decades",
-    slopeUnit: isQuiet ? "%/dB" : "%/octave",
+    axisIsLog: !isLinear,
+    unit: isSnr ? "dB SNR" : isQuiet ? "dB" : "Hz",
+    stepUnit: isLinear ? "dB" : "decades",
+    slopeUnit: isLinear ? "%/dB" : "%/octave",
     startMode: val("setStartMode") || "absolute",
     startValue: startVal,
-    startCutoffHz: isQuiet ? undefined : startVal,  // LPF alias
+    startCutoffHz: isLinear ? undefined : startVal,  // LPF alias only
     startRelOctaves: num("setStartRel", 0),
     nTrials: Math.max(1, Math.min(66, Math.round(num("setNTrials", 33)))),
-    xlo: isQuiet ? 20 : Math.log10(80),
-    xhi: isQuiet ? 85 : Math.log10(6000),
-    workDown: num("setWorkDown", isQuiet ? 0.6 : 0.0212),
-    workUp: num("setWorkUp", isQuiet ? 1.0 : 0.0348),
-    initDown: num("setInitDown", isQuiet ? 3.0 : 0.0511),
-    initUp: num("setInitUp", isQuiet ? 5.0 : 0.0822),
+    xlo: isSnr ? -20 : isQuiet ? 20 : Math.log10(80),
+    xhi: isSnr ? 10 : isQuiet ? 85 : Math.log10(6000),
+    workDown: snrSteps ? snrSteps.workDown : num("setWorkDown", isQuiet ? 0.6 : 0.0212),
+    workUp:   snrSteps ? snrSteps.workUp   : num("setWorkUp",   isQuiet ? 1.0 : 0.0348),
+    initDown: snrSteps ? snrSteps.initDown : num("setInitDown", isQuiet ? 3.0 : 0.0511),
+    initUp:   snrSteps ? snrSteps.initUp   : num("setInitUp",   isQuiet ? 5.0 : 0.0822),
     switchRev: Math.max(0, Math.round(num("setSwitchRev", 5))),
-    a1slope: num("setA1Slope", isQuiet ? 0.10 : 10),
-    minStep: isQuiet ? 0.25 : 0.01,
-    a2slope: num("setA2Slope", isQuiet ? 0.10 : 10),
+    a1slope: num("setA1Slope", isLinear ? 0.10 : 10),
+    minStep: isSnr ? 0.05 : isQuiet ? 0.25 : 0.01,
+    a2slope: num("setA2Slope", isLinear ? 0.10 : 10),
     pLow: sweet.pLow,
     pHigh: sweet.pHigh,
     a2Doubling: !!(document.getElementById("setA2Doubling") || {}).checked,
-    slopeHint: isQuiet ? 6 : 43,
+    slopeHint: isLinear ? 6 : 43,
+    stepMult,   // undefined unless SNR
     routing: val("setRouting") || "binaural"
   };
 }
@@ -597,6 +620,21 @@ function setupSetupScreen() {
 
   const startMode = document.getElementById("setStartMode");
   if (startMode) startMode.onchange = () => toggleStartMode(startMode.value);
+
+  // SNR step multiplier: recompute and display the four WUDR steps from it, so
+  // the step fields always reflect quiet-base × multiplier.
+  const snrMult = document.getElementById("setSnrStepMult");
+  if (snrMult) {
+    const applyMult = () => {
+      if (_setupMode !== "snr" || typeof AdaptiveConfig === "undefined") return;
+      const s = AdaptiveConfig.snrStepsForMult(parseFloat(snrMult.value));
+      const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+      set("setWorkDown", s.workDown); set("setWorkUp", s.workUp);
+      set("setInitDown", s.initDown); set("setInitUp", s.initUp);
+    };
+    snrMult.addEventListener("input", applyMult);
+    snrMult.addEventListener("change", applyMult);
+  }
 
   const saveBtn = document.getElementById("setupSaveBtn");
   if (saveBtn) saveBtn.onclick = () => {

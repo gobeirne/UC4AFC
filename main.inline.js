@@ -326,6 +326,10 @@ const AudioEngine = (() => {
   const preMeasured = new Map();
 
   let activeSource = null;
+  // In SNR mode a second source (looped calibration noise) plays alongside the
+  // word. It is tracked separately so stop() can tear BOTH down — otherwise the
+  // noise keeps looping after the word ends.
+  let activeNoiseSource = null;
 
   function context() {
     if (!ctx) {
@@ -565,11 +569,106 @@ const AudioEngine = (() => {
     return prepared;
   }
 
+  // ---- SNR mode: word mixed with masking (calibration) noise --------------
+  // The noise plays at the fixed presentation level (noiseGainDb) and does NOT
+  // move with SNR. The SIGNAL is offset from the noise by snrDb, so a lower SNR
+  // = quieter signal, noise unchanged. Loudness anchor = files AS DELIVERED
+  // (spectrum- and level-matched at source): at snrDb = 0 both play at the same
+  // extra gain; snrDb is exactly the extra dB applied to the word. No LUFS
+  // re-matching here. Noise starts noisePadSec before the word's audible onset
+  // and stops noisePadSec after its end (word files carry ~600 ms lead silence).
+  // Clip guard: only when the summed peak in an ear is LIKELY to exceed full
+  // scale do we pull BOTH signal and noise down by the overshoot, holding the
+  // signal below the noise while PRESERVING their ratio (the SNR). Logged.
+  async function playStimulusWithNoise(name, url, {
+    snrDb = 0,
+    noiseGainDb = 0,
+    noiseUrl = "sounds/calib.mp3",
+    routing = "binaural",
+    onStarted = null,
+    noisePadSec = 0.6,
+    wordLeadSec = 0.6
+  } = {}) {
+    const c = context();
+    stop(); // one trial at a time — tears down any prior word AND noise
+
+    if (!cache.has(name)) await decode(name, url);
+    const prepared = await prepare(name, null);      // SNR mode never filters
+    const wordBuf = prepared.buffer;
+    const noise = await ensureCalibNoise(noiseUrl);
+    const noiseBuf = noise.raw;
+
+    const signalGainDb = noiseGainDb + snrDb;
+    let sigLin = LIN(signalGainDb);
+    let noiLin = LIN(noiseGainDb);
+
+    const sigPeak = LIN(estimateTruePeakDB(wordBuf));
+    const noiPeak = LIN(estimateTruePeakDB(noiseBuf));
+    const summedPeak = sigPeak * sigLin + noiPeak * noiLin;
+    if (summedPeak > 1.0) {
+      const scale = 1.0 / summedPeak;
+      sigLin *= scale; noiLin *= scale;
+      console.warn(`[snr] summed peak ${summedPeak.toFixed(3)} > 1; ` +
+        `held level down ${(20*Math.log10(scale)).toFixed(1)} dB (SNR unchanged)`);
+    }
+
+    const wordSrc = c.createBufferSource();
+    wordSrc.buffer = wordBuf;
+    const wordGain = c.createGain();
+    wordGain.gain.value = sigLin;
+    wordSrc.connect(wordGain);
+    makeEarRouter(c, wordGain, routing);
+
+    const noiseSrc = c.createBufferSource();
+    noiseSrc.buffer = noiseBuf;
+    noiseSrc.loop = true;
+    const noiseG = c.createGain();
+    noiseG.gain.value = noiLin;
+    noiseSrc.connect(noiseG);
+    makeEarRouter(c, noiseG, routing);
+
+    activeSource = wordSrc;
+    activeNoiseSource = noiseSrc;
+
+    const now = c.currentTime;
+    const t0 = now + 0.02;
+    const wordDur = wordBuf.duration;
+    const audibleOnset = Math.min(wordLeadSec, wordDur);
+    const noiseStart = Math.max(now, t0 + audibleOnset - noisePadSec);
+    const noiseStop  = t0 + wordDur + noisePadSec;
+
+    return new Promise((resolve, reject) => {
+      wordSrc.onended = () => {
+        if (activeSource === wordSrc) activeSource = null;
+        resolve();
+      };
+      try {
+        noiseSrc.start(noiseStart);
+        noiseSrc.stop(noiseStop);
+        noiseSrc.onended = () => {
+          if (activeNoiseSource === noiseSrc) activeNoiseSource = null;
+          try { noiseSrc.disconnect(); } catch (_) {}
+        };
+        wordSrc.start(t0);
+        if (onStarted) requestAnimationFrame(() => onStarted());
+      } catch (err) {
+        if (activeSource === wordSrc) activeSource = null;
+        if (activeNoiseSource === noiseSrc) activeNoiseSource = null;
+        reject(err);
+      }
+    }).then(() => prepared);
+  }
+
   function stop() {
     if (activeSource) {
       try { activeSource.onended = null; activeSource.stop(); } catch (_) {}
       try { activeSource.disconnect(); } catch (_) {}
       activeSource = null;
+    }
+    if (activeNoiseSource) {
+      try { activeNoiseSource.onended = null; activeNoiseSource.stop(); } catch (_) {}
+      try { activeNoiseSource.disconnect(); } catch (_) {}
+      activeNoiseSource = null;
     }
   }
 
@@ -586,11 +685,10 @@ const AudioEngine = (() => {
   let calibRouter = null;
   const CALIB_KEY = "__calib__";
 
-  async function startCalibrationTone(url = "sounds/calib.mp3", { onStarted = null, extraGainDb = 0, ear = "binaural" } = {}) {
+  // Decode + cache the calibration noise file (idempotent). Shared by the
+  // calibration tone AND the SNR mix path. Returns { raw, momentary }.
+  async function ensureCalibNoise(url = "sounds/calib.mp3") {
     const c = context();
-    stopCalibrationTone();
-
-    // Decode + cache the calibration file (idempotent).
     let entry = cache.get(CALIB_KEY);
     if (!entry) {
       const resp = await fetch(url);
@@ -599,6 +697,15 @@ const AudioEngine = (() => {
       entry = { raw, momentary: measureLUFS(raw).momentary };
       cache.set(CALIB_KEY, entry);
     }
+    return entry;
+  }
+
+  async function startCalibrationTone(url = "sounds/calib.mp3", { onStarted = null, extraGainDb = 0, ear = "binaural" } = {}) {
+    const c = context();
+    stopCalibrationTone();
+
+    // Decode + cache the calibration file (idempotent).
+    const entry = await ensureCalibNoise(url);
 
     const src = c.createBufferSource();
     src.buffer = entry.raw;
@@ -648,9 +755,9 @@ const AudioEngine = (() => {
     prepare, measure: measureLUFS,
     butterworthSections: butterworthLowpassSections,
     // playback
-    playBuffer, playStimulus, stop, setMasterGainDb,
+    playBuffer, playStimulus, playStimulusWithNoise, stop, setMasterGainDb,
     // calibration
-    startCalibrationTone, stopCalibrationTone, setCalibrationEar,
+    startCalibrationTone, stopCalibrationTone, setCalibrationEar, ensureCalibNoise,
     // audio-graph diagnostics
     rateMismatch,
     // caches (exposed for diagnostics / teardown)
@@ -993,8 +1100,34 @@ const PRESETS = {
     switchRev: 5,
     a1slope: 0.10, a2slope: 0.10, minStep: 0.25,
     slopeHint: 6                                     // %/dB
+  },
+  // Noise (SNR): the adapting quantity is the signal-to-noise ratio in dB. The
+  // masking noise is the calibration file, presented at the fixed level (the
+  // calibrated dB(A), or unity/relative when uncalibrated); the SIGNAL level is
+  // moved relative to it, so a poorer (lower) SNR is the harder direction — the
+  // same harder = -1 the other linear-axis mode uses. Loudness anchor is the
+  // files AS DELIVERED: they are spectrum- and level-matched at source, so
+  // SNR = 0 dB means noise-at-file-level + signal-at-file-level with no
+  // re-matching, and the SNR value is exactly the extra dB applied to the signal.
+  snr: {
+    mode: "snr",
+    axisIsLog: false,
+    unit: "dB SNR", stepUnit: "dB", slopeUnit: "%/dB",
+    start: 2,                                         // +2 dB SNR
+    xlo: -20, xhi: 10,
+    stepMult: 0.2,
+    workDown: +(0.6 * 0.2).toFixed(4),  // 0.12
+    workUp:   +(1.0 * 0.2).toFixed(4),  // 0.20
+    initDown: +(3.0 * 0.2).toFixed(4),  // 0.60
+    initUp:   +(5.0 * 0.2).toFixed(4),  // 1.00
+    switchRev: 5,
+    a1slope: 0.10, a2slope: 0.10, minStep: 0.05,
+    slopeHint: 6                                     // %/dB
   }
 };
+
+// The unscaled quiet-mode WUDR base steps that the SNR stepMult multiplies.
+const SNR_BASE_STEPS = { workDown: 0.6, workUp: 1.0, initDown: 3.0, initUp: 5.0 };
 
 // Full default config = LPF preset flattened + procedure/common fields. The
 // persisted config always carries a `mode`; switching mode in Setup swaps the
@@ -1057,7 +1190,18 @@ function applyModePreset(cfg, mode) {
     initDown: p.initDown, initUp: p.initUp,
     switchRev: p.switchRev,
     a1slope: p.a1slope, a2slope: p.a2slope, minStep: p.minStep,
-    slopeHint: p.slopeHint
+    slopeHint: p.slopeHint,
+    stepMult: p.mode === "snr" ? p.stepMult : undefined
+  };
+}
+
+function snrStepsForMult(mult) {
+  const m = isFinite(mult) && mult > 0 ? mult : 0.2;
+  return {
+    workDown: +(SNR_BASE_STEPS.workDown * m).toFixed(4),
+    workUp:   +(SNR_BASE_STEPS.workUp   * m).toFixed(4),
+    initDown: +(SNR_BASE_STEPS.initDown * m).toFixed(4),
+    initUp:   +(SNR_BASE_STEPS.initUp   * m).toFixed(4)
   };
 }
 
@@ -1107,7 +1251,7 @@ function mergeAdaptiveIntoConfig(config) {
 if (typeof window !== "undefined") {
   window.AdaptiveConfig = {
     DEFAULTS: ADAPTIVE_DEFAULTS,
-    PRESETS, applyModePreset,
+    PRESETS, applyModePreset, snrStepsForMult, SNR_BASE_STEPS,
     sweetPointsFor, midpointTarget,
     loadAdaptiveConfig, saveAdaptiveConfig, clearAdaptiveConfig,
     mergeAdaptiveIntoConfig
@@ -1379,20 +1523,22 @@ function createTrack(cfg) {
 // value (Hz for LPF, dB for quiet) into the internal cfg the track consumes.
 // Mode-aware: LPF uses a log10(Hz) axis, quiet uses a linear dB axis.
 function resolveTrackConfig(adaptive, startValue) {
-  const axisIsLog = adaptive.axisIsLog !== false && adaptive.mode !== "quiet";
+  const linearMode = adaptive.mode === "quiet" || adaptive.mode === "snr";
+  const axisIsLog = adaptive.axisIsLog !== false && !linearMode;
+  const isSnr = adaptive.mode === "snr";
   const toX = axisIsLog ? (v) => Math.log10(v) : (v) => v;
-  const defStart = startValue
-    || adaptive.startValue
-    || (axisIsLog ? (adaptive.startCutoffHz || 1000) : (adaptive.start || 65));
+  const defStart = (startValue != null ? startValue : undefined)
+    ?? adaptive.startValue
+    ?? (axisIsLog ? (adaptive.startCutoffHz || 1000) : (adaptive.start ?? (isSnr ? 2 : 65)));
   return {
     mode: adaptive.mode || (axisIsLog ? "lpf" : "quiet"),
     procedure: adaptive.procedure || "wudr",
     A: adaptive.A || 4,
     target: adaptive.target ?? midpointTarget(adaptive.A || 4),
-    xlo: adaptive.xlo ?? (axisIsLog ? Math.log10(80) : 20),
-    xhi: adaptive.xhi ?? (axisIsLog ? Math.log10(6000) : 85),
+    xlo: adaptive.xlo ?? (axisIsLog ? Math.log10(80) : (isSnr ? -20 : 20)),
+    xhi: adaptive.xhi ?? (axisIsLog ? Math.log10(6000) : (isSnr ? 10 : 85)),
     axisIsLog,
-    unit: adaptive.unit || (axisIsLog ? "Hz" : "dB"),
+    unit: adaptive.unit || (axisIsLog ? "Hz" : (isSnr ? "dB SNR" : "dB")),
     harder: -1,
     startX: toX(defStart),
     nTrials: adaptive.nTrials || 33,
@@ -1544,20 +1690,19 @@ function beginPhase(p) {
       // present (app never visited Setup), resolveTrackConfig's guards apply.
       const adaptive = (config && config.adaptive) ? config.adaptive : {};
       const isQuiet = adaptive.mode === "quiet";
+      const isSnr = adaptive.mode === "snr";
+      const isLinear = isQuiet || isSnr;   // both use a dB axis, not log(Hz)
 
-      // Start value: Hz (LPF) or dB (quiet). Relative start shifts the start by
-      // octaves (LPF) or dB (quiet); with no prior in-session threshold it
-      // resolves against the absolute start for now (documented).
-      let startVal = isQuiet
-        ? (adaptive.startValue ?? adaptive.start ?? 65)
+      let startVal = isLinear
+        ? (adaptive.startValue ?? adaptive.start ?? (isSnr ? 2 : 65))
         : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
       if (adaptive.startMode === "relative" && isFinite(adaptive.startRelOctaves)) {
-        startVal = isQuiet
+        startVal = isLinear
           ? startVal + adaptive.startRelOctaves               // dB shift
           : startVal * Math.pow(2, adaptive.startRelOctaves); // octave shift
       }
 
-      quietStartLevel = isQuiet ? startVal : null;
+      quietStartLevel = isLinear ? startVal : null;
       const trackCfg = resolveTrackConfig(adaptive, startVal);
       track = createTrack(trackCfg);
       currentCutoffHz = track.currentValue();
@@ -1729,12 +1874,38 @@ if (phase === "test") {
 
   // Mode-aware presentation:
   //  LPF  : filter at the adaptive CUTOFF; gain from the fixed run level.
-  //  Quiet: no filter; the adaptive VALUE is the presentation LEVEL (dB),
-  //         applied as gain (calibrated -> absolute dB(A); uncalibrated ->
-  //         relative dB re the start level).
+  //  Quiet: no filter; the adaptive VALUE is the presentation LEVEL (dB).
+  //  SNR  : no filter; the adaptive VALUE is the dB SNR. Masking noise plays at
+  //         the FIXED presentation level; the signal is offset by the SNR.
   const adaptive = (config && config.adaptive) ? config.adaptive : {};
   const isQuiet = (phase === "test" && track) ? adaptive.mode === "quiet" : false;
+  const isSnr   = (phase === "test" && track) ? adaptive.mode === "snr"   : false;
   const calibrated = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+  const routing = (config && config.routing) || "binaural";
+
+  // ---- SNR mode: dispatch to the mixed word+noise path and return early ----
+  if (isSnr) {
+    const snrDb = currentCutoffHz;   // mode-neutral value; dB SNR here
+    const noiseGainDb = calibrated
+      ? Calibration.gainDbForLevel(Calibration.state().currentSliderDb)
+      : 0;
+    const noiseUrl = (config && config.calibFile) ? `sounds/${config.calibFile}` : "sounds/calib.mp3";
+
+    AudioEngine.playStimulusWithNoise(item.correct, `sounds/${item.audioFile}`, {
+      snrDb,
+      noiseGainDb,
+      noiseUrl,
+      routing,
+      onStarted: () => { setTimeout(revealOptions, offset); }
+    }).catch(err => {
+      console.error("SNR audio play failed:", err);
+      if (!nextTrial._erroredOnce) {
+        alert("Audio failed to play. Check the calibration noise file (sounds/calib.mp3) and autoplay settings.");
+        nextTrial._erroredOnce = true;
+      }
+    });
+    return;
+  }
 
   let cutoffHz = null;
   let extraGainDb = 0;
@@ -1759,7 +1930,7 @@ if (phase === "test") {
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
     cutoffHz,
     extraGainDb,
-    routing: (config && config.routing) || "binaural",
+    routing,
     onStarted: () => {
       setTimeout(revealOptions, offset);
     }
@@ -1793,7 +1964,8 @@ function recordResponse(img) {
   // quiet), advance the track, and capture the running threshold estimate.
   if (phase === "test" && track) {
     const adaptive = (config && config.adaptive) ? config.adaptive : {};
-    const unit = track.unit || (adaptive.mode === "quiet" ? "dB" : "Hz");
+    const unit = track.unit
+      || (adaptive.mode === "snr" ? "dB SNR" : adaptive.mode === "quiet" ? "dB" : "Hz");
     const val = (unit === "Hz") ? Math.round(currentCutoffHz) : +currentCutoffHz.toFixed(1);
     entry.value = val;
     entry.unit = unit;
@@ -2282,8 +2454,9 @@ function saveResults(optionalNote = "") {
   const isAdaptive = responseLog.some(r => typeof r.value === "number" || typeof r.cutoffHz === "number");
   const adaptiveCfg = (config && config.adaptive) ? config.adaptive : null;
   const mode = (adaptiveCfg && adaptiveCfg.mode) || "lpf";
-  const unit = (mode === "quiet") ? "dB" : "Hz";
-  const stepUnit = (mode === "quiet") ? "dB" : "dec";
+  const isLinear = (mode === "quiet" || mode === "snr");
+  const unit = (mode === "snr") ? "dB SNR" : (mode === "quiet") ? "dB" : "Hz";
+  const stepUnit = isLinear ? "dB" : "dec";
   const valOf = (r) => (typeof r.value === "number" ? r.value : r.cutoffHz);
   const estOf = (r) => (typeof r.estimate === "number" ? r.estimate : r.estimateHz);
   const lastEstimate = (() => {
@@ -2301,7 +2474,7 @@ function saveResults(optionalNote = "") {
   ];
 
   if (isAdaptive && adaptiveCfg) {
-    const startShown = (mode === "quiet")
+    const startShown = isLinear
       ? (adaptiveCfg.startValue ?? adaptiveCfg.start ?? "")
       : (adaptiveCfg.startValue ?? adaptiveCfg.startCutoffHz ?? "");
     txtLines.push(
@@ -2317,6 +2490,15 @@ function saveResults(optionalNote = "") {
       `# Routing\t${(config && config.routing) || "binaural"}`,
       `# Threshold estimate (${unit})\t${lastEstimate != null ? lastEstimate : "n/a"}`
     );
+    if (mode === "snr") {
+      const noiseLevel = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated())
+        ? `${Calibration.state().currentSliderDb} dB(A)`
+        : "uncalibrated (device volume sets level)";
+      txtLines.push(
+        `# Noise level (fixed)\t${noiseLevel}`,
+        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`
+      );
+    }
   }
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
     txtLines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
@@ -2324,8 +2506,8 @@ function saveResults(optionalNote = "") {
 
   txtLines.push("");
   if (isAdaptive) {
-    const valCol = (mode === "quiet") ? "Level_dB" : "Cutoff_Hz";
-    const estCol = (mode === "quiet") ? "Estimate_dB" : "Estimate_Hz";
+    const valCol = (mode === "snr") ? "SNR_dB" : (mode === "quiet") ? "Level_dB" : "Cutoff_Hz";
+    const estCol = (mode === "snr") ? "EstimateSNR_dB" : (mode === "quiet") ? "Estimate_dB" : "Estimate_Hz";
     txtLines.push(`Trial\tSound\tCorrect\tChosen\tCorrect?\t${valCol}\tProcedure\t${estCol}\tTime_ms`);
     for (const r of responseLog) {
       txtLines.push(
@@ -2980,38 +3162,43 @@ function showModeButtons(mode) {
     b.classList.toggle("active", b.dataset.mode === mode);
   });
   const hint = document.getElementById("modeHint");
-  if (hint) hint.textContent = (mode === "quiet")
-    ? "Adapts presentation level (dB). Uncalibrated runs are relative to the start level."
-    : "Adapts the equivalent low-pass cutoff (Hz).";
+  if (hint) hint.textContent =
+    (mode === "quiet") ? "Adapts presentation level (dB). Uncalibrated runs are relative to the start level."
+  : (mode === "snr")   ? "Adapts signal-to-noise ratio (dB). Masking noise is fixed at the presentation level; the signal moves."
+  : "Adapts the equivalent low-pass cutoff (Hz).";
+  const snrBlock = document.getElementById("snrBlock");
+  if (snrBlock) snrBlock.hidden = (mode !== "snr");
 }
 
 // Relabel units and adjust input bounds/steps for the active mode.
 function applyModeLabels(mode) {
   const isQuiet = (mode === "quiet");
-  const stepUnit = isQuiet ? "dB" : "dec";
+  const isSnr = (mode === "snr");
+  const isLinear = isQuiet || isSnr;
+  const stepUnit = isLinear ? "dB" : "dec";
   const setText = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
-  setText("lblStart", isQuiet ? "Starting level (dB)" : "Starting cutoff (Hz)");
-  setText("lblStartRel", isQuiet ? "Start (dB re threshold)" : "Start (octaves re threshold)");
+  setText("lblStart", isSnr ? "Starting SNR (dB)" : isQuiet ? "Starting level (dB)" : "Starting cutoff (Hz)");
+  setText("lblStartRel", isSnr ? "Start (dB re threshold)" : isQuiet ? "Start (dB re threshold)" : "Start (octaves re threshold)");
   document.querySelectorAll(".lblStepUnit-wd").forEach(e => e.textContent = `Working down step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-wu").forEach(e => e.textContent = `Working up step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-id").forEach(e => e.textContent = `Initial down step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-iu").forEach(e => e.textContent = `Initial up step (${stepUnit})`);
 
-  // Start-cutoff input bounds/step per mode.
   const sc = document.getElementById("setStartCutoff");
   if (sc) {
-    if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
+    if (isSnr) { sc.min = -20; sc.max = 10; sc.step = 1; }
+    else if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
     else { sc.min = 80; sc.max = 6000; sc.step = 10; }
   }
-  // Step inputs coarser in quiet (dB) than LPF (decades).
   ["setWorkDown","setWorkUp","setInitDown","setInitUp"].forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.step = isQuiet ? 0.1 : 0.0001;
+    if (el) el.step = isSnr ? 0.01 : isQuiet ? 0.1 : 0.0001;
   });
   const wudrHint = document.getElementById("wudrHint");
-  if (wudrHint) wudrHint.textContent = isQuiet
-    ? "Quiet defaults: down 0.6 dB / up 1.0 dB (working); down 3 / up 5 (initial). 0 reversals = single-phase."
-    : "Defaults: down \u22124.76% / up +8.33% (working); down \u221211.1% / up +20.8% (initial). 0 reversals = single-phase.";
+  if (wudrHint) wudrHint.textContent =
+    isSnr   ? "SNR steps = quiet dB steps \u00d7 the multiplier below. 0 reversals = single-phase."
+  : isQuiet ? "Quiet defaults: down 0.6 dB / up 1.0 dB (working); down 3 / up 5 (initial). 0 reversals = single-phase."
+  : "Defaults: down \u22124.76% / up +8.33% (working); down \u221211.1% / up +20.8% (initial). 0 reversals = single-phase.";
 }
 
 function toggleStartMode(mode) {
@@ -3025,9 +3212,14 @@ function toggleStartMode(mode) {
 function fillFormFromCfg(cfg) {
   const set = (id, v) => { const el = document.getElementById(id); if (el != null && v != null) el.value = v; };
   const isQuiet = (cfg.mode === "quiet");
+  const isSnr = (cfg.mode === "snr");
   set("setStartMode", cfg.startMode || "absolute");
   toggleStartMode(cfg.startMode || "absolute");
-  set("setStartCutoff", isQuiet ? (cfg.startValue ?? cfg.start ?? 65) : (cfg.startValue ?? cfg.startCutoffHz ?? 1000));
+  set("setStartCutoff",
+    isSnr   ? (cfg.startValue ?? cfg.start ?? 2)
+  : isQuiet ? (cfg.startValue ?? cfg.start ?? 65)
+  : (cfg.startValue ?? cfg.startCutoffHz ?? 1000));
+  set("setSnrStepMult", cfg.stepMult ?? 0.2);
   set("setStartRel", cfg.startRelOctaves ?? 0);
   set("setNTrials", cfg.nTrials ?? 33);
   set("setA", cfg.A ?? 4);
@@ -3068,38 +3260,46 @@ function readSetupForm() {
   const val = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
   const A = 4;
   const isQuiet = (_setupMode === "quiet");
+  const isSnr = (_setupMode === "snr");
+  const isLinear = isQuiet || isSnr;
   const sweet = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.sweetPointsFor(A) : { pLow: 0.40, pHigh: 0.85 };
   const midpoint = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.midpointTarget(A) : 0.625;
-  const startVal = num("setStartCutoff", isQuiet ? 65 : 1000);
+  const startVal = num("setStartCutoff", isSnr ? 2 : isQuiet ? 65 : 1000);
+
+  const stepMult = isSnr ? num("setSnrStepMult", 0.2) : undefined;
+  const snrSteps = (isSnr && typeof AdaptiveConfig !== "undefined")
+    ? AdaptiveConfig.snrStepsForMult(stepMult)
+    : null;
 
   return {
     mode: _setupMode,
     procedure: _setupProc,
     A,
     target: midpoint,
-    axisIsLog: !isQuiet,
-    unit: isQuiet ? "dB" : "Hz",
-    stepUnit: isQuiet ? "dB" : "decades",
-    slopeUnit: isQuiet ? "%/dB" : "%/octave",
+    axisIsLog: !isLinear,
+    unit: isSnr ? "dB SNR" : isQuiet ? "dB" : "Hz",
+    stepUnit: isLinear ? "dB" : "decades",
+    slopeUnit: isLinear ? "%/dB" : "%/octave",
     startMode: val("setStartMode") || "absolute",
     startValue: startVal,
-    startCutoffHz: isQuiet ? undefined : startVal,  // LPF alias
+    startCutoffHz: isLinear ? undefined : startVal,  // LPF alias only
     startRelOctaves: num("setStartRel", 0),
     nTrials: Math.max(1, Math.min(66, Math.round(num("setNTrials", 33)))),
-    xlo: isQuiet ? 20 : Math.log10(80),
-    xhi: isQuiet ? 85 : Math.log10(6000),
-    workDown: num("setWorkDown", isQuiet ? 0.6 : 0.0212),
-    workUp: num("setWorkUp", isQuiet ? 1.0 : 0.0348),
-    initDown: num("setInitDown", isQuiet ? 3.0 : 0.0511),
-    initUp: num("setInitUp", isQuiet ? 5.0 : 0.0822),
+    xlo: isSnr ? -20 : isQuiet ? 20 : Math.log10(80),
+    xhi: isSnr ? 10 : isQuiet ? 85 : Math.log10(6000),
+    workDown: snrSteps ? snrSteps.workDown : num("setWorkDown", isQuiet ? 0.6 : 0.0212),
+    workUp:   snrSteps ? snrSteps.workUp   : num("setWorkUp",   isQuiet ? 1.0 : 0.0348),
+    initDown: snrSteps ? snrSteps.initDown : num("setInitDown", isQuiet ? 3.0 : 0.0511),
+    initUp:   snrSteps ? snrSteps.initUp   : num("setInitUp",   isQuiet ? 5.0 : 0.0822),
     switchRev: Math.max(0, Math.round(num("setSwitchRev", 5))),
-    a1slope: num("setA1Slope", isQuiet ? 0.10 : 10),
-    minStep: isQuiet ? 0.25 : 0.01,
-    a2slope: num("setA2Slope", isQuiet ? 0.10 : 10),
+    a1slope: num("setA1Slope", isLinear ? 0.10 : 10),
+    minStep: isSnr ? 0.05 : isQuiet ? 0.25 : 0.01,
+    a2slope: num("setA2Slope", isLinear ? 0.10 : 10),
     pLow: sweet.pLow,
     pHigh: sweet.pHigh,
     a2Doubling: !!(document.getElementById("setA2Doubling") || {}).checked,
-    slopeHint: isQuiet ? 6 : 43,
+    slopeHint: isLinear ? 6 : 43,
+    stepMult,
     routing: val("setRouting") || "binaural"
   };
 }
@@ -3135,6 +3335,19 @@ function setupSetupScreen() {
 
   const startMode = document.getElementById("setStartMode");
   if (startMode) startMode.onchange = () => toggleStartMode(startMode.value);
+
+  const snrMult = document.getElementById("setSnrStepMult");
+  if (snrMult) {
+    const applyMult = () => {
+      if (_setupMode !== "snr" || typeof AdaptiveConfig === "undefined") return;
+      const s = AdaptiveConfig.snrStepsForMult(parseFloat(snrMult.value));
+      const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+      set("setWorkDown", s.workDown); set("setWorkUp", s.workUp);
+      set("setInitDown", s.initDown); set("setInitUp", s.initUp);
+    };
+    snrMult.addEventListener("input", applyMult);
+    snrMult.addEventListener("change", applyMult);
+  }
 
   const saveBtn = document.getElementById("setupSaveBtn");
   if (saveBtn) saveBtn.onclick = () => {

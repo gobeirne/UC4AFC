@@ -1,7 +1,6 @@
 // File: results.js
 import { responseLog, participant, config, testStartedAt } from "./global.js";
 import { showScreen } from "./ui.js";
-import { finalEstimate } from "./flow.js";
 
 export function saveResults(optionalNote = "") {
   const now = new Date();
@@ -49,20 +48,12 @@ export function saveResults(optionalNote = "") {
   const isAdaptive = responseLog.some(r => typeof r.value === "number" || typeof r.cutoffHz === "number");
   const adaptiveCfg = (config && config.adaptive) ? config.adaptive : null;
   const mode = (adaptiveCfg && adaptiveCfg.mode) || "lpf";
-  const unit = (mode === "quiet") ? "dB" : "Hz";
-  const stepUnit = (mode === "quiet") ? "dB" : "dec";
+  const isLinear = (mode === "quiet" || mode === "snr");
+  const unit = (mode === "snr") ? "dB SNR" : (mode === "quiet") ? "dB" : "Hz";
+  const stepUnit = isLinear ? "dB" : "dec";
   const valOf = (r) => (typeof r.value === "number" ? r.value : r.cutoffHz);
   const estOf = (r) => (typeof r.estimate === "number" ? r.estimate : r.estimateHz);
-  // Final threshold = the COMPLETE-track MLE (flow.finalEstimate), which is the
-  // validated estimator. The per-trial running column is gated at the phase
-  // switch and must NOT be used as the final number. Fall back to the last
-  // running estimate only if the live track is unavailable (e.g. reloaded log).
   const lastEstimate = (() => {
-    let fe = null;
-    try { fe = (typeof finalEstimate === "function") ? finalEstimate() : null; } catch (_) {}
-    if (fe && isFinite(fe.value)) {
-      return (unit === "Hz") ? Math.round(fe.value) : +fe.value.toFixed(1);
-    }
     for (let i = responseLog.length - 1; i >= 0; i--) {
       const e = estOf(responseLog[i]);
       if (typeof e === "number") return e;
@@ -77,7 +68,7 @@ export function saveResults(optionalNote = "") {
   ];
 
   if (isAdaptive && adaptiveCfg) {
-    const startShown = (mode === "quiet")
+    const startShown = isLinear
       ? (adaptiveCfg.startValue ?? adaptiveCfg.start ?? "")
       : (adaptiveCfg.startValue ?? adaptiveCfg.startCutoffHz ?? "");
     txtLines.push(
@@ -93,6 +84,17 @@ export function saveResults(optionalNote = "") {
       `# Routing\t${(config && config.routing) || "binaural"}`,
       `# Threshold estimate (${unit})\t${lastEstimate != null ? lastEstimate : "n/a"}`
     );
+    if (mode === "snr") {
+      // In SNR mode the noise sits at the fixed presentation level; document it
+      // (the calibrated dB(A), else "uncalibrated") and the step multiplier.
+      const noiseLevel = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated())
+        ? `${Calibration.state().currentSliderDb} dB(A)`
+        : "uncalibrated (device volume sets level)";
+      txtLines.push(
+        `# Noise level (fixed)\t${noiseLevel}`,
+        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`
+      );
+    }
   }
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
     txtLines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
@@ -100,14 +102,13 @@ export function saveResults(optionalNote = "") {
 
   txtLines.push("");
   if (isAdaptive) {
-    const valCol = (mode === "quiet") ? "Level_dB" : "Cutoff_Hz";
-    const estCol = (mode === "quiet") ? "Estimate_dB" : "Estimate_Hz";
-    const stopCol = (mode === "quiet") ? "StopAtN_dB" : "StopAtN_Hz";
-    txtLines.push(`Trial\tSound\tCorrect\tChosen\tCorrect?\t${valCol}\tProcedure\t${estCol}\t${stopCol}\tTime_ms`);
+    const valCol = (mode === "snr") ? "SNR_dB" : (mode === "quiet") ? "Level_dB" : "Cutoff_Hz";
+    const estCol = (mode === "snr") ? "EstimateSNR_dB" : (mode === "quiet") ? "Estimate_dB" : "Estimate_Hz";
+    txtLines.push(`Trial\tSound\tCorrect\tChosen\tCorrect?\t${valCol}\tProcedure\t${estCol}\tTime_ms`);
     for (const r of responseLog) {
       txtLines.push(
         `${r.index}\t${r.sound}\t${r.correct}\t${r.chosen}\t` +
-        `${r.isCorrect ? 1 : 0}\t${valOf(r) ?? ""}\t${r.procedure ?? ""}\t${estOf(r) ?? ""}\t${r.stopAtN ?? ""}\t${r.timeMs}`
+        `${r.isCorrect ? 1 : 0}\t${valOf(r) ?? ""}\t${r.procedure ?? ""}\t${estOf(r) ?? ""}\t${r.timeMs}`
       );
     }
   } else {

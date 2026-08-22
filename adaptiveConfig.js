@@ -46,8 +46,40 @@ const PRESETS = {
     switchRev: 5,
     a1slope: 0.10, a2slope: 0.10, minStep: 0.25,
     slopeHint: 6                                     // %/dB
+  },
+  // Noise (SNR): the adapting quantity is the signal-to-noise ratio in dB. The
+  // masking noise is the calibration file, presented at the fixed level (the
+  // calibrated dB(A), or unity/relative when uncalibrated); the SIGNAL level is
+  // moved relative to it, so a poorer (lower) SNR is the harder direction — the
+  // same harder = -1 the other linear-axis mode uses. Loudness anchor is the
+  // files AS DELIVERED: they are spectrum- and level-matched at source, so
+  // SNR = 0 dB means noise-at-file-level + signal-at-file-level with no
+  // re-matching, and the SNR value is exactly the extra dB applied to the signal.
+  //
+  // WUDR steps are the quiet-mode dB steps scaled by stepMult (Finding: the
+  // clinician wanted the same shape as quiet but finer, e.g. 0.2x). The stored
+  // workDown/workUp/initDown/initUp below are ALREADY scaled (quiet × 0.2); the
+  // Setup screen exposes stepMult so changing it rescales from the quiet base.
+  snr: {
+    mode: "snr",
+    axisIsLog: false,
+    unit: "dB SNR", stepUnit: "dB", slopeUnit: "%/dB",
+    start: 2,                                         // +2 dB SNR
+    xlo: -20, xhi: 10,
+    // Base = quiet dB steps; stepMult (0.2) applied -> stored values below.
+    stepMult: 0.2,
+    workDown: +(0.6 * 0.2).toFixed(4),  // 0.12
+    workUp:   +(1.0 * 0.2).toFixed(4),  // 0.20
+    initDown: +(3.0 * 0.2).toFixed(4),  // 0.60
+    initUp:   +(5.0 * 0.2).toFixed(4),  // 1.00
+    switchRev: 5,
+    a1slope: 0.10, a2slope: 0.10, minStep: 0.05,
+    slopeHint: 6                                     // %/dB
   }
 };
+
+// The unscaled quiet-mode WUDR base steps that the SNR stepMult multiplies.
+const SNR_BASE_STEPS = { workDown: 0.6, workUp: 1.0, initDown: 3.0, initUp: 5.0 };
 
 // Full default config = LPF preset flattened + procedure/common fields. The
 // persisted config always carries a `mode`; switching mode in Setup swaps the
@@ -110,7 +142,21 @@ function applyModePreset(cfg, mode) {
     initDown: p.initDown, initUp: p.initUp,
     switchRev: p.switchRev,
     a1slope: p.a1slope, a2slope: p.a2slope, minStep: p.minStep,
-    slopeHint: p.slopeHint
+    slopeHint: p.slopeHint,
+    // SNR carries a step multiplier; other modes clear it so it can't leak.
+    stepMult: p.mode === "snr" ? p.stepMult : undefined
+  };
+}
+
+// Rescale the SNR WUDR steps from the quiet base by a multiplier. Used by Setup
+// when the operator changes the SNR step multiplier. Returns the four steps.
+function snrStepsForMult(mult) {
+  const m = isFinite(mult) && mult > 0 ? mult : 0.2;
+  return {
+    workDown: +(SNR_BASE_STEPS.workDown * m).toFixed(4),
+    workUp:   +(SNR_BASE_STEPS.workUp   * m).toFixed(4),
+    initDown: +(SNR_BASE_STEPS.initDown * m).toFixed(4),
+    initUp:   +(SNR_BASE_STEPS.initUp   * m).toFixed(4)
   };
 }
 
@@ -160,7 +206,7 @@ function mergeAdaptiveIntoConfig(config) {
 if (typeof window !== "undefined") {
   window.AdaptiveConfig = {
     DEFAULTS: ADAPTIVE_DEFAULTS,
-    PRESETS, applyModePreset,
+    PRESETS, applyModePreset, snrStepsForMult, SNR_BASE_STEPS,
     sweetPointsFor, midpointTarget,
     loadAdaptiveConfig, saveAdaptiveConfig, clearAdaptiveConfig,
     mergeAdaptiveIntoConfig

@@ -226,6 +226,10 @@ const AudioEngine = (() => {
   const preMeasured = new Map();
 
   let activeSource = null;
+  // In SNR mode a second source (looped calibration noise) plays alongside the
+  // word. It is tracked separately so stop() can tear BOTH down — otherwise the
+  // noise keeps looping after the word ends.
+  let activeNoiseSource = null;
 
   function context() {
     if (!ctx) {
@@ -465,11 +469,126 @@ const AudioEngine = (() => {
     return prepared;
   }
 
+  // ---- SNR mode: word mixed with masking (calibration) noise --------------
+  // The noise plays at the fixed presentation level (noiseGainDb — the same
+  // calibration/relative gain the other modes use for their base level) and
+  // does NOT move with SNR. The SIGNAL is offset from the noise by snrDb, so a
+  // lower SNR = quieter signal, noise unchanged.
+  //
+  // Loudness anchor = files AS DELIVERED (spectrum- and level-matched at source,
+  // per the calibration module's contract). So at snrDb = 0 the word buffer and
+  // the noise buffer play at the same extra gain; snrDb is exactly the extra dB
+  // applied to the word relative to the noise. No LUFS re-matching is done here.
+  //
+  // Gating: the noise starts `noisePadSec` before the word's audible onset and
+  // stops `noisePadSec` after its end. Word files carry ~600 ms leading silence,
+  // so the audible onset is offset into the buffer; we approximate the onset as
+  // that lead and the tail as the buffer end (the pad covers small errors).
+  //
+  // Clip guard: only when the summed peak in an ear is LIKELY to exceed full
+  // scale do we pull BOTH signal and noise down by the overshoot — this holds
+  // the signal below the noise's absolute level while PRESERVING their ratio
+  // (the SNR). Fires rarely (high positive SNR) and is logged, like the unity
+  // cap in gainForLevel.
+  async function playStimulusWithNoise(name, url, {
+    snrDb = 0,
+    noiseGainDb = 0,
+    noiseUrl = "sounds/calib.mp3",
+    routing = "binaural",
+    onStarted = null,
+    noisePadSec = 0.6,
+    wordLeadSec = 0.6
+  } = {}) {
+    const c = context();
+    stop(); // one trial at a time — tears down any prior word AND noise
+
+    if (!cache.has(name)) await decode(name, url);
+    const prepared = await prepare(name, null);      // SNR mode never filters
+    const wordBuf = prepared.buffer;
+    const noise = await ensureCalibNoise(noiseUrl);
+    const noiseBuf = noise.raw;
+
+    // Requested linear gains before any clip guard.
+    const signalGainDb = noiseGainDb + snrDb;
+    let sigLin = LIN(signalGainDb);
+    let noiLin = LIN(noiseGainDb);
+
+    // Clip likelihood: worst-case coherent sum of the two true peaks in one ear.
+    // (Coherent sum is the conservative bound; real speech+noise rarely align,
+    // but this keeps us safe without needless attenuation in the common case.)
+    const sigPeak = LIN(estimateTruePeakDB(wordBuf));   // ~<=1.0 for the raw file
+    const noiPeak = LIN(estimateTruePeakDB(noiseBuf));
+    const summedPeak = sigPeak * sigLin + noiPeak * noiLin;
+    if (summedPeak > 1.0) {
+      const scale = 1.0 / summedPeak;                    // <1: pull both down
+      sigLin *= scale; noiLin *= scale;                 // ratio (SNR) preserved
+      console.warn(`[snr] summed peak ${summedPeak.toFixed(3)} > 1; ` +
+        `held level down ${(20*Math.log10(scale)).toFixed(1)} dB (SNR unchanged)`);
+    }
+
+    // Word source + gain.
+    const wordSrc = c.createBufferSource();
+    wordSrc.buffer = wordBuf;
+    const wordGain = c.createGain();
+    wordGain.gain.value = sigLin;
+    wordSrc.connect(wordGain);
+    makeEarRouter(c, wordGain, routing);   // same router the calibration tone uses
+
+    // Noise source (looped) + gain, routed to the SAME ear(s) as the signal.
+    const noiseSrc = c.createBufferSource();
+    noiseSrc.buffer = noiseBuf;
+    noiseSrc.loop = true;
+    const noiseG = c.createGain();
+    noiseG.gain.value = noiLin;
+    noiseSrc.connect(noiseG);
+    makeEarRouter(c, noiseG, routing);
+
+    activeSource = wordSrc;
+    activeNoiseSource = noiseSrc;
+
+    // Schedule: noise leads the word by noisePadSec and trails it by the same.
+    const now = c.currentTime;
+    const t0 = now + 0.02;                              // tiny lead to arm nodes
+    const wordDur = wordBuf.duration;
+    const audibleOnset = Math.min(wordLeadSec, wordDur);
+    // Noise window: pad before the audible onset, pad after the word's end.
+    const noiseStart = Math.max(now, t0 + audibleOnset - noisePadSec);
+    const noiseStop  = t0 + wordDur + noisePadSec;
+
+    return new Promise((resolve, reject) => {
+      wordSrc.onended = () => {
+        if (activeSource === wordSrc) activeSource = null;
+        // Word finished; the noise stop is already scheduled, but if we're past
+        // it (short pad), make sure the noise is torn down.
+        resolve();
+      };
+      try {
+        noiseSrc.start(noiseStart);
+        noiseSrc.stop(noiseStop);
+        noiseSrc.onended = () => {
+          if (activeNoiseSource === noiseSrc) activeNoiseSource = null;
+          try { noiseSrc.disconnect(); } catch (_) {}
+        };
+        wordSrc.start(t0);
+        if (onStarted) requestAnimationFrame(() => onStarted());
+      } catch (err) {
+        if (activeSource === wordSrc) activeSource = null;
+        if (activeNoiseSource === noiseSrc) activeNoiseSource = null;
+        reject(err);
+      }
+    }).then(() => prepared);
+  }
+
   function stop() {
     if (activeSource) {
       try { activeSource.onended = null; activeSource.stop(); } catch (_) {}
       try { activeSource.disconnect(); } catch (_) {}
       activeSource = null;
+    }
+    if (activeNoiseSource) {
+      try { activeNoiseSource.onended = null; activeNoiseSource.stop(); } catch (_) {}
+      try { activeNoiseSource.disconnect(); } catch (_) {}
+      activeNoiseSource = null;
     }
   }
 
@@ -486,11 +605,12 @@ const AudioEngine = (() => {
   let calibRouter = null;
   const CALIB_KEY = "__calib__";
 
-  async function startCalibrationTone(url = "sounds/calib.mp3", { onStarted = null, extraGainDb = 0, ear = "binaural" } = {}) {
+  // Decode + cache the calibration noise file (idempotent). Shared by the
+  // calibration tone AND the SNR mix path (Finding 3: the same file, same
+  // buffer, same measured momentary LUFS is the reference for both). Returns
+  // { raw, momentary }.
+  async function ensureCalibNoise(url = "sounds/calib.mp3") {
     const c = context();
-    stopCalibrationTone();
-
-    // Decode + cache the calibration file (idempotent).
     let entry = cache.get(CALIB_KEY);
     if (!entry) {
       const resp = await fetch(url);
@@ -499,6 +619,15 @@ const AudioEngine = (() => {
       entry = { raw, momentary: measureLUFS(raw).momentary };
       cache.set(CALIB_KEY, entry);
     }
+    return entry;
+  }
+
+  async function startCalibrationTone(url = "sounds/calib.mp3", { onStarted = null, extraGainDb = 0, ear = "binaural" } = {}) {
+    const c = context();
+    stopCalibrationTone();
+
+    // Decode + cache the calibration file (idempotent).
+    const entry = await ensureCalibNoise(url);
 
     const src = c.createBufferSource();
     src.buffer = entry.raw;
@@ -548,9 +677,9 @@ const AudioEngine = (() => {
     prepare, measure: measureLUFS,
     butterworthSections: butterworthLowpassSections,
     // playback
-    playBuffer, playStimulus, stop, setMasterGainDb,
+    playBuffer, playStimulus, playStimulusWithNoise, stop, setMasterGainDb,
     // calibration
-    startCalibrationTone, stopCalibrationTone, setCalibrationEar,
+    startCalibrationTone, stopCalibrationTone, setCalibrationEar, ensureCalibNoise,
     // audio-graph diagnostics
     rateMismatch,
     // caches (exposed for diagnostics / teardown)

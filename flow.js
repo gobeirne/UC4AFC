@@ -63,20 +63,24 @@ export function beginPhase(p) {
       // present (app never visited Setup), resolveTrackConfig's guards apply.
       const adaptive = (config && config.adaptive) ? config.adaptive : {};
       const isQuiet = adaptive.mode === "quiet";
+      const isSnr = adaptive.mode === "snr";
+      const isLinear = isQuiet || isSnr;   // both use a dB axis, not log(Hz)
 
-      // Start value: Hz (LPF) or dB (quiet). Relative start shifts the start by
-      // octaves (LPF) or dB (quiet); with no prior in-session threshold it
-      // resolves against the absolute start for now (documented).
-      let startVal = isQuiet
-        ? (adaptive.startValue ?? adaptive.start ?? 65)
+      // Start value: Hz (LPF) or dB (quiet: level / snr: SNR). Relative start
+      // shifts by octaves (LPF) or dB (linear); with no prior in-session
+      // threshold it resolves against the absolute start for now (documented).
+      let startVal = isLinear
+        ? (adaptive.startValue ?? adaptive.start ?? (isSnr ? 2 : 65))
         : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
       if (adaptive.startMode === "relative" && isFinite(adaptive.startRelOctaves)) {
-        startVal = isQuiet
+        startVal = isLinear
           ? startVal + adaptive.startRelOctaves               // dB shift
           : startVal * Math.pow(2, adaptive.startRelOctaves); // octave shift
       }
 
-      quietStartLevel = isQuiet ? startVal : null;
+      // quietStartLevel doubles as the uncalibrated relative-gain anchor for
+      // BOTH linear modes (quiet's level and snr's noise level).
+      quietStartLevel = isLinear ? startVal : null;
       const trackCfg = resolveTrackConfig(adaptive, startVal);
       track = createTrack(trackCfg);
       currentCutoffHz = track.currentValue();
@@ -251,9 +255,41 @@ if (phase === "test") {
   //  Quiet: no filter; the adaptive VALUE is the presentation LEVEL (dB),
   //         applied as gain (calibrated -> absolute dB(A); uncalibrated ->
   //         relative dB re the start level).
+  //  SNR  : no filter; the adaptive VALUE is the dB SNR. The masking noise
+  //         (calibration file) plays at the FIXED presentation level; the
+  //         signal is offset from the noise by the SNR.
   const adaptive = (config && config.adaptive) ? config.adaptive : {};
   const isQuiet = (phase === "test" && track) ? adaptive.mode === "quiet" : false;
+  const isSnr   = (phase === "test" && track) ? adaptive.mode === "snr"   : false;
   const calibrated = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+  const routing = (config && config.routing) || "binaural";
+
+  // ---- SNR mode: dispatch to the mixed word+noise path and return early ----
+  if (isSnr) {
+    const snrDb = currentCutoffHz;   // mode-neutral value; dB SNR here
+    // Noise sits at the fixed presentation level: the calibration slider's
+    // chosen dB(A) when calibrated, unity when not (device volume sets absolute
+    // output, exactly as an uncalibrated run does elsewhere).
+    const noiseGainDb = calibrated
+      ? Calibration.gainDbForLevel(Calibration.state().currentSliderDb)
+      : 0;
+    const noiseUrl = (config && config.calibFile) ? `sounds/${config.calibFile}` : "sounds/calib.mp3";
+
+    AudioEngine.playStimulusWithNoise(item.correct, `sounds/${item.audioFile}`, {
+      snrDb,
+      noiseGainDb,
+      noiseUrl,
+      routing,
+      onStarted: () => { setTimeout(revealOptions, offset); }
+    }).catch(err => {
+      console.error("SNR audio play failed:", err);
+      if (!nextTrial._erroredOnce) {
+        alert("Audio failed to play. Check the calibration noise file (sounds/calib.mp3) and autoplay settings.");
+        nextTrial._erroredOnce = true;
+      }
+    });
+    return;
+  }
 
   let cutoffHz = null;
   let extraGainDb = 0;
@@ -278,7 +314,7 @@ if (phase === "test") {
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
     cutoffHz,
     extraGainDb,
-    routing: (config && config.routing) || "binaural",
+    routing,
     onStarted: () => {
       setTimeout(revealOptions, offset);
     }
@@ -312,7 +348,8 @@ export function recordResponse(img) {
   // quiet), advance the track, and capture the running threshold estimate.
   if (phase === "test" && track) {
     const adaptive = (config && config.adaptive) ? config.adaptive : {};
-    const unit = track.unit || (adaptive.mode === "quiet" ? "dB" : "Hz");
+    const unit = track.unit
+      || (adaptive.mode === "snr" ? "dB SNR" : adaptive.mode === "quiet" ? "dB" : "Hz");
     const val = (unit === "Hz") ? Math.round(currentCutoffHz) : +currentCutoffHz.toFixed(1);
     entry.value = val;
     entry.unit = unit;
@@ -322,22 +359,10 @@ export function recordResponse(img) {
     entry.isCorrect = isCorrect;
     entry.procedure = adaptive.procedure || "wudr";
     track.update(isCorrect);
-    // Running estimate is gated until the phase switch (estimateReady), and
-    // additionally blanked whenever the fit is degenerate/bound-pinned, so the
-    // live column never shows floor-pinned artefacts. The FINAL threshold is
-    // computed from the complete track (see saveResults) and is unaffected.
     const est = track.estimate();
-    const showRunning = track.estimateReady() && !est.degenerate && isFinite(est.value);
-    entry.estimate = showRunning ? ((unit === "Hz") ? Math.round(est.value) : +est.value.toFixed(1)) : null;
+    const estV = est.value;
+    entry.estimate = isFinite(estV) ? ((unit === "Hz") ? Math.round(estV) : +estV.toFixed(1)) : null;
     entry.estimateHz = entry.estimate; // alias
-
-    // Stop-at-n: the FINAL estimator applied to trials 1..n (this trial). Blank
-    // when degenerate so the post-hoc stopping curve has honest gaps. Reading
-    // this column down the file answers "if we'd stopped at trial n, the
-    // threshold would have been ___".
-    const stopVal = track.stopAtEstimate(); // null when degenerate/pinned
-    entry.stopAtN = (stopVal == null) ? null
-      : ((unit === "Hz") ? Math.round(stopVal) : +stopVal.toFixed(1));
   }
 
   responseLog.push(entry);

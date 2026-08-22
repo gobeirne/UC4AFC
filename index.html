@@ -108,6 +108,7 @@
     <div class="segmented" id="modeSegmented">
       <button type="button" data-mode="lpf" class="seg-btn active">Low-pass filter</button>
       <button type="button" data-mode="quiet" class="seg-btn">Quiet (level)</button>
+      <button type="button" data-mode="snr" class="seg-btn">Noise (SNR)</button>
     </div>
     <p class="small" id="modeHint">Adapts the equivalent low-pass cutoff (Hz).</p>
   </div>
@@ -168,6 +169,16 @@
       </label>
     </div>
     <p class="small" id="wudrHint">Defaults: down &minus;4.76% / up +8.33% (working); down &minus;11.1% / up +20.8% (initial). 0 reversals = single-phase.</p>
+  </div>
+
+  <div class="setup-block" id="snrBlock" hidden>
+    <span class="setup-label">Noise (SNR)</span>
+    <div class="setup-grid">
+      <label>WUDR step multiplier
+        <input id="setSnrStepMult" type="number" min="0.05" max="2" step="0.05" value="0.2">
+      </label>
+    </div>
+    <p class="small" id="snrHint">WUDR steps = quiet-mode dB steps &times; this multiplier. Noise (calibration file) is fixed at the presentation level; the signal moves by the SNR.</p>
   </div>
 
   <div class="setup-block" id="a1Block" hidden>
