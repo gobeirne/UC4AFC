@@ -97,6 +97,18 @@ window.onload = async () => {
   if (typeof AdaptiveConfig !== "undefined") {
     AdaptiveConfig.mergeAdaptiveIntoConfig(config);
   }
+
+  // Merge persisted SNR noise-timing (presentation) settings into `config`.
+  // config.json values (if any) act as defaults; a saved Setup overrides them.
+  try {
+    const raw = localStorage.getItem("uc4afc_snr_timing");
+    if (raw) {
+      const t = JSON.parse(raw);
+      const merge = (k) => { if (isFinite(Number(t[k]))) config[k] = Number(t[k]); };
+      merge("snrWordLeadMs"); merge("snrNoiseLeadMs");
+      merge("snrNoiseTrailMs"); merge("snrNoiseRampMs");
+    }
+  } catch (_) {}
   
   // [OK] Initialise arrowSet before list/preload
   if (location.protocol === "file:") {
@@ -255,7 +267,7 @@ if (breakEveryInput) {
 
 // --- Calibration screen wiring (mirrors UC_CVCV) -----------------------------
 const CALIB_URL = () => (typeof config !== "undefined" && config && config.calibFile)
-  ? `sounds/${config.calibFile}` : "sounds/calib.mp3";
+  ? `sounds/${config.calibFile}` : "sounds/calib.wav";
 
 function refreshCalStatus() {
   const el = document.getElementById("calStatus");
@@ -363,7 +375,7 @@ function setupCalibrationScreen() {
       const el = document.getElementById("calStatus");
       if (el) el.textContent = "Calibration sound playing.";
     } catch (err) {
-      alert("No calibration sound file found (" + CALIB_URL() + ").\nAdd calib.mp3 to the sounds/ folder.");
+      alert("No calibration sound file found (" + CALIB_URL() + ").\nAdd calib.wav to the sounds/ folder.");
       console.error(err);
     }
   };
@@ -521,6 +533,17 @@ function fillFormFromCfg(cfg) {
   set("setRouting", cfg.routing || (config && config.routing) || "binaural");
 }
 
+// SNR noise-timing (presentation) fields live on `config`, not the adaptive
+// cfg. Populate them from config with the documented defaults.
+function fillSnrTimingFromConfig() {
+  const set = (id, v) => { const el = document.getElementById(id); if (el != null && v != null) el.value = v; };
+  const c = (typeof config !== "undefined" && config) ? config : {};
+  set("setSnrWordLead",   c.snrWordLeadMs   ?? c.imageRevealOffsetMs ?? 600);
+  set("setSnrNoiseLead",  c.snrNoiseLeadMs  ?? 600);
+  set("setSnrNoiseTrail", c.snrNoiseTrailMs ?? 600);
+  set("setSnrNoiseRamp",  c.snrNoiseRampMs  ?? 100);
+}
+
 function populateSetupForm() {
   const cfg = currentAdaptiveCfg();
   _setupProc = cfg.procedure || "wudr";
@@ -529,6 +552,7 @@ function populateSetupForm() {
   showModeButtons(_setupMode);
   applyModeLabels(_setupMode);
   fillFormFromCfg(cfg);
+  fillSnrTimingFromConfig();
 
   const status = document.getElementById("setupStatus");
   if (status) status.textContent = "";
@@ -643,6 +667,29 @@ function setupSetupScreen() {
     if (typeof config !== "undefined") config.adaptive = cfg;
     // Routing is also surfaced at the top level of config for flow.js to read.
     if (typeof config !== "undefined") config.routing = cfg.routing;
+
+    // SNR noise-timing (presentation) fields -> config, and persist to
+    // localStorage so they survive a reload alongside the adaptive config.
+    const numOr = (id, dflt) => {
+      const el = document.getElementById(id);
+      const v = el ? parseFloat(el.value) : NaN;
+      return isFinite(v) && v >= 0 ? v : dflt;
+    };
+    if (typeof config !== "undefined") {
+      config.snrWordLeadMs   = numOr("setSnrWordLead", 600);
+      config.snrNoiseLeadMs  = numOr("setSnrNoiseLead", 600);
+      config.snrNoiseTrailMs = numOr("setSnrNoiseTrail", 600);
+      config.snrNoiseRampMs  = numOr("setSnrNoiseRamp", 100);
+      try {
+        localStorage.setItem("uc4afc_snr_timing", JSON.stringify({
+          snrWordLeadMs:   config.snrWordLeadMs,
+          snrNoiseLeadMs:  config.snrNoiseLeadMs,
+          snrNoiseTrailMs: config.snrNoiseTrailMs,
+          snrNoiseRampMs:  config.snrNoiseRampMs
+        }));
+      } catch (_) {}
+    }
+
     const status = document.getElementById("setupStatus");
     if (status) status.textContent = "Saved.";
   };

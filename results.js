@@ -90,9 +90,15 @@ export function saveResults(optionalNote = "") {
       const noiseLevel = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated())
         ? `${Calibration.state().currentSliderDb} dB(A)`
         : "uncalibrated (device volume sets level)";
+      const cfgc = (typeof config !== "undefined" && config) ? config : {};
       txtLines.push(
         `# Noise level (fixed)\t${noiseLevel}`,
-        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`
+        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`,
+        `# Noise file\t${cfgc.snrNoiseFile ?? "noise.mp3"}`,
+        `# Word onset in file (ms)\t${cfgc.snrWordLeadMs ?? cfgc.imageRevealOffsetMs ?? 600}`,
+        `# Noise lead before word (ms)\t${cfgc.snrNoiseLeadMs ?? 600}`,
+        `# Noise trail after word (ms)\t${cfgc.snrNoiseTrailMs ?? 600}`,
+        `# Noise ramp in/out (ms)\t${cfgc.snrNoiseRampMs ?? 100}`
       );
     }
   }

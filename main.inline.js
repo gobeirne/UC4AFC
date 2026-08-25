@@ -15,7 +15,7 @@ const config = {
   showAbortXOnTouchDevices: true,
   instructions: {
     training:
-      "You'll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
+      "Youâ€™ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
     test:
       "You will hear a word and see four pictures. Click the picture that matches the word you heard. If you're not sure, have a guess."
   },
@@ -68,7 +68,7 @@ async function loadConfig() {
   const isLocal = location.protocol === "file:";
 
   if (isLocal) {
-    console.warn(" Running locally. Skipping fetch(config.json) and using fallback config.");
+    console.warn("ðŸ“ Running locally. Skipping fetch(config.json) and using fallback config.");
     Object.assign(config, {
       arrows: false,
       defaultDelay: 1500,
@@ -77,7 +77,7 @@ async function loadConfig() {
       saveJson: false,
       imageRevealOffsetMs: 600,
       instructions: {
-        training: "You'll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
+        training: "Youâ€™ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
         test: "You will hear a word and see four pictures. Click the picture that matches the word you heard. If you're not sure, have a guess."
       }
     });
@@ -88,10 +88,10 @@ async function loadConfig() {
     const res = await fetch("config.json");
     const externalConfig = await res.json();
     Object.assign(config, externalConfig);
-    console.log("[OK] Loaded config.json:", config);
+    console.log("âœ… Loaded config.json:", config);
   } catch (err) {
-    console.error("[X] Failed to load config.json:", err);
-    console.warn("[!] Could not load config.json. Using fallback config.");
+    console.error("âŒ Failed to load config.json:", err);
+    console.warn("âš ï¸ Could not load config.json. Using fallback config.");
   }
 }
 
@@ -301,6 +301,14 @@ async function renderButterworthLowpass(ctxForBuffers, buffer, cutoffHz) {
 
 const DB = (linear) => 20 * Math.log10(Math.max(linear, 1e-20));
 const LIN = (db) => Math.pow(10, db / 20);
+
+// Fixed safety headroom for the SNR mix, applied EQUALLY to word and noise so
+// the SNR ratio is never altered. Sized so that at 0 dB SNR a coherent sum of
+// two equal peaks stays under full scale. The words are -22.5 LUFS with peaks
+// well below 0 dBFS, so this also leaves room for moderate positive SNR before
+// the word alone would approach full scale; extreme positive SNR is a clinical
+// non-case (the word would be far above the masker). Not measured per trial.
+const SNR_HEADROOM_DB = -6;
 
 const AudioEngine = (() => {
   // The one true rate. Stimuli are 48 kHz; the calibration file must match
@@ -569,25 +577,43 @@ const AudioEngine = (() => {
     return prepared;
   }
 
-  // ---- SNR mode: word mixed with masking (calibration) noise --------------
-  // The noise plays at the fixed presentation level (noiseGainDb) and does NOT
-  // move with SNR. The SIGNAL is offset from the noise by snrDb, so a lower SNR
-  // = quieter signal, noise unchanged. Loudness anchor = files AS DELIVERED
-  // (spectrum- and level-matched at source): at snrDb = 0 both play at the same
-  // extra gain; snrDb is exactly the extra dB applied to the word. No LUFS
-  // re-matching here. Noise starts noisePadSec before the word's audible onset
-  // and stops noisePadSec after its end (word files carry ~600 ms lead silence).
-  // Clip guard: only when the summed peak in an ear is LIKELY to exceed full
-  // scale do we pull BOTH signal and noise down by the overshoot, holding the
-  // signal below the noise while PRESERVING their ratio (the SNR). Logged.
+  // ---- SNR mode: word mixed with masking noise ----------------------------
+  // The noise plays at the presentation level (noiseGainDb — the calibration
+  // slider's level, or unity + device volume when uncalibrated) and does NOT
+  // move with SNR. The word is offset from the noise by snrDb, so a lower SNR =
+  // quieter word, noise unchanged.
+  //
+  // dB RATIO — no measurement, ever:
+  //   The files are pinned at source: every word is -22.5 LUFS and the noise's
+  //   mean dB(A) equals the words' average momentary dB(A). So at equal gain the
+  //   ratio is already correct and 0 dB SNR just means "same gain on both". This
+  //   function only ADDS dB and SCALES; it does not measure or re-match levels.
+  //   A single fixed headroom offset (SNR_HEADROOM_DB) is applied EQUALLY to
+  //   word and noise so the ratio is untouched but the 0-dB-SNR coherent sum
+  //   can't clip.
+  //
+  // Noise segment:
+  //   * The noise file is 10 s. Rather than loop it (audible seam, same slice
+  //     every time), we take a CONTIGUOUS segment from a RANDOM offset inside
+  //     the file, long enough to cover the word plus both pads, guaranteed not
+  //     to run off the end (offset ∈ [0, fileLen − segmentLen]).
+  //   * The segment starts `noiseLeadSec` before the word's audible onset and
+  //     ends `noiseTrailSec` after the word ends. Both adjustable in Setup
+  //     (config.snrNoiseLeadMs / snrNoiseTrailMs) to line the noise up with the
+  //     actual speech onset inside each file.
+  //   * The noise ramps in and out over `rampSec` (100 ms) so onset/offset are
+  //     click-free.
   async function playStimulusWithNoise(name, url, {
     snrDb = 0,
     noiseGainDb = 0,
-    noiseUrl = "sounds/calib.mp3",
+    noiseUrl = "sounds/noise.mp3",
     routing = "binaural",
     onStarted = null,
-    noisePadSec = 0.6,
-    wordLeadSec = 0.6
+    noiseLeadSec = 0.6,     // noise starts this far BEFORE the word's audible onset
+    noiseTrailSec = 0.6,    // noise ends this far AFTER the word ends
+    wordLeadSec = 0.6,      // leading silence inside the word file (audible onset)
+    rampSec = 0.1,          // noise fade in/out
+    headroomDb = SNR_HEADROOM_DB   // fixed safety offset applied equally to both
   } = {}) {
     const c = context();
     stop(); // one trial at a time — tears down any prior word AND noise
@@ -598,20 +624,46 @@ const AudioEngine = (() => {
     const noise = await ensureCalibNoise(noiseUrl);
     const noiseBuf = noise.raw;
 
-    const signalGainDb = noiseGainDb + snrDb;
-    let sigLin = LIN(signalGainDb);
-    let noiLin = LIN(noiseGainDb);
+    // --- Levels: NO measurement, NO per-file re-matching. --------------------
+    // The files are already pinned at source: every word is -22.5 LUFS and the
+    // noise's mean dB(A) equals the words' average momentary dB(A). So at equal
+    // gain the two already sit in the correct ratio, and 0 dB SNR = play both at
+    // the same gain. We only ever ADD dB and SCALE — never measure.
+    //
+    //   noise gain = noiseGainDb            (the presentation/output level)
+    //   word  gain = noiseGainDb + snrDb    (word offset from noise by the SNR)
+    //
+    // headroomDb is a FIXED safety offset (default SNR_HEADROOM_DB) applied
+    // EQUALLY to both, so the SNR ratio is untouched; it only keeps the 0-dB-SNR
+    // coherent sum below full scale. Overridable via config.snrHeadroomDb.
+    const noiLin = LIN(noiseGainDb + headroomDb);
+    const sigLin = LIN(noiseGainDb + snrDb + headroomDb);
 
-    const sigPeak = LIN(estimateTruePeakDB(wordBuf));
-    const noiPeak = LIN(estimateTruePeakDB(noiseBuf));
-    const summedPeak = sigPeak * sigLin + noiPeak * noiLin;
-    if (summedPeak > 1.0) {
-      const scale = 1.0 / summedPeak;
-      sigLin *= scale; noiLin *= scale;
-      console.warn(`[snr] summed peak ${summedPeak.toFixed(3)} > 1; ` +
-        `held level down ${(20*Math.log10(scale)).toFixed(1)} dB (SNR unchanged)`);
-    }
+    // --- Timing: place the word, then wrap the noise segment around it --------
+    const now = c.currentTime;
+    const t0 = now + 0.05;                              // small lead to arm nodes
+    const wordDur = wordBuf.duration;
+    const audibleOnset = Math.min(Math.max(0, wordLeadSec), wordDur);
 
+    // Noise window in transport time.
+    const lead  = Math.max(0, noiseLeadSec);
+    const trail = Math.max(0, noiseTrailSec);
+    const noiseStartAt = t0 + audibleOnset - lead;      // may be < t0 (leads word)
+    const wordEnd      = t0 + wordDur;
+    let   noiseDur     = (wordEnd + trail) - noiseStartAt;
+    // Guard: never negative, never longer than the noise file (so a random
+    // offset always has room). Cap to the file length minus a tiny epsilon.
+    const maxSeg = Math.max(0, noiseBuf.duration - 1e-3);
+    if (noiseDur > maxSeg) noiseDur = maxSeg;
+    if (noiseDur < 0) noiseDur = 0;
+
+    // Random contiguous offset inside the 10 s file such that
+    // [offset, offset + noiseDur] stays within the file. (Request: start between
+    // 0 and fileLen - segmentLen.)
+    const maxOffset = Math.max(0, noiseBuf.duration - noiseDur);
+    const noiseOffset = Math.random() * maxOffset;
+
+    // Word source + gain.
     const wordSrc = c.createBufferSource();
     wordSrc.buffer = wordBuf;
     const wordGain = c.createGain();
@@ -619,23 +671,32 @@ const AudioEngine = (() => {
     wordSrc.connect(wordGain);
     makeEarRouter(c, wordGain, routing);
 
+    // Noise source (NOT looped — a single random segment) + gain, ramped in/out.
     const noiseSrc = c.createBufferSource();
     noiseSrc.buffer = noiseBuf;
-    noiseSrc.loop = true;
+    noiseSrc.loop = false;
     const noiseG = c.createGain();
-    noiseG.gain.value = noiLin;
     noiseSrc.connect(noiseG);
     makeEarRouter(c, noiseG, routing);
 
     activeSource = wordSrc;
     activeNoiseSource = noiseSrc;
 
-    const now = c.currentTime;
-    const t0 = now + 0.02;
-    const wordDur = wordBuf.duration;
-    const audibleOnset = Math.min(wordLeadSec, wordDur);
-    const noiseStart = Math.max(now, t0 + audibleOnset - noisePadSec);
-    const noiseStop  = t0 + wordDur + noisePadSec;
+    // Equal-power (cosine) ramps of rampSec, clamped so two ramps fit the segment.
+    const ramp = Math.max(0, Math.min(rampSec, noiseDur / 2));
+    const noiseStartClamped = Math.max(now, noiseStartAt);
+    const noiseEndAt = noiseStartClamped + noiseDur;
+    const g = noiseG.gain;
+    g.setValueAtTime(0.0001, noiseStartClamped);
+    if (ramp > 0) {
+      // exponentialRamp can't target 0, so start just above and use it for a
+      // smooth (near equal-power) fade; linear ramp to 0 at the tail.
+      g.exponentialRampToValueAtTime(Math.max(noiLin, 1e-4), noiseStartClamped + ramp);
+      g.setValueAtTime(noiLin, noiseEndAt - ramp);
+      g.linearRampToValueAtTime(0.0001, noiseEndAt);
+    } else {
+      g.setValueAtTime(noiLin, noiseStartClamped);
+    }
 
     return new Promise((resolve, reject) => {
       wordSrc.onended = () => {
@@ -643,12 +704,14 @@ const AudioEngine = (() => {
         resolve();
       };
       try {
-        noiseSrc.start(noiseStart);
-        noiseSrc.stop(noiseStop);
-        noiseSrc.onended = () => {
-          if (activeNoiseSource === noiseSrc) activeNoiseSource = null;
-          try { noiseSrc.disconnect(); } catch (_) {}
-        };
+        if (noiseDur > 0) {
+          // start(when, offset, duration) — a single contiguous slice.
+          noiseSrc.start(noiseStartClamped, noiseOffset, noiseDur);
+          noiseSrc.onended = () => {
+            if (activeNoiseSource === noiseSrc) activeNoiseSource = null;
+            try { noiseSrc.disconnect(); } catch (_) {}
+          };
+        }
         wordSrc.start(t0);
         if (onStarted) requestAnimationFrame(() => onStarted());
       } catch (err) {
@@ -685,17 +748,28 @@ const AudioEngine = (() => {
   let calibRouter = null;
   const CALIB_KEY = "__calib__";
 
-  // Decode + cache the calibration noise file (idempotent). Shared by the
-  // calibration tone AND the SNR mix path. Returns { raw, momentary }.
-  async function ensureCalibNoise(url = "sounds/calib.mp3") {
+  // Decode + cache a noise file (idempotent), keyed BY URL. Used by both the
+  // calibration tone (calib.wav, looped in the cal routine) and the SNR mix path
+  // (noise.mp3 — same underlying audio as calib.wav, but a separate file because
+  // the mp3 has a tiny start/end dropout that only matters when looping, which
+  // the calibration routine does and the SNR path no longer does). Keying by URL
+  // lets those two files coexist instead of the first-fetched one winning a
+  // shared slot.
+  //
+  // No LUFS measurement: the noise level is set purely by the presentation gain
+  // (calibration slider / device volume), and the word↔noise ratio is fixed at
+  // source, so nothing here needs the file's measured loudness. `momentary` is
+  // left null for the one informational caller (startCalibrationTone).
+  async function ensureCalibNoise(url = "sounds/noise.mp3") {
     const c = context();
-    let entry = cache.get(CALIB_KEY);
+    const key = `${CALIB_KEY}:${url}`;
+    let entry = cache.get(key);
     if (!entry) {
       const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`calibration fetch failed ${resp.status} for ${url}`);
+      if (!resp.ok) throw new Error(`noise fetch failed ${resp.status} for ${url}`);
       const raw = await c.decodeAudioData(await resp.arrayBuffer());
-      entry = { raw, momentary: measureLUFS(raw).momentary };
-      cache.set(CALIB_KEY, entry);
+      entry = { raw, momentary: null };
+      cache.set(key, entry);
     }
     return entry;
   }
@@ -1051,6 +1125,8 @@ if (typeof window !== "undefined") {
 }
 
 
+
+
 // --- adaptiveConfig.js ---
 // File: adaptiveConfig.js
 // -----------------------------------------------------------------------------
@@ -1109,12 +1185,18 @@ const PRESETS = {
   // files AS DELIVERED: they are spectrum- and level-matched at source, so
   // SNR = 0 dB means noise-at-file-level + signal-at-file-level with no
   // re-matching, and the SNR value is exactly the extra dB applied to the signal.
+  //
+  // WUDR steps are the quiet-mode dB steps scaled by stepMult (Finding: the
+  // clinician wanted the same shape as quiet but finer, e.g. 0.2x). The stored
+  // workDown/workUp/initDown/initUp below are ALREADY scaled (quiet × 0.2); the
+  // Setup screen exposes stepMult so changing it rescales from the quiet base.
   snr: {
     mode: "snr",
     axisIsLog: false,
     unit: "dB SNR", stepUnit: "dB", slopeUnit: "%/dB",
     start: 2,                                         // +2 dB SNR
     xlo: -20, xhi: 10,
+    // Base = quiet dB steps; stepMult (0.2) applied -> stored values below.
     stepMult: 0.2,
     workDown: +(0.6 * 0.2).toFixed(4),  // 0.12
     workUp:   +(1.0 * 0.2).toFixed(4),  // 0.20
@@ -1191,10 +1273,13 @@ function applyModePreset(cfg, mode) {
     switchRev: p.switchRev,
     a1slope: p.a1slope, a2slope: p.a2slope, minStep: p.minStep,
     slopeHint: p.slopeHint,
+    // SNR carries a step multiplier; other modes clear it so it can't leak.
     stepMult: p.mode === "snr" ? p.stepMult : undefined
   };
 }
 
+// Rescale the SNR WUDR steps from the quiet base by a multiplier. Used by Setup
+// when the operator changes the SNR step multiplier. Returns the four steps.
 function snrStepsForMult(mult) {
   const m = isFinite(mult) && mult > 0 ? mult : 0.2;
   return {
@@ -1523,6 +1608,8 @@ function createTrack(cfg) {
 // value (Hz for LPF, dB for quiet) into the internal cfg the track consumes.
 // Mode-aware: LPF uses a log10(Hz) axis, quiet uses a linear dB axis.
 function resolveTrackConfig(adaptive, startValue) {
+  // Both quiet (dB level) and snr (dB SNR) are LINEAR-axis modes; only LPF is
+  // log10(Hz). Anything not explicitly linear stays on the log axis (LPF).
   const linearMode = adaptive.mode === "quiet" || adaptive.mode === "snr";
   const axisIsLog = adaptive.axisIsLog !== false && !linearMode;
   const isSnr = adaptive.mode === "snr";
@@ -1693,6 +1780,9 @@ function beginPhase(p) {
       const isSnr = adaptive.mode === "snr";
       const isLinear = isQuiet || isSnr;   // both use a dB axis, not log(Hz)
 
+      // Start value: Hz (LPF) or dB (quiet: level / snr: SNR). Relative start
+      // shifts by octaves (LPF) or dB (linear); with no prior in-session
+      // threshold it resolves against the absolute start for now (documented).
       let startVal = isLinear
         ? (adaptive.startValue ?? adaptive.start ?? (isSnr ? 2 : 65))
         : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
@@ -1702,6 +1792,8 @@ function beginPhase(p) {
           : startVal * Math.pow(2, adaptive.startRelOctaves); // octave shift
       }
 
+      // quietStartLevel doubles as the uncalibrated relative-gain anchor for
+      // BOTH linear modes (quiet's level and snr's noise level).
       quietStartLevel = isLinear ? startVal : null;
       const trackCfg = resolveTrackConfig(adaptive, startVal);
       track = createTrack(trackCfg);
@@ -1874,9 +1966,12 @@ if (phase === "test") {
 
   // Mode-aware presentation:
   //  LPF  : filter at the adaptive CUTOFF; gain from the fixed run level.
-  //  Quiet: no filter; the adaptive VALUE is the presentation LEVEL (dB).
-  //  SNR  : no filter; the adaptive VALUE is the dB SNR. Masking noise plays at
-  //         the FIXED presentation level; the signal is offset by the SNR.
+  //  Quiet: no filter; the adaptive VALUE is the presentation LEVEL (dB),
+  //         applied as gain (calibrated -> absolute dB(A); uncalibrated ->
+  //         relative dB re the start level).
+  //  SNR  : no filter; the adaptive VALUE is the dB SNR. The masking noise
+  //         (calibration file) plays at the FIXED presentation level; the
+  //         signal is offset from the noise by the SNR.
   const adaptive = (config && config.adaptive) ? config.adaptive : {};
   const isQuiet = (phase === "test" && track) ? adaptive.mode === "quiet" : false;
   const isSnr   = (phase === "test" && track) ? adaptive.mode === "snr"   : false;
@@ -1886,21 +1981,55 @@ if (phase === "test") {
   // ---- SNR mode: dispatch to the mixed word+noise path and return early ----
   if (isSnr) {
     const snrDb = currentCutoffHz;   // mode-neutral value; dB SNR here
+    // Noise sits at the fixed presentation level: the calibration slider's
+    // chosen dB(A) when calibrated, unity when not (device volume sets absolute
+    // output, exactly as an uncalibrated run does elsewhere).
     const noiseGainDb = calibrated
       ? Calibration.gainDbForLevel(Calibration.state().currentSliderDb)
       : 0;
-    const noiseUrl = (config && config.calibFile) ? `sounds/${config.calibFile}` : "sounds/calib.mp3";
+    // SNR masking uses the dedicated noise file (noise.mp3), which is the same
+    // audio as the calibration file but doesn't need to loop, so its start/end
+    // dropout is irrelevant. Overridable via config.snrNoiseFile.
+    const noiseUrl = (config && config.snrNoiseFile)
+      ? `sounds/${config.snrNoiseFile}`
+      : "sounds/noise.mp3";
 
-    AudioEngine.playStimulusWithNoise(item.correct, `sounds/${item.audioFile}`, {
+    // Adjustable timing (ms) so the operator can line the noise up with the
+    // actual speech onset inside each stimulus file. Defaults: 600 ms lead/
+    // trail, 100 ms ramps, 600 ms audible onset (leading silence in the files).
+    const msToSec = (v, dflt) => {
+      const n = Number(v);
+      return isFinite(n) && n >= 0 ? n / 1000 : dflt;
+    };
+    const noiseLeadSec  = msToSec(config && config.snrNoiseLeadMs, 0.6);
+    const noiseTrailSec = msToSec(config && config.snrNoiseTrailMs, 0.6);
+    const rampSec       = msToSec(config && config.snrNoiseRampMs, 0.1);
+    const wordLeadSec   = msToSec(config && config.snrWordLeadMs,
+                                  msToSec(config && config.imageRevealOffsetMs, 0.6));
+    // Optional override for the fixed clip-safety headroom; omit to use the
+    // engine default (-6 dB). Applied equally to word and noise (SNR unchanged).
+    const headroomDb = (config && isFinite(Number(config.snrHeadroomDb)))
+      ? Number(config.snrHeadroomDb) : undefined;
+
+    const snrOpts = {
       snrDb,
       noiseGainDb,
       noiseUrl,
       routing,
+      noiseLeadSec,
+      noiseTrailSec,
+      rampSec,
+      wordLeadSec,
       onStarted: () => { setTimeout(revealOptions, offset); }
-    }).catch(err => {
+    };
+    if (headroomDb !== undefined) snrOpts.headroomDb = headroomDb;
+
+    AudioEngine.playStimulusWithNoise(item.correct, `sounds/${item.audioFile}`, snrOpts).catch(err => {
       console.error("SNR audio play failed:", err);
       if (!nextTrial._erroredOnce) {
-        alert("Audio failed to play. Check the calibration noise file (sounds/calib.mp3) and autoplay settings.");
+        alert("Audio failed to play. Check the noise file (sounds/" +
+          ((config && config.snrNoiseFile) || "noise.mp3") +
+          ") exists and browser autoplay is allowed.");
         nextTrial._erroredOnce = true;
       }
     });
@@ -2022,7 +2151,7 @@ async function loadList() {
       // Split to exactly 6 fields, trim each, and validate
       const parts = line.split(/\t/).map(s => (s ?? "").trim());
       if (parts.length !== 6 || parts.some(p => !p)) {
-        console.warn(`[!] Bad list row skipped @ line ${i + 1} (${sourceLabel}):`, line);
+        console.warn(`âš ï¸ Bad list row skipped @ line ${i + 1} (${sourceLabel}):`, line);
         return null;
       }
       const [a, b, c, d, correct, audioFile] = parts;
@@ -2030,7 +2159,7 @@ async function loadList() {
     }).filter(Boolean);
 
     if (rows.length === 0) {
-      console.error(`[X] No valid rows parsed from ${sourceLabel}.`);
+      console.error(`âŒ No valid rows parsed from ${sourceLabel}.`);
     }
     return rows;
   }
@@ -2045,21 +2174,21 @@ async function loadList() {
     const rows = parseLines(raw, "inline fallback");
     list.length = 0;
     list.push(...rows);
-    console.warn("[pkg] Loaded inline fallback list (file://)");
+    console.warn("ðŸ“¦ Loaded inline fallback list (file://)");
   } else {
     try {
       const txt = await fetch("UC4AFC_lists.txt").then(r => r.text());
       const rows = parseLines(txt, "UC4AFC_lists.txt");
       list.length = 0;
       list.push(...rows);
-      console.log("[OK] Loaded list from UC4AFC_lists.txt");
+      console.log("âœ… Loaded list from UC4AFC_lists.txt");
     } catch (err) {
-      console.error("[X] Failed to load UC4AFC_lists.txt:", err);
+      console.error("âŒ Failed to load UC4AFC_lists.txt:", err);
       alert("Failed to load stimulus list.");
     }
   }
 
-  // [OK] All assets are preloaded via preloadAllAssets() in main.js
+  // âœ… All assets are preloaded via preloadAllAssets() in main.js
 }
 
 
@@ -2075,7 +2204,7 @@ async function preloadAllAssets() {
   const isLocal = location.protocol === "file:";
 
   if (isLocal) {
-    // [wip] Fallback list for local mode
+    // ðŸš§ Fallback list for local mode
 assetList = [
   "images/bag.jpg",
   "images/back.jpg",
@@ -2289,7 +2418,7 @@ assetList = [
   "sounds/van.mp3",
   "sounds/zip.mp3"
 ];
-    console.warn("[pkg] Using fallback preload asset list (file:// mode)");
+    console.warn("ðŸ“¦ Using fallback preload asset list (file:// mode)");
   } else {
     try {
       const res = await fetch("preloadfilelist.txt");
@@ -2297,20 +2426,20 @@ assetList = [
       const raw = await res.text();
       assetList = raw.split(/\r?\n/).filter(x => x.trim().length > 0);
     } catch (err) {
-      console.error("[X] Failed to load preloadfilelist.txt:", err);
+      console.error("âŒ Failed to load preloadfilelist.txt:", err);
       return;
     }
   }
 
 const tasks = assetList.map(src => () => {
   if (src.endsWith(".jpg")) return preloadImage(src);
-  if (src.endsWith(".mp3")) return preloadStimulus(src);
+  if (src.endsWith(".mp3")) return preloadSound(src);
   return Promise.resolve();
 }).filter(Boolean);
 
-console.log(`[pkg] Preloading ${tasks.length} assets...`);
+console.log(`ðŸ“¦ Preloading ${tasks.length} assets...`);
 await runWithConcurrency(tasks, 8); // keep this modest on mobile
-console.log(`[OK] Finished preloading ${tasks.length} assets.`);
+console.log(`âœ… Finished preloading ${tasks.length} assets.`);
 
 async function runWithConcurrency(fns, limit = 8) {
   let i = 0;
@@ -2328,12 +2457,12 @@ function preloadImage(src, timeoutMs = 7000) {
 
     const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
     const timer = setTimeout(() => {
-      console.warn(`[time] Image preload timed out: ${src}`);
+      console.warn(`â±ï¸ Image preload timed out: ${src}`);
       done();
     }, timeoutMs);
 
     img.onload = done;
-    img.onerror = () => { console.warn(`[!] Failed to load image: ${src}`); done(); };
+    img.onerror = () => { console.warn(`âš ï¸ Failed to load image: ${src}`); done(); };
     img.src = src;
 
     // On some browsers, decode can resolve earlier/more reliably
@@ -2351,7 +2480,7 @@ function preloadSound(src, timeoutMs = 7000) {
 
     const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
     const timer = setTimeout(() => {
-      console.warn(`[time] Sound preload timed out: ${src}`);
+      console.warn(`â±ï¸ Sound preload timed out: ${src}`);
       done();
     }, timeoutMs);
 
@@ -2359,7 +2488,7 @@ function preloadSound(src, timeoutMs = 7000) {
     once("canplaythrough");
     once("loadeddata");
     once("loadedmetadata");
-    audio.addEventListener("error", () => { console.warn(`[!] Failed to load sound: ${src}`); done(); }, { once: true });
+    audio.addEventListener("error", () => { console.warn(`âš ï¸ Failed to load sound: ${src}`); done(); }, { once: true });
 
     audio.preload = "auto";
     audio.src = src;
@@ -2368,41 +2497,24 @@ function preloadSound(src, timeoutMs = 7000) {
 }
 
 
-// Warm the network cache for a stimulus mp3. We deliberately do NOT call
-// decodeAudioData here: at preload time the AudioContext is still suspended
-// (it only unlocks on the Train/Start user gesture), and on many browsers
-// decodeAudioData will not complete on a suspended context. Decoding is done
-// lazily by the engine on first play, and the cache is warmed in the
-// background after unlock (see warmDecodeCache below).
-function preloadStimulus(src, timeoutMs = 7000) {
-  return preloadSound(src, timeoutMs);
-}
+function startCalibration() {
+  const mode = localStorage.getItem("language") || "Te reo MÄori";
+  const soundFile = mode === "English" ? "NZEng_calib.mp3" : "TeReo_calib.mp3";
 
-// Decode every stimulus into the engine cache AFTER the context is unlocked.
-// Safe to call repeatedly; decode() is idempotent. Runs with modest
-// concurrency so it doesn't jank the UI on mobile.
-async function warmDecodeCache(soundFiles, limit = 4) {
-  if (typeof AudioEngine === "undefined") return;
-  const c = AudioEngine.context();
-  if (c.state !== "running") return; // only after a user gesture unlocks audio
+  const audio = document.getElementById("stimulus");
+  audio.src = `sounds/${soundFile}`;
+  audio.loop = true;
 
-  const jobs = soundFiles.map(name => async () => {
-    if (AudioEngine.isDecoded(name)) return;
-    try { await AudioEngine.decode(name, `sounds/${name}.mp3`); }
-    catch (err) { console.warn(`Deferred decode failed for ${name}`, err); }
+  audio.play().then(() => {
+    alert("ðŸ“¢ Playing calibration sound.\nSet your device volume to maximum.\nClick OK to stop.");
+  }).catch(err => {
+    console.error("âš ï¸ Calibration audio failed to play:", err);
+    alert("âš ï¸ Audio failed to play. Check browser autoplay permissions.");
+  }).finally(() => {
+    audio.pause();
+    audio.loop = false;
   });
-
-  let i = 0;
-  const workers = Array.from({ length: Math.min(limit, jobs.length) }, async () => {
-    while (i < jobs.length) await jobs[i++]();
-  });
-  await Promise.all(workers);
-  console.log(`Decoded ${soundFiles.length} stimuli into the engine cache.`);
 }
-
-
-// Legacy startCalibration() stub removed — calibration is now handled by the
-// calibration screen (calibration.js + AudioEngine.startCalibrationTone).
 
 
 // --- results.js ---
@@ -2491,12 +2603,20 @@ function saveResults(optionalNote = "") {
       `# Threshold estimate (${unit})\t${lastEstimate != null ? lastEstimate : "n/a"}`
     );
     if (mode === "snr") {
+      // In SNR mode the noise sits at the fixed presentation level; document it
+      // (the calibrated dB(A), else "uncalibrated") and the step multiplier.
       const noiseLevel = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated())
         ? `${Calibration.state().currentSliderDb} dB(A)`
         : "uncalibrated (device volume sets level)";
+      const cfgc = (typeof config !== "undefined" && config) ? config : {};
       txtLines.push(
         `# Noise level (fixed)\t${noiseLevel}`,
-        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`
+        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`,
+        `# Noise file\t${cfgc.snrNoiseFile ?? "noise.mp3"}`,
+        `# Word onset in file (ms)\t${cfgc.snrWordLeadMs ?? cfgc.imageRevealOffsetMs ?? 600}`,
+        `# Noise lead before word (ms)\t${cfgc.snrNoiseLeadMs ?? 600}`,
+        `# Noise trail after word (ms)\t${cfgc.snrNoiseTrailMs ?? 600}`,
+        `# Noise ramp in/out (ms)\t${cfgc.snrNoiseRampMs ?? 100}`
       );
     }
   }
@@ -2687,6 +2807,18 @@ window.onload = async () => {
   if (typeof AdaptiveConfig !== "undefined") {
     AdaptiveConfig.mergeAdaptiveIntoConfig(config);
   }
+
+  // Merge persisted SNR noise-timing (presentation) settings into `config`.
+  // config.json values (if any) act as defaults; a saved Setup overrides them.
+  try {
+    const raw = localStorage.getItem("uc4afc_snr_timing");
+    if (raw) {
+      const t = JSON.parse(raw);
+      const merge = (k) => { if (isFinite(Number(t[k]))) config[k] = Number(t[k]); };
+      merge("snrWordLeadMs"); merge("snrNoiseLeadMs");
+      merge("snrNoiseTrailMs"); merge("snrNoiseRampMs");
+    }
+  } catch (_) {}
   
   // [OK] Initialise arrowSet before list/preload
   if (location.protocol === "file:") {
@@ -2845,28 +2977,7 @@ if (breakEveryInput) {
 
 // --- Calibration screen wiring (mirrors UC_CVCV) -----------------------------
 const CALIB_URL = () => (typeof config !== "undefined" && config && config.calibFile)
-  ? `sounds/${config.calibFile}` : "sounds/calib.mp3";
-
-// Finding 4: if the audio context came back at the wrong rate, calibrating now
-// would set a silently wrong reference (on iOS, half speed + wrong level). Paint
-// the warning where the operator will see it and report whether calibration is
-// blocked. Returns true when a mismatch is present (caller must not proceed).
-function calRateBlocked() {
-  if (typeof AudioEngine === "undefined" || !AudioEngine.rateMismatch) return false;
-  const m = AudioEngine.rateMismatch();
-  const el = document.getElementById("calStatus");
-  if (!m) return false;
-  const halfSpeed = Math.abs(m.ratio - 2) < 0.01;
-  if (el) el.textContent =
-    `⚠ Audio is running at ${m.contextRate} Hz but the recordings are ` +
-    `${m.assetRate} Hz. ` +
-    (halfSpeed
-      ? "This halves playback speed and makes the level wrong. Fully close the " +
-        "app and reopen it (on iPhone/iPad, swipe it away from the app switcher first). "
-      : "Playback speed and level may be wrong; try reopening the app. ") +
-    "Calibration is disabled until this clears.";
-  return true;
-}
+  ? `sounds/${config.calibFile}` : "sounds/calib.wav";
 
 function refreshCalStatus() {
   const el = document.getElementById("calStatus");
@@ -2885,13 +2996,8 @@ function setupCalibrationSlider() {
   const c = Calibration.state();
   slider.min = c.sliderMinDb ?? -100;
   slider.max = c.sliderMaxDb ?? 0;
-  // Both ends sit on the 5 dB grid now (Finding 5); make travel match the snap.
-  slider.step = c.isCalibrated ? 5 : 0.1;
-  // Clamp the starting position into the calibrated bounds so it can never open
-  // below the floor or above the reference.
-  let start = c.currentSliderDb ?? c.sliderMaxDb ?? 0;
-  if (c.isCalibrated && Calibration.clampLevel) start = Calibration.clampLevel(start);
-  slider.value = start;
+  slider.step = 0.1;
+  slider.value = c.currentSliderDb ?? slider.max;
   updateOutputLevelFromSlider();
 }
 
@@ -2904,9 +3010,9 @@ function updateOutputLevelFromSlider() {
   let raw = parseFloat(slider.value);
 
   if (c.isCalibrated && c.measuredDbA !== null) {
-    // Clamp to the calibrated bounds (Finding 5): never above the reference,
-    // never below the recording floor.
-    const snapped = Calibration.clampLevel ? Calibration.clampLevel(raw) : Math.round(raw / 5) * 5;
+    const max = parseFloat(slider.max);
+    const tol = 0.25;
+    const snapped = Math.abs(raw - max) <= tol ? max : Math.round(raw / 5) * 5;
     slider.value = snapped;
     Calibration.setCurrentSliderDb(snapped);
     if (label) label.textContent = `${snapped} dB A`;
@@ -2920,43 +3026,6 @@ function updateOutputLevelFromSlider() {
   }
 }
 
-// Render the calibration screen for the currently-selected method: swap in the
-// method's step list, show the per-channel ear selector only for audiometer, and
-// keep the noise routed to the right channel(s). Audiometer calibration is done
-// one channel at a time (handover §3); sound field uses a single meter at the
-// head, so the ear selector is hidden and the noise plays to both.
-function renderCalMethodUI() {
-  if (typeof Calibration === "undefined") return;
-  const sel = document.getElementById("calMethodSelect");
-  const method = sel ? sel.value : Calibration.calMethod();
-  Calibration.setMethod(method);
-  const info = (Calibration.CAL_METHODS && Calibration.CAL_METHODS[method]) || null;
-
-  const ol = document.getElementById("calSteps");
-  if (ol && info) {
-    ol.innerHTML = "";
-    info.steps.forEach(s => { const li = document.createElement("li"); li.textContent = s; ol.appendChild(li); });
-  }
-
-  const perChannel = method === "audiometer";
-  const earWrap = document.getElementById("calEarWrap");
-  const earHint = document.getElementById("calEarHint");
-  if (earWrap) earWrap.style.display = perChannel ? "" : "none";
-  if (earHint) earHint.textContent = perChannel
-    ? "Calibrate each channel separately: route to Left, set the aux gain, then Right."
-    : "";
-  const earSel = document.getElementById("calEarSelect");
-  if (!perChannel && earSel) { earSel.value = "binaural"; }
-}
-
-// The ear currently selected for the (audiometer) calibration noise.
-function currentCalEar() {
-  const earSel = document.getElementById("calEarSelect");
-  const method = document.getElementById("calMethodSelect");
-  if (method && method.value !== "audiometer") return "binaural";
-  return earSel ? earSel.value : "binaural";
-}
-
 function setupCalibrationScreen() {
   const toggleBtn = document.getElementById("calToneToggleBtn");
   const testBtn   = document.getElementById("testCalBtn");
@@ -2968,59 +3037,16 @@ function setupCalibrationScreen() {
   let toneOn = false;
   let testOn = false;
 
-  // Method selector: re-render steps/labels and (if noise is playing) keep it
-  // routed correctly. Ear selector: re-route the running noise live so the
-  // clinician can flip channels without restarting (handover §3).
-  const methodSel = document.getElementById("calMethodSelect");
-  const earSel = document.getElementById("calEarSelect");
-  if (methodSel) {
-    methodSel.value = (typeof Calibration !== "undefined") ? Calibration.calMethod() : "audiometer";
-    methodSel.onchange = () => {
-      renderCalMethodUI();
-      if (toneOn) AudioEngine.setCalibrationEar(currentCalEar());
-    };
-  }
-  if (earSel) {
-    earSel.onchange = () => {
-      if (typeof AudioEngine !== "undefined") AudioEngine.setCalibrationEar(currentCalEar());
+  // Offer any stored calibration on load, and initialise the slider.
+  if (typeof Calibration !== "undefined") {
+    const restored = Calibration.loadStored();
+    if (restored) {
+      if (testBtn) testBtn.hidden = false;
+      const when = restored.timestamp
+        ? new Date(restored.timestamp).toLocaleString("en-NZ", { dateStyle: "short", timeStyle: "short" })
+        : "earlier";
       const el = document.getElementById("calStatus");
-      if (toneOn && el) {
-        const where = earSel.value === "left" ? "left channel only"
-                    : earSel.value === "right" ? "right channel only" : "both channels";
-        el.textContent = `Calibration noise playing — ${where}.`;
-      }
-    };
-  }
-  renderCalMethodUI();
-
-  // Finding 6: read any stored calibration but DON'T activate it silently. A
-  // stored figure asserts the device was at max volume when it was taken, which
-  // can't be verified after the fact; and a stale one may no longer hold. Ask
-  // the operator to confirm (with an explicit warning past the age threshold).
-  if (typeof Calibration !== "undefined" && Calibration.readStored) {
-    const rec = Calibration.readStored();
-    if (rec) {
-      const when = rec.timestamp
-        ? new Date(rec.timestamp).toLocaleString("en-NZ", { dateStyle: "short", timeStyle: "short" })
-        : "an earlier session";
-      const age = rec.ageDays != null ? ` (${Math.round(rec.ageDays)} day(s) ago)` : "";
-      const warn = rec.stale
-        ? "\n\nThis calibration is old and may no longer be valid — re-calibrating is recommended."
-        : "";
-      const ok = window.confirm(
-        `A stored calibration of ${rec.level} dB(A) from ${when}${age} was found.\n\n` +
-        "Re-use it? It assumes the device volume is at maximum, exactly as when it " +
-        "was measured. Choose Cancel to stay uncalibrated and measure again." + warn
-      );
-      if (ok && Calibration.confirmStored(rec)) {
-        if (testBtn) testBtn.hidden = false;
-        const msel = document.getElementById("calMethodSelect");
-        if (msel && rec.method) { msel.value = rec.method; renderCalMethodUI(); }
-        const el = document.getElementById("calStatus");
-        const mlabel = Calibration.calMethod() === "audiometer" ? "audiometer" : "sound field";
-        if (el) el.textContent =
-          `Calibration in use: ${rec.level} dB(A) (${mlabel}) from ${when}. Device volume must be at maximum.`;
-      }
+      if (el) el.textContent = `Calibration restored: ${restored.level} dB(A) from ${when}. Device volume must be at maximum.`;
     }
   }
   setupCalibrationSlider();
@@ -3035,25 +3061,10 @@ function setupCalibrationScreen() {
       toneOn = false;
       toggleBtn.textContent = "Calibration tone";
       toggleBtn.classList.remove("active");
-      const method = methodSel ? methodSel.value : Calibration.calMethod();
-      const promptLabel = method === "audiometer"
-        ? "Enter the audiometer dial setting (in dB A):"
-        : "Enter the measured level at the client's head (in dB A):";
-      const measured = prompt(promptLabel);
+      const measured = prompt("Enter measured calibration level (in dB A):");
       if (measured === null || measured === "" || isNaN(measured)) return;
       const level = parseFloat(measured);
-      const ok = Calibration.applyCalibrationLevel(level, undefined, method);
-      if (!ok) {
-        const el = document.getElementById("calStatus");
-        if (el) el.textContent =
-          `${level} dB(A) is not a usable reference. Check the figure is ` +
-          (method === "audiometer"
-            ? "the audiometer dial setting"
-            : "the meter reading at the client's position") +
-          `, in dB(A). Staying uncalibrated.`;
-        setupCalibrationSlider();
-        return;
-      }
+      Calibration.applyCalibrationLevel(level);
       setupCalibrationSlider();
       if (testBtn) testBtn.hidden = false;
       refreshCalStatus();
@@ -3061,28 +3072,20 @@ function setupCalibrationScreen() {
     }
 
     await AudioEngine.resume();
-    // resume() constructs the context, so the rate check is now populated.
-    // Refuse to calibrate at the wrong rate (Finding 4).
-    if (calRateBlocked()) return;
     // Stop any test playback first.
     AudioEngine.stopCalibrationTone();
     testOn = false;
     if (testBtn) testBtn.textContent = "Test level";
-    alert("Turn your device volume all the way up, then tap OK to play the calibration noise.");
+    alert("Turn your device volume all the way up, then tap OK to play the calibration tone.");
     try {
-      const ear = currentCalEar();
-      await AudioEngine.startCalibrationTone(CALIB_URL(), { ear });
+      await AudioEngine.startCalibrationTone(CALIB_URL());
       toneOn = true;
       toggleBtn.textContent = "Stop & Enter Level";
       toggleBtn.classList.add("active");
       const el = document.getElementById("calStatus");
-      if (el) {
-        const where = ear === "left" ? "left channel only"
-                    : ear === "right" ? "right channel only" : "both channels";
-        el.textContent = `Calibration noise playing — ${where}.`;
-      }
+      if (el) el.textContent = "Calibration sound playing.";
     } catch (err) {
-      alert("No calibration sound file found (" + CALIB_URL() + ").\nAdd calib.mp3 to the sounds/ folder.");
+      alert("No calibration sound file found (" + CALIB_URL() + ").\nAdd calib.wav to the sounds/ folder.");
       console.error(err);
     }
   };
@@ -3098,10 +3101,9 @@ function setupCalibrationScreen() {
         return;
       }
       await AudioEngine.resume();
-      if (calRateBlocked()) return;
       const gainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb);
       try {
-        await AudioEngine.startCalibrationTone(CALIB_URL(), { extraGainDb: gainDb, ear: currentCalEar() });
+        await AudioEngine.startCalibrationTone(CALIB_URL(), { extraGainDb: gainDb });
         testOn = true;
         testBtn.textContent = "Stop";
       } catch (err) {
@@ -3166,6 +3168,7 @@ function showModeButtons(mode) {
     (mode === "quiet") ? "Adapts presentation level (dB). Uncalibrated runs are relative to the start level."
   : (mode === "snr")   ? "Adapts signal-to-noise ratio (dB). Masking noise is fixed at the presentation level; the signal moves."
   : "Adapts the equivalent low-pass cutoff (Hz).";
+  // The SNR-only block (step multiplier) is shown only in SNR mode.
   const snrBlock = document.getElementById("snrBlock");
   if (snrBlock) snrBlock.hidden = (mode !== "snr");
 }
@@ -3174,7 +3177,7 @@ function showModeButtons(mode) {
 function applyModeLabels(mode) {
   const isQuiet = (mode === "quiet");
   const isSnr = (mode === "snr");
-  const isLinear = isQuiet || isSnr;
+  const isLinear = isQuiet || isSnr;   // dB axis (either level or SNR)
   const stepUnit = isLinear ? "dB" : "dec";
   const setText = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
   setText("lblStart", isSnr ? "Starting SNR (dB)" : isQuiet ? "Starting level (dB)" : "Starting cutoff (Hz)");
@@ -3184,12 +3187,14 @@ function applyModeLabels(mode) {
   document.querySelectorAll(".lblStepUnit-id").forEach(e => e.textContent = `Initial down step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-iu").forEach(e => e.textContent = `Initial up step (${stepUnit})`);
 
+  // Start input bounds/step per mode.
   const sc = document.getElementById("setStartCutoff");
   if (sc) {
     if (isSnr) { sc.min = -20; sc.max = 10; sc.step = 1; }
     else if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
     else { sc.min = 80; sc.max = 6000; sc.step = 10; }
   }
+  // Step inputs: fine in SNR (small dB), medium in quiet, very fine in LPF.
   ["setWorkDown","setWorkUp","setInitDown","setInitUp"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.step = isSnr ? 0.01 : isQuiet ? 0.1 : 0.0001;
@@ -3238,6 +3243,17 @@ function fillFormFromCfg(cfg) {
   set("setRouting", cfg.routing || (config && config.routing) || "binaural");
 }
 
+// SNR noise-timing (presentation) fields live on `config`, not the adaptive
+// cfg. Populate them from config with the documented defaults.
+function fillSnrTimingFromConfig() {
+  const set = (id, v) => { const el = document.getElementById(id); if (el != null && v != null) el.value = v; };
+  const c = (typeof config !== "undefined" && config) ? config : {};
+  set("setSnrWordLead",   c.snrWordLeadMs   ?? c.imageRevealOffsetMs ?? 600);
+  set("setSnrNoiseLead",  c.snrNoiseLeadMs  ?? 600);
+  set("setSnrNoiseTrail", c.snrNoiseTrailMs ?? 600);
+  set("setSnrNoiseRamp",  c.snrNoiseRampMs  ?? 100);
+}
+
 function populateSetupForm() {
   const cfg = currentAdaptiveCfg();
   _setupProc = cfg.procedure || "wudr";
@@ -3246,6 +3262,7 @@ function populateSetupForm() {
   showModeButtons(_setupMode);
   applyModeLabels(_setupMode);
   fillFormFromCfg(cfg);
+  fillSnrTimingFromConfig();
 
   const status = document.getElementById("setupStatus");
   if (status) status.textContent = "";
@@ -3261,11 +3278,13 @@ function readSetupForm() {
   const A = 4;
   const isQuiet = (_setupMode === "quiet");
   const isSnr = (_setupMode === "snr");
-  const isLinear = isQuiet || isSnr;
+  const isLinear = isQuiet || isSnr;   // dB axis (level or SNR)
   const sweet = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.sweetPointsFor(A) : { pLow: 0.40, pHigh: 0.85 };
   const midpoint = (typeof AdaptiveConfig !== "undefined") ? AdaptiveConfig.midpointTarget(A) : 0.625;
   const startVal = num("setStartCutoff", isSnr ? 2 : isQuiet ? 65 : 1000);
 
+  // In SNR mode the WUDR steps are derived from the multiplier (single source of
+  // truth), not read from the step inputs. Other modes read the step inputs.
   const stepMult = isSnr ? num("setSnrStepMult", 0.2) : undefined;
   const snrSteps = (isSnr && typeof AdaptiveConfig !== "undefined")
     ? AdaptiveConfig.snrStepsForMult(stepMult)
@@ -3299,7 +3318,7 @@ function readSetupForm() {
     pHigh: sweet.pHigh,
     a2Doubling: !!(document.getElementById("setA2Doubling") || {}).checked,
     slopeHint: isLinear ? 6 : 43,
-    stepMult,
+    stepMult,   // undefined unless SNR
     routing: val("setRouting") || "binaural"
   };
 }
@@ -3336,6 +3355,8 @@ function setupSetupScreen() {
   const startMode = document.getElementById("setStartMode");
   if (startMode) startMode.onchange = () => toggleStartMode(startMode.value);
 
+  // SNR step multiplier: recompute and display the four WUDR steps from it, so
+  // the step fields always reflect quiet-base × multiplier.
   const snrMult = document.getElementById("setSnrStepMult");
   if (snrMult) {
     const applyMult = () => {
@@ -3356,6 +3377,29 @@ function setupSetupScreen() {
     if (typeof config !== "undefined") config.adaptive = cfg;
     // Routing is also surfaced at the top level of config for flow.js to read.
     if (typeof config !== "undefined") config.routing = cfg.routing;
+
+    // SNR noise-timing (presentation) fields -> config, and persist to
+    // localStorage so they survive a reload alongside the adaptive config.
+    const numOr = (id, dflt) => {
+      const el = document.getElementById(id);
+      const v = el ? parseFloat(el.value) : NaN;
+      return isFinite(v) && v >= 0 ? v : dflt;
+    };
+    if (typeof config !== "undefined") {
+      config.snrWordLeadMs   = numOr("setSnrWordLead", 600);
+      config.snrNoiseLeadMs  = numOr("setSnrNoiseLead", 600);
+      config.snrNoiseTrailMs = numOr("setSnrNoiseTrail", 600);
+      config.snrNoiseRampMs  = numOr("setSnrNoiseRamp", 100);
+      try {
+        localStorage.setItem("uc4afc_snr_timing", JSON.stringify({
+          snrWordLeadMs:   config.snrWordLeadMs,
+          snrNoiseLeadMs:  config.snrNoiseLeadMs,
+          snrNoiseTrailMs: config.snrNoiseTrailMs,
+          snrNoiseRampMs:  config.snrNoiseRampMs
+        }));
+      } catch (_) {}
+    }
+
     const status = document.getElementById("setupStatus");
     if (status) status.textContent = "Saved.";
   };

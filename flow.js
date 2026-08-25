@@ -273,18 +273,49 @@ if (phase === "test") {
     const noiseGainDb = calibrated
       ? Calibration.gainDbForLevel(Calibration.state().currentSliderDb)
       : 0;
-    const noiseUrl = (config && config.calibFile) ? `sounds/${config.calibFile}` : "sounds/calib.mp3";
+    // SNR masking uses the dedicated noise file (noise.mp3), which is the same
+    // audio as the calibration file but doesn't need to loop, so its start/end
+    // dropout is irrelevant. Overridable via config.snrNoiseFile.
+    const noiseUrl = (config && config.snrNoiseFile)
+      ? `sounds/${config.snrNoiseFile}`
+      : "sounds/noise.mp3";
 
-    AudioEngine.playStimulusWithNoise(item.correct, `sounds/${item.audioFile}`, {
+    // Adjustable timing (ms) so the operator can line the noise up with the
+    // actual speech onset inside each stimulus file. Defaults: 600 ms lead/
+    // trail, 100 ms ramps, 600 ms audible onset (leading silence in the files).
+    const msToSec = (v, dflt) => {
+      const n = Number(v);
+      return isFinite(n) && n >= 0 ? n / 1000 : dflt;
+    };
+    const noiseLeadSec  = msToSec(config && config.snrNoiseLeadMs, 0.6);
+    const noiseTrailSec = msToSec(config && config.snrNoiseTrailMs, 0.6);
+    const rampSec       = msToSec(config && config.snrNoiseRampMs, 0.1);
+    const wordLeadSec   = msToSec(config && config.snrWordLeadMs,
+                                  msToSec(config && config.imageRevealOffsetMs, 0.6));
+    // Optional override for the fixed clip-safety headroom; omit to use the
+    // engine default (-6 dB). Applied equally to word and noise (SNR unchanged).
+    const headroomDb = (config && isFinite(Number(config.snrHeadroomDb)))
+      ? Number(config.snrHeadroomDb) : undefined;
+
+    const snrOpts = {
       snrDb,
       noiseGainDb,
       noiseUrl,
       routing,
+      noiseLeadSec,
+      noiseTrailSec,
+      rampSec,
+      wordLeadSec,
       onStarted: () => { setTimeout(revealOptions, offset); }
-    }).catch(err => {
+    };
+    if (headroomDb !== undefined) snrOpts.headroomDb = headroomDb;
+
+    AudioEngine.playStimulusWithNoise(item.correct, `sounds/${item.audioFile}`, snrOpts).catch(err => {
       console.error("SNR audio play failed:", err);
       if (!nextTrial._erroredOnce) {
-        alert("Audio failed to play. Check the calibration noise file (sounds/calib.mp3) and autoplay settings.");
+        alert("Audio failed to play. Check the noise file (sounds/" +
+          ((config && config.snrNoiseFile) || "noise.mp3") +
+          ") exists and browser autoplay is allowed.");
         nextTrial._erroredOnce = true;
       }
     });

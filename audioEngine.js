@@ -202,6 +202,14 @@ async function renderButterworthLowpass(ctxForBuffers, buffer, cutoffHz) {
 const DB = (linear) => 20 * Math.log10(Math.max(linear, 1e-20));
 const LIN = (db) => Math.pow(10, db / 20);
 
+// Fixed safety headroom for the SNR mix, applied EQUALLY to word and noise so
+// the SNR ratio is never altered. Sized so that at 0 dB SNR a coherent sum of
+// two equal peaks stays under full scale. The words are -22.5 LUFS with peaks
+// well below 0 dBFS, so this also leaves room for moderate positive SNR before
+// the word alone would approach full scale; extreme positive SNR is a clinical
+// non-case (the word would be far above the masker). Not measured per trial.
+const SNR_HEADROOM_DB = -6;
+
 const AudioEngine = (() => {
   // The one true rate. Stimuli are 48 kHz; the calibration file must match
   // (see Finding 1). Everything downstream assumes this rate.
@@ -469,35 +477,43 @@ const AudioEngine = (() => {
     return prepared;
   }
 
-  // ---- SNR mode: word mixed with masking (calibration) noise --------------
-  // The noise plays at the fixed presentation level (noiseGainDb — the same
-  // calibration/relative gain the other modes use for their base level) and
-  // does NOT move with SNR. The SIGNAL is offset from the noise by snrDb, so a
-  // lower SNR = quieter signal, noise unchanged.
+  // ---- SNR mode: word mixed with masking noise ----------------------------
+  // The noise plays at the presentation level (noiseGainDb — the calibration
+  // slider's level, or unity + device volume when uncalibrated) and does NOT
+  // move with SNR. The word is offset from the noise by snrDb, so a lower SNR =
+  // quieter word, noise unchanged.
   //
-  // Loudness anchor = files AS DELIVERED (spectrum- and level-matched at source,
-  // per the calibration module's contract). So at snrDb = 0 the word buffer and
-  // the noise buffer play at the same extra gain; snrDb is exactly the extra dB
-  // applied to the word relative to the noise. No LUFS re-matching is done here.
+  // dB RATIO — no measurement, ever:
+  //   The files are pinned at source: every word is -22.5 LUFS and the noise's
+  //   mean dB(A) equals the words' average momentary dB(A). So at equal gain the
+  //   ratio is already correct and 0 dB SNR just means "same gain on both". This
+  //   function only ADDS dB and SCALES; it does not measure or re-match levels.
+  //   A single fixed headroom offset (SNR_HEADROOM_DB) is applied EQUALLY to
+  //   word and noise so the ratio is untouched but the 0-dB-SNR coherent sum
+  //   can't clip.
   //
-  // Gating: the noise starts `noisePadSec` before the word's audible onset and
-  // stops `noisePadSec` after its end. Word files carry ~600 ms leading silence,
-  // so the audible onset is offset into the buffer; we approximate the onset as
-  // that lead and the tail as the buffer end (the pad covers small errors).
-  //
-  // Clip guard: only when the summed peak in an ear is LIKELY to exceed full
-  // scale do we pull BOTH signal and noise down by the overshoot — this holds
-  // the signal below the noise's absolute level while PRESERVING their ratio
-  // (the SNR). Fires rarely (high positive SNR) and is logged, like the unity
-  // cap in gainForLevel.
+  // Noise segment:
+  //   * The noise file is 10 s. Rather than loop it (audible seam, same slice
+  //     every time), we take a CONTIGUOUS segment from a RANDOM offset inside
+  //     the file, long enough to cover the word plus both pads, guaranteed not
+  //     to run off the end (offset ∈ [0, fileLen − segmentLen]).
+  //   * The segment starts `noiseLeadSec` before the word's audible onset and
+  //     ends `noiseTrailSec` after the word ends. Both adjustable in Setup
+  //     (config.snrNoiseLeadMs / snrNoiseTrailMs) to line the noise up with the
+  //     actual speech onset inside each file.
+  //   * The noise ramps in and out over `rampSec` (100 ms) so onset/offset are
+  //     click-free.
   async function playStimulusWithNoise(name, url, {
     snrDb = 0,
     noiseGainDb = 0,
-    noiseUrl = "sounds/calib.mp3",
+    noiseUrl = "sounds/noise.mp3",
     routing = "binaural",
     onStarted = null,
-    noisePadSec = 0.6,
-    wordLeadSec = 0.6
+    noiseLeadSec = 0.6,     // noise starts this far BEFORE the word's audible onset
+    noiseTrailSec = 0.6,    // noise ends this far AFTER the word ends
+    wordLeadSec = 0.6,      // leading silence inside the word file (audible onset)
+    rampSec = 0.1,          // noise fade in/out
+    headroomDb = SNR_HEADROOM_DB   // fixed safety offset applied equally to both
   } = {}) {
     const c = context();
     stop(); // one trial at a time — tears down any prior word AND noise
@@ -508,23 +524,44 @@ const AudioEngine = (() => {
     const noise = await ensureCalibNoise(noiseUrl);
     const noiseBuf = noise.raw;
 
-    // Requested linear gains before any clip guard.
-    const signalGainDb = noiseGainDb + snrDb;
-    let sigLin = LIN(signalGainDb);
-    let noiLin = LIN(noiseGainDb);
+    // --- Levels: NO measurement, NO per-file re-matching. --------------------
+    // The files are already pinned at source: every word is -22.5 LUFS and the
+    // noise's mean dB(A) equals the words' average momentary dB(A). So at equal
+    // gain the two already sit in the correct ratio, and 0 dB SNR = play both at
+    // the same gain. We only ever ADD dB and SCALE — never measure.
+    //
+    //   noise gain = noiseGainDb            (the presentation/output level)
+    //   word  gain = noiseGainDb + snrDb    (word offset from noise by the SNR)
+    //
+    // headroomDb is a FIXED safety offset (default SNR_HEADROOM_DB) applied
+    // EQUALLY to both, so the SNR ratio is untouched; it only keeps the 0-dB-SNR
+    // coherent sum below full scale. Overridable via config.snrHeadroomDb.
+    const noiLin = LIN(noiseGainDb + headroomDb);
+    const sigLin = LIN(noiseGainDb + snrDb + headroomDb);
 
-    // Clip likelihood: worst-case coherent sum of the two true peaks in one ear.
-    // (Coherent sum is the conservative bound; real speech+noise rarely align,
-    // but this keeps us safe without needless attenuation in the common case.)
-    const sigPeak = LIN(estimateTruePeakDB(wordBuf));   // ~<=1.0 for the raw file
-    const noiPeak = LIN(estimateTruePeakDB(noiseBuf));
-    const summedPeak = sigPeak * sigLin + noiPeak * noiLin;
-    if (summedPeak > 1.0) {
-      const scale = 1.0 / summedPeak;                    // <1: pull both down
-      sigLin *= scale; noiLin *= scale;                 // ratio (SNR) preserved
-      console.warn(`[snr] summed peak ${summedPeak.toFixed(3)} > 1; ` +
-        `held level down ${(20*Math.log10(scale)).toFixed(1)} dB (SNR unchanged)`);
-    }
+    // --- Timing: place the word, then wrap the noise segment around it --------
+    const now = c.currentTime;
+    const t0 = now + 0.05;                              // small lead to arm nodes
+    const wordDur = wordBuf.duration;
+    const audibleOnset = Math.min(Math.max(0, wordLeadSec), wordDur);
+
+    // Noise window in transport time.
+    const lead  = Math.max(0, noiseLeadSec);
+    const trail = Math.max(0, noiseTrailSec);
+    const noiseStartAt = t0 + audibleOnset - lead;      // may be < t0 (leads word)
+    const wordEnd      = t0 + wordDur;
+    let   noiseDur     = (wordEnd + trail) - noiseStartAt;
+    // Guard: never negative, never longer than the noise file (so a random
+    // offset always has room). Cap to the file length minus a tiny epsilon.
+    const maxSeg = Math.max(0, noiseBuf.duration - 1e-3);
+    if (noiseDur > maxSeg) noiseDur = maxSeg;
+    if (noiseDur < 0) noiseDur = 0;
+
+    // Random contiguous offset inside the 10 s file such that
+    // [offset, offset + noiseDur] stays within the file. (Request: start between
+    // 0 and fileLen - segmentLen.)
+    const maxOffset = Math.max(0, noiseBuf.duration - noiseDur);
+    const noiseOffset = Math.random() * maxOffset;
 
     // Word source + gain.
     const wordSrc = c.createBufferSource();
@@ -532,43 +569,49 @@ const AudioEngine = (() => {
     const wordGain = c.createGain();
     wordGain.gain.value = sigLin;
     wordSrc.connect(wordGain);
-    makeEarRouter(c, wordGain, routing);   // same router the calibration tone uses
+    makeEarRouter(c, wordGain, routing);
 
-    // Noise source (looped) + gain, routed to the SAME ear(s) as the signal.
+    // Noise source (NOT looped — a single random segment) + gain, ramped in/out.
     const noiseSrc = c.createBufferSource();
     noiseSrc.buffer = noiseBuf;
-    noiseSrc.loop = true;
+    noiseSrc.loop = false;
     const noiseG = c.createGain();
-    noiseG.gain.value = noiLin;
     noiseSrc.connect(noiseG);
     makeEarRouter(c, noiseG, routing);
 
     activeSource = wordSrc;
     activeNoiseSource = noiseSrc;
 
-    // Schedule: noise leads the word by noisePadSec and trails it by the same.
-    const now = c.currentTime;
-    const t0 = now + 0.02;                              // tiny lead to arm nodes
-    const wordDur = wordBuf.duration;
-    const audibleOnset = Math.min(wordLeadSec, wordDur);
-    // Noise window: pad before the audible onset, pad after the word's end.
-    const noiseStart = Math.max(now, t0 + audibleOnset - noisePadSec);
-    const noiseStop  = t0 + wordDur + noisePadSec;
+    // Equal-power (cosine) ramps of rampSec, clamped so two ramps fit the segment.
+    const ramp = Math.max(0, Math.min(rampSec, noiseDur / 2));
+    const noiseStartClamped = Math.max(now, noiseStartAt);
+    const noiseEndAt = noiseStartClamped + noiseDur;
+    const g = noiseG.gain;
+    g.setValueAtTime(0.0001, noiseStartClamped);
+    if (ramp > 0) {
+      // exponentialRamp can't target 0, so start just above and use it for a
+      // smooth (near equal-power) fade; linear ramp to 0 at the tail.
+      g.exponentialRampToValueAtTime(Math.max(noiLin, 1e-4), noiseStartClamped + ramp);
+      g.setValueAtTime(noiLin, noiseEndAt - ramp);
+      g.linearRampToValueAtTime(0.0001, noiseEndAt);
+    } else {
+      g.setValueAtTime(noiLin, noiseStartClamped);
+    }
 
     return new Promise((resolve, reject) => {
       wordSrc.onended = () => {
         if (activeSource === wordSrc) activeSource = null;
-        // Word finished; the noise stop is already scheduled, but if we're past
-        // it (short pad), make sure the noise is torn down.
         resolve();
       };
       try {
-        noiseSrc.start(noiseStart);
-        noiseSrc.stop(noiseStop);
-        noiseSrc.onended = () => {
-          if (activeNoiseSource === noiseSrc) activeNoiseSource = null;
-          try { noiseSrc.disconnect(); } catch (_) {}
-        };
+        if (noiseDur > 0) {
+          // start(when, offset, duration) — a single contiguous slice.
+          noiseSrc.start(noiseStartClamped, noiseOffset, noiseDur);
+          noiseSrc.onended = () => {
+            if (activeNoiseSource === noiseSrc) activeNoiseSource = null;
+            try { noiseSrc.disconnect(); } catch (_) {}
+          };
+        }
         wordSrc.start(t0);
         if (onStarted) requestAnimationFrame(() => onStarted());
       } catch (err) {
@@ -605,19 +648,28 @@ const AudioEngine = (() => {
   let calibRouter = null;
   const CALIB_KEY = "__calib__";
 
-  // Decode + cache the calibration noise file (idempotent). Shared by the
-  // calibration tone AND the SNR mix path (Finding 3: the same file, same
-  // buffer, same measured momentary LUFS is the reference for both). Returns
-  // { raw, momentary }.
-  async function ensureCalibNoise(url = "sounds/calib.mp3") {
+  // Decode + cache a noise file (idempotent), keyed BY URL. Used by both the
+  // calibration tone (calib.wav, looped in the cal routine) and the SNR mix path
+  // (noise.mp3 — same underlying audio as calib.wav, but a separate file because
+  // the mp3 has a tiny start/end dropout that only matters when looping, which
+  // the calibration routine does and the SNR path no longer does). Keying by URL
+  // lets those two files coexist instead of the first-fetched one winning a
+  // shared slot.
+  //
+  // No LUFS measurement: the noise level is set purely by the presentation gain
+  // (calibration slider / device volume), and the word↔noise ratio is fixed at
+  // source, so nothing here needs the file's measured loudness. `momentary` is
+  // left null for the one informational caller (startCalibrationTone).
+  async function ensureCalibNoise(url = "sounds/noise.mp3") {
     const c = context();
-    let entry = cache.get(CALIB_KEY);
+    const key = `${CALIB_KEY}:${url}`;
+    let entry = cache.get(key);
     if (!entry) {
       const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`calibration fetch failed ${resp.status} for ${url}`);
+      if (!resp.ok) throw new Error(`noise fetch failed ${resp.status} for ${url}`);
       const raw = await c.decodeAudioData(await resp.arrayBuffer());
-      entry = { raw, momentary: measureLUFS(raw).momentary };
-      cache.set(CALIB_KEY, entry);
+      entry = { raw, momentary: null };
+      cache.set(key, entry);
     }
     return entry;
   }

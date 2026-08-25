@@ -177,8 +177,20 @@
       <label>WUDR step multiplier
         <input id="setSnrStepMult" type="number" min="0.05" max="2" step="0.05" value="0.2">
       </label>
+      <label>Word onset in file (ms)
+        <input id="setSnrWordLead" type="number" min="0" max="3000" step="10" value="600">
+      </label>
+      <label>Noise lead before word (ms)
+        <input id="setSnrNoiseLead" type="number" min="0" max="3000" step="10" value="600">
+      </label>
+      <label>Noise trail after word (ms)
+        <input id="setSnrNoiseTrail" type="number" min="0" max="3000" step="10" value="600">
+      </label>
+      <label>Noise ramp in/out (ms)
+        <input id="setSnrNoiseRamp" type="number" min="0" max="1000" step="10" value="100">
+      </label>
     </div>
-    <p class="small" id="snrHint">WUDR steps = quiet-mode dB steps &times; this multiplier. Noise (calibration file) is fixed at the presentation level; the signal moves by the SNR.</p>
+    <p class="small" id="snrHint">WUDR steps = quiet-mode dB steps &times; the multiplier. Noise (noise.mp3) is fixed at the presentation level; the signal moves by the SNR. Noise starts <em>lead</em> ms before the word&rsquo;s audible onset and ends <em>trail</em> ms after it, ramping in/out. &ldquo;Word onset in file&rdquo; is the silent lead-in inside each stimulus file &mdash; adjust so the noise lines up with the actual speech.</p>
   </div>
 
   <div class="setup-block" id="a1Block" hidden>
