@@ -84,12 +84,22 @@ export function saveResults(optionalNote = "") {
       `# Routing\t${(config && config.routing) || "binaural"}`,
       `# Threshold estimate (${unit})\t${lastEstimate != null ? lastEstimate : "n/a"}`
     );
+    if (mode === "lpf") {
+      // LPF presentation level: dB(A) if calibrated, else a dB FS attenuation.
+      const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+      const lvl = (adaptiveCfg && isFinite(adaptiveCfg.lpfLevel)) ? adaptiveCfg.lpfLevel : (cal ? 65 : 0);
+      txtLines.push(
+        `# Presentation level\t${cal ? `${lvl} dB(A)` : `${lvl} dB FS attenuation (device volume sets absolute level)`}`
+      );
+    }
     if (mode === "snr") {
-      // In SNR mode the noise sits at the fixed presentation level; document it
-      // (the calibrated dB(A), else "uncalibrated") and the step multiplier.
-      const noiseLevel = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated())
-        ? `${Calibration.state().currentSliderDb} dB(A)`
-        : "uncalibrated (device volume sets level)";
+      // Noise presentation level from the dedicated SNR setting: dB(A) if
+      // calibrated, else a dB FS attenuation (device volume sets absolute level).
+      const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+      const nlv = (adaptiveCfg && isFinite(adaptiveCfg.snrNoiseLevel)) ? adaptiveCfg.snrNoiseLevel : (cal ? 65 : 0);
+      const noiseLevel = cal
+        ? `${nlv} dB(A)`
+        : `${nlv} dB FS attenuation (device volume sets absolute level)`;
       const cfgc = (typeof config !== "undefined" && config) ? config : {};
       txtLines.push(
         `# Noise level (fixed)\t${noiseLevel}`,

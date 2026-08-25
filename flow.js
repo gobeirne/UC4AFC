@@ -66,20 +66,15 @@ export function beginPhase(p) {
       const isSnr = adaptive.mode === "snr";
       const isLinear = isQuiet || isSnr;   // both use a dB axis, not log(Hz)
 
-      // Start value: Hz (LPF) or dB (quiet: level / snr: SNR). Relative start
-      // shifts by octaves (LPF) or dB (linear); with no prior in-session
-      // threshold it resolves against the absolute start for now (documented).
-      let startVal = isLinear
-        ? (adaptive.startValue ?? adaptive.start ?? (isSnr ? 2 : 65))
+      // Start value in the mode's own unit: Hz (LPF), dB level (quiet), dB SNR
+      // (noise). A single absolute start per mode — no "relative to threshold"
+      // path (there is no prior threshold to be relative to within a run).
+      const startVal = isLinear
+        ? (adaptive.startValue ?? (isSnr ? 2 : 65))
         : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
-      if (adaptive.startMode === "relative" && isFinite(adaptive.startRelOctaves)) {
-        startVal = isLinear
-          ? startVal + adaptive.startRelOctaves               // dB shift
-          : startVal * Math.pow(2, adaptive.startRelOctaves); // octave shift
-      }
 
       // quietStartLevel doubles as the uncalibrated relative-gain anchor for
-      // BOTH linear modes (quiet's level and snr's noise level).
+      // quiet mode (its level is played relative to this start when uncalibrated).
       quietStartLevel = isLinear ? startVal : null;
       const trackCfg = resolveTrackConfig(adaptive, startVal);
       track = createTrack(trackCfg);
@@ -267,12 +262,20 @@ if (phase === "test") {
   // ---- SNR mode: dispatch to the mixed word+noise path and return early ----
   if (isSnr) {
     const snrDb = currentCutoffHz;   // mode-neutral value; dB SNR here
-    // Noise sits at the fixed presentation level: the calibration slider's
-    // chosen dB(A) when calibrated, unity when not (device volume sets absolute
-    // output, exactly as an uncalibrated run does elsewhere).
+    // Noise presentation level comes from the dedicated SNR noise-level setting,
+    // independent of the SNR (which only moves the word). Interpretation depends
+    // on calibration:
+    //   calibrated   -> the number is dB(A); convert via the calibration curve.
+    //   uncalibrated -> the number is a dB FS attenuation (<= 0) applied
+    //                   directly; device volume then sets absolute loudness.
+    const noiseLevelSetting = Number(
+      (config && config.adaptive && isFinite(config.adaptive.snrNoiseLevel))
+        ? config.adaptive.snrNoiseLevel
+        : (calibrated ? 65 : 0)
+    );
     const noiseGainDb = calibrated
-      ? Calibration.gainDbForLevel(Calibration.state().currentSliderDb)
-      : 0;
+      ? Calibration.gainDbForLevel(noiseLevelSetting)
+      : Math.min(0, noiseLevelSetting);   // dB FS attenuation, never boost
     // SNR masking uses the dedicated noise file (noise.mp3), which is the same
     // audio as the calibration file but doesn't need to loop, so its start/end
     // dropout is irrelevant. Overridable via config.snrNoiseFile.
@@ -335,10 +338,19 @@ if (phase === "test") {
       extraGainDb = level - (quietStartLevel ?? level);
     }
   } else {
-    // LPF mode (or non-adaptive): filter at the cutoff; fixed-level gain.
+    // LPF mode (or non-adaptive): filter at the cutoff; presentation level from
+    // the dedicated LPF level setting. Calibrated -> dB(A) via the curve;
+    // uncalibrated -> dB FS attenuation (<= 0), device volume sets absolute level.
     cutoffHz = (phase === "test" && track) ? currentCutoffHz : null;
+    const lpfLevel = Number(
+      (config && config.adaptive && isFinite(config.adaptive.lpfLevel))
+        ? config.adaptive.lpfLevel
+        : (calibrated ? 65 : 0)
+    );
     if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb);
+      extraGainDb = Calibration.gainDbForLevel(lpfLevel);
+    } else {
+      extraGainDb = Math.min(0, lpfLevel);   // dB FS attenuation, never boost
     }
   }
 

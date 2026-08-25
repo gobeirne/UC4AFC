@@ -1220,11 +1220,17 @@ const ADAPTIVE_DEFAULTS = {
   A: 4,                       // alternatives (fixed); floor = 1/A = 0.25
   target: 0.625,             // midpointTarget(4) = (A+1)/(2A)
 
-  // Start
-  startMode: "absolute",      // "absolute" | "relative"
-  startValue: PRESETS.lpf.start,     // Hz (LPF) or dB (quiet)
+  // Start (single absolute value per mode; no relative-to-threshold path)
+  startValue: PRESETS.lpf.start,     // Hz (LPF) / dB level (quiet) / dB SNR (snr)
   startCutoffHz: 1000,        // back-compat alias for LPF start (Hz)
-  startRelOctaves: 0,         // relative start: octaves (LPF) or dB (quiet)
+
+  // SNR noise presentation level: dB(A) when calibrated, else a dB FS
+  // attenuation (<= 0). Only consumed in SNR mode.
+  snrNoiseLevel: 65,
+
+  // LPF presentation level: dB(A) when calibrated, else dB FS attenuation.
+  // Only consumed in LPF mode.
+  lpfLevel: 65,
 
   // Trials
   nTrials: 33,
@@ -1314,6 +1320,15 @@ function loadAdaptiveConfig() {
   } catch (_) {}
   // Keep derived values consistent.
   cfg.target = midpointTarget(cfg.A || 4);
+  // --- Migrate stale persisted blobs -----------------------------------------
+  // Older builds saved axisIsLog and a "start mode / relative octaves" pair.
+  // axisIsLog is now derived STRICTLY from mode, so a stale axisIsLog could make
+  // a quiet/snr run get low-pass filtered. Re-derive it and drop the dead
+  // fields so nothing downstream can read them.
+  const mode = cfg.mode || "lpf";
+  cfg.axisIsLog = !(mode === "quiet" || mode === "snr");
+  delete cfg.startMode;
+  delete cfg.startRelOctaves;
   return cfg;
 }
 
@@ -1608,17 +1623,20 @@ function createTrack(cfg) {
 // value (Hz for LPF, dB for quiet) into the internal cfg the track consumes.
 // Mode-aware: LPF uses a log10(Hz) axis, quiet uses a linear dB axis.
 function resolveTrackConfig(adaptive, startValue) {
-  // Both quiet (dB level) and snr (dB SNR) are LINEAR-axis modes; only LPF is
-  // log10(Hz). Anything not explicitly linear stays on the log axis (LPF).
-  const linearMode = adaptive.mode === "quiet" || adaptive.mode === "snr";
-  const axisIsLog = adaptive.axisIsLog !== false && !linearMode;
-  const isSnr = adaptive.mode === "snr";
+  // Axis is derived STRICTLY from mode, ignoring any persisted axisIsLog (which
+  // could be stale from an older saved config): quiet (dB level) and snr (dB
+  // SNR) are linear; everything else (LPF) is log10(Hz). This guarantees LPF
+  // filtering can never be applied to a quiet/snr run because of leftover state.
+  const mode = adaptive.mode || "lpf";
+  const linearMode = mode === "quiet" || mode === "snr";
+  const axisIsLog = !linearMode;
+  const isSnr = mode === "snr";
   const toX = axisIsLog ? (v) => Math.log10(v) : (v) => v;
   const defStart = (startValue != null ? startValue : undefined)
     ?? adaptive.startValue
-    ?? (axisIsLog ? (adaptive.startCutoffHz || 1000) : (adaptive.start ?? (isSnr ? 2 : 65)));
+    ?? (axisIsLog ? (adaptive.startCutoffHz || 1000) : (isSnr ? 2 : 65));
   return {
-    mode: adaptive.mode || (axisIsLog ? "lpf" : "quiet"),
+    mode,
     procedure: adaptive.procedure || "wudr",
     A: adaptive.A || 4,
     target: adaptive.target ?? midpointTarget(adaptive.A || 4),
@@ -1780,20 +1798,15 @@ function beginPhase(p) {
       const isSnr = adaptive.mode === "snr";
       const isLinear = isQuiet || isSnr;   // both use a dB axis, not log(Hz)
 
-      // Start value: Hz (LPF) or dB (quiet: level / snr: SNR). Relative start
-      // shifts by octaves (LPF) or dB (linear); with no prior in-session
-      // threshold it resolves against the absolute start for now (documented).
-      let startVal = isLinear
-        ? (adaptive.startValue ?? adaptive.start ?? (isSnr ? 2 : 65))
+      // Start value in the mode's own unit: Hz (LPF), dB level (quiet), dB SNR
+      // (noise). A single absolute start per mode — no "relative to threshold"
+      // path (there is no prior threshold to be relative to within a run).
+      const startVal = isLinear
+        ? (adaptive.startValue ?? (isSnr ? 2 : 65))
         : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
-      if (adaptive.startMode === "relative" && isFinite(adaptive.startRelOctaves)) {
-        startVal = isLinear
-          ? startVal + adaptive.startRelOctaves               // dB shift
-          : startVal * Math.pow(2, adaptive.startRelOctaves); // octave shift
-      }
 
       // quietStartLevel doubles as the uncalibrated relative-gain anchor for
-      // BOTH linear modes (quiet's level and snr's noise level).
+      // quiet mode (its level is played relative to this start when uncalibrated).
       quietStartLevel = isLinear ? startVal : null;
       const trackCfg = resolveTrackConfig(adaptive, startVal);
       track = createTrack(trackCfg);
@@ -1981,12 +1994,20 @@ if (phase === "test") {
   // ---- SNR mode: dispatch to the mixed word+noise path and return early ----
   if (isSnr) {
     const snrDb = currentCutoffHz;   // mode-neutral value; dB SNR here
-    // Noise sits at the fixed presentation level: the calibration slider's
-    // chosen dB(A) when calibrated, unity when not (device volume sets absolute
-    // output, exactly as an uncalibrated run does elsewhere).
+    // Noise presentation level comes from the dedicated SNR noise-level setting,
+    // independent of the SNR (which only moves the word). Interpretation depends
+    // on calibration:
+    //   calibrated   -> the number is dB(A); convert via the calibration curve.
+    //   uncalibrated -> the number is a dB FS attenuation (<= 0) applied
+    //                   directly; device volume then sets absolute loudness.
+    const noiseLevelSetting = Number(
+      (config && config.adaptive && isFinite(config.adaptive.snrNoiseLevel))
+        ? config.adaptive.snrNoiseLevel
+        : (calibrated ? 65 : 0)
+    );
     const noiseGainDb = calibrated
-      ? Calibration.gainDbForLevel(Calibration.state().currentSliderDb)
-      : 0;
+      ? Calibration.gainDbForLevel(noiseLevelSetting)
+      : Math.min(0, noiseLevelSetting);   // dB FS attenuation, never boost
     // SNR masking uses the dedicated noise file (noise.mp3), which is the same
     // audio as the calibration file but doesn't need to loop, so its start/end
     // dropout is irrelevant. Overridable via config.snrNoiseFile.
@@ -2049,10 +2070,19 @@ if (phase === "test") {
       extraGainDb = level - (quietStartLevel ?? level);
     }
   } else {
-    // LPF mode (or non-adaptive): filter at the cutoff; fixed-level gain.
+    // LPF mode (or non-adaptive): filter at the cutoff; presentation level from
+    // the dedicated LPF level setting. Calibrated -> dB(A) via the curve;
+    // uncalibrated -> dB FS attenuation (<= 0), device volume sets absolute level.
     cutoffHz = (phase === "test" && track) ? currentCutoffHz : null;
+    const lpfLevel = Number(
+      (config && config.adaptive && isFinite(config.adaptive.lpfLevel))
+        ? config.adaptive.lpfLevel
+        : (calibrated ? 65 : 0)
+    );
     if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb);
+      extraGainDb = Calibration.gainDbForLevel(lpfLevel);
+    } else {
+      extraGainDb = Math.min(0, lpfLevel);   // dB FS attenuation, never boost
     }
   }
 
@@ -2602,12 +2632,22 @@ function saveResults(optionalNote = "") {
       `# Routing\t${(config && config.routing) || "binaural"}`,
       `# Threshold estimate (${unit})\t${lastEstimate != null ? lastEstimate : "n/a"}`
     );
+    if (mode === "lpf") {
+      // LPF presentation level: dB(A) if calibrated, else a dB FS attenuation.
+      const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+      const lvl = (adaptiveCfg && isFinite(adaptiveCfg.lpfLevel)) ? adaptiveCfg.lpfLevel : (cal ? 65 : 0);
+      txtLines.push(
+        `# Presentation level\t${cal ? `${lvl} dB(A)` : `${lvl} dB FS attenuation (device volume sets absolute level)`}`
+      );
+    }
     if (mode === "snr") {
-      // In SNR mode the noise sits at the fixed presentation level; document it
-      // (the calibrated dB(A), else "uncalibrated") and the step multiplier.
-      const noiseLevel = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated())
-        ? `${Calibration.state().currentSliderDb} dB(A)`
-        : "uncalibrated (device volume sets level)";
+      // Noise presentation level from the dedicated SNR setting: dB(A) if
+      // calibrated, else a dB FS attenuation (device volume sets absolute level).
+      const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+      const nlv = (adaptiveCfg && isFinite(adaptiveCfg.snrNoiseLevel)) ? adaptiveCfg.snrNoiseLevel : (cal ? 65 : 0);
+      const noiseLevel = cal
+        ? `${nlv} dB(A)`
+        : `${nlv} dB FS attenuation (device volume sets absolute level)`;
       const cfgc = (typeof config !== "undefined" && config) ? config : {};
       txtLines.push(
         `# Noise level (fixed)\t${noiseLevel}`,
@@ -3142,8 +3182,35 @@ function setupCalibrationScreen() {
 // --- Setup screen wiring (adaptive controls, Step 4) -------------------------
 let _setupProc = "wudr";
 let _setupMode = "lpf";
+let _setupDirty = false;   // unsaved edits present in the Setup form
+
+// Reflect the dirty/saved state in the status line and Save button so it's
+// never ambiguous whether Setup changes are stored. (Back auto-saves, but the
+// cue reassures the operator and prompts them to Save if they prefer.)
+function updateDirtyUI() {
+  const status = document.getElementById("setupStatus");
+  if (status) {
+    status.textContent = _setupDirty
+      ? "Not saved as default — Back applies for this session only."
+      : "";
+    status.style.color = _setupDirty ? "#b00" : "";
+  }
+  const saveBtn = document.getElementById("setupSaveBtn");
+  if (saveBtn) {
+    saveBtn.textContent = _setupDirty ? "Save as default *" : "Save as default";
+    saveBtn.classList.toggle("dirty", _setupDirty);
+  }
+}
+
+function markDirty() {
+  if (!_setupDirty) { _setupDirty = true; updateDirtyUI(); }
+}
 
 function currentAdaptiveCfg() {
+  // Show the LIVE session settings if present (so reopening Setup within a
+  // session reflects what's actually running, including changes applied via
+  // Back), falling back to the persisted default.
+  if (typeof config !== "undefined" && config && config.adaptive) return config.adaptive;
   if (typeof AdaptiveConfig !== "undefined") return AdaptiveConfig.loadAdaptiveConfig();
   return {};
 }
@@ -3171,6 +3238,10 @@ function showModeButtons(mode) {
   // The SNR-only block (step multiplier) is shown only in SNR mode.
   const snrBlock = document.getElementById("snrBlock");
   if (snrBlock) snrBlock.hidden = (mode !== "snr");
+  // The LPF presentation-level block: LPF only. In quiet the level IS the
+  // adaptive variable, and SNR sets its level in the noise block.
+  const lpfLevelBlock = document.getElementById("lpfLevelBlock");
+  if (lpfLevelBlock) lpfLevelBlock.hidden = (mode !== "lpf");
 }
 
 // Relabel units and adjust input bounds/steps for the active mode.
@@ -3181,7 +3252,11 @@ function applyModeLabels(mode) {
   const stepUnit = isLinear ? "dB" : "dec";
   const setText = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
   setText("lblStart", isSnr ? "Starting SNR (dB)" : isQuiet ? "Starting level (dB)" : "Starting cutoff (Hz)");
-  setText("lblStartRel", isSnr ? "Start (dB re threshold)" : isQuiet ? "Start (dB re threshold)" : "Start (octaves re threshold)");
+  // SNR noise-level label depends on calibration: dB(A) when calibrated, else a
+  // dB FS attenuation the operator sets (device volume does the rest).
+  const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+  setText("lblSnrNoiseLevel", cal ? "Noise level (dB A)" : "Noise level (dB FS attenuation)");
+  setText("lblLpfLevel", cal ? "Level (dB A)" : "Level (dB FS attenuation)");
   document.querySelectorAll(".lblStepUnit-wd").forEach(e => e.textContent = `Working down step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-wu").forEach(e => e.textContent = `Working up step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-id").forEach(e => e.textContent = `Initial down step (${stepUnit})`);
@@ -3193,6 +3268,19 @@ function applyModeLabels(mode) {
     if (isSnr) { sc.min = -20; sc.max = 10; sc.step = 1; }
     else if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
     else { sc.min = 80; sc.max = 6000; sc.step = 10; }
+  }
+  // SNR noise-level bounds: dB(A) range when calibrated, dB FS attenuation
+  // (<= 0) when not.
+  const nl = document.getElementById("setSnrNoiseLevel");
+  if (nl) {
+    if (cal) { nl.min = 40; nl.max = 90; nl.step = 1; if (Number(nl.value) < 0) nl.value = 65; }
+    else { nl.min = -60; nl.max = 0; nl.step = 1; if (Number(nl.value) > 0) nl.value = 0; }
+  }
+  // LPF presentation-level bounds: dB(A) when calibrated, dB FS attenuation else.
+  const ll = document.getElementById("setLpfLevel");
+  if (ll) {
+    if (cal) { ll.min = 40; ll.max = 90; ll.step = 1; if (Number(ll.value) < 0) ll.value = 65; }
+    else { ll.min = -60; ll.max = 0; ll.step = 1; if (Number(ll.value) > 0) ll.value = 0; }
   }
   // Step inputs: fine in SNR (small dB), medium in quiet, very fine in LPF.
   ["setWorkDown","setWorkUp","setInitDown","setInitUp"].forEach(id => {
@@ -3206,26 +3294,18 @@ function applyModeLabels(mode) {
   : "Defaults: down \u22124.76% / up +8.33% (working); down \u221211.1% / up +20.8% (initial). 0 reversals = single-phase.";
 }
 
-function toggleStartMode(mode) {
-  const abs = document.getElementById("setStartCutoffWrap");
-  const rel = document.getElementById("setStartRelWrap");
-  if (abs) abs.hidden = (mode !== "absolute");
-  if (rel) rel.hidden = (mode !== "relative");
-}
-
 // Populate the whole form from a resolved cfg object.
 function fillFormFromCfg(cfg) {
   const set = (id, v) => { const el = document.getElementById(id); if (el != null && v != null) el.value = v; };
   const isQuiet = (cfg.mode === "quiet");
   const isSnr = (cfg.mode === "snr");
-  set("setStartMode", cfg.startMode || "absolute");
-  toggleStartMode(cfg.startMode || "absolute");
   set("setStartCutoff",
-    isSnr   ? (cfg.startValue ?? cfg.start ?? 2)
-  : isQuiet ? (cfg.startValue ?? cfg.start ?? 65)
+    isSnr   ? (cfg.startValue ?? 2)
+  : isQuiet ? (cfg.startValue ?? 65)
   : (cfg.startValue ?? cfg.startCutoffHz ?? 1000));
   set("setSnrStepMult", cfg.stepMult ?? 0.2);
-  set("setStartRel", cfg.startRelOctaves ?? 0);
+  set("setSnrNoiseLevel", cfg.snrNoiseLevel);
+  set("setLpfLevel", cfg.lpfLevel);
   set("setNTrials", cfg.nTrials ?? 33);
   set("setA", cfg.A ?? 4);
   set("setTarget", ((cfg.target ?? 0.625) * 100).toFixed(1) + "%");
@@ -3264,8 +3344,8 @@ function populateSetupForm() {
   fillFormFromCfg(cfg);
   fillSnrTimingFromConfig();
 
-  const status = document.getElementById("setupStatus");
-  if (status) status.textContent = "";
+  _setupDirty = false;
+  updateDirtyUI();
 }
 
 function readSetupForm() {
@@ -3299,10 +3379,8 @@ function readSetupForm() {
     unit: isSnr ? "dB SNR" : isQuiet ? "dB" : "Hz",
     stepUnit: isLinear ? "dB" : "decades",
     slopeUnit: isLinear ? "%/dB" : "%/octave",
-    startMode: val("setStartMode") || "absolute",
     startValue: startVal,
     startCutoffHz: isLinear ? undefined : startVal,  // LPF alias only
-    startRelOctaves: num("setStartRel", 0),
     nTrials: Math.max(1, Math.min(66, Math.round(num("setNTrials", 33)))),
     xlo: isSnr ? -20 : isQuiet ? 20 : Math.log10(80),
     xhi: isSnr ? 10 : isQuiet ? 85 : Math.log10(6000),
@@ -3319,6 +3397,12 @@ function readSetupForm() {
     a2Doubling: !!(document.getElementById("setA2Doubling") || {}).checked,
     slopeHint: isLinear ? 6 : 43,
     stepMult,   // undefined unless SNR
+    // SNR noise presentation level (dB(A) if calibrated, else dB FS attenuation).
+    // Stored for all modes but only consumed in SNR.
+    snrNoiseLevel: num("setSnrNoiseLevel", (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated()) ? 65 : 0),
+    // LPF presentation level (dB(A) if calibrated, else dB FS attenuation).
+    // Consumed in LPF mode.
+    lpfLevel: num("setLpfLevel", (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated()) ? 65 : 0),
     routing: val("setRouting") || "binaural"
   };
 }
@@ -3328,7 +3412,7 @@ function setupSetupScreen() {
   if (!seg) return; // screen not present
 
   seg.querySelectorAll(".seg-btn").forEach(btn => {
-    btn.onclick = () => { _setupProc = btn.dataset.proc; showProcBlocks(_setupProc); };
+    btn.onclick = () => { _setupProc = btn.dataset.proc; showProcBlocks(_setupProc); markDirty(); };
   });
 
   // Mode toggle: switch axis/units and load that mode's preset step values,
@@ -3348,12 +3432,10 @@ function setupSetupScreen() {
           const preset = AdaptiveConfig.applyModePreset(current, _setupMode);
           fillFormFromCfg(preset);
         }
+        markDirty();
       };
     });
   }
-
-  const startMode = document.getElementById("setStartMode");
-  if (startMode) startMode.onchange = () => toggleStartMode(startMode.value);
 
   // SNR step multiplier: recompute and display the four WUDR steps from it, so
   // the step fields always reflect quiet-base × multiplier.
@@ -3370,38 +3452,76 @@ function setupSetupScreen() {
     snrMult.addEventListener("change", applyMult);
   }
 
-  const saveBtn = document.getElementById("setupSaveBtn");
-  if (saveBtn) saveBtn.onclick = () => {
-    const cfg = readSetupForm();
-    if (typeof AdaptiveConfig !== "undefined") AdaptiveConfig.saveAdaptiveConfig(cfg);
-    if (typeof config !== "undefined") config.adaptive = cfg;
-    // Routing is also surfaced at the top level of config for flow.js to read.
-    if (typeof config !== "undefined") config.routing = cfg.routing;
-
-    // SNR noise-timing (presentation) fields -> config, and persist to
-    // localStorage so they survive a reload alongside the adaptive config.
+  // Two-tier persistence:
+  //   applySetupToSession()  -> live config only (this session's run). Back uses
+  //                             this: current settings take effect now but do
+  //                             NOT become the standing default.
+  //   saveSetupAsDefault()   -> everything applySetupToSession does, PLUS writes
+  //                             localStorage so the settings persist across
+  //                             reloads/relaunches as the default.
+  //
+  // SNR-timing fields live on config; helper reads them from the form.
+  function readSnrTimingFromForm() {
     const numOr = (id, dflt) => {
       const el = document.getElementById(id);
       const v = el ? parseFloat(el.value) : NaN;
       return isFinite(v) && v >= 0 ? v : dflt;
     };
-    if (typeof config !== "undefined") {
-      config.snrWordLeadMs   = numOr("setSnrWordLead", 600);
-      config.snrNoiseLeadMs  = numOr("setSnrNoiseLead", 600);
-      config.snrNoiseTrailMs = numOr("setSnrNoiseTrail", 600);
-      config.snrNoiseRampMs  = numOr("setSnrNoiseRamp", 100);
-      try {
-        localStorage.setItem("uc4afc_snr_timing", JSON.stringify({
-          snrWordLeadMs:   config.snrWordLeadMs,
-          snrNoiseLeadMs:  config.snrNoiseLeadMs,
-          snrNoiseTrailMs: config.snrNoiseTrailMs,
-          snrNoiseRampMs:  config.snrNoiseRampMs
-        }));
-      } catch (_) {}
-    }
+    return {
+      snrWordLeadMs:   numOr("setSnrWordLead", 600),
+      snrNoiseLeadMs:  numOr("setSnrNoiseLead", 600),
+      snrNoiseTrailMs: numOr("setSnrNoiseTrail", 600),
+      snrNoiseRampMs:  numOr("setSnrNoiseRamp", 100)
+    };
+  }
 
+  // Apply the form to the live session config (no localStorage write).
+  function applySetupToSession() {
+    const cfg = readSetupForm();
+    if (typeof config !== "undefined") {
+      config.adaptive = cfg;
+      config.routing = cfg.routing;   // surfaced at top level for flow.js
+      const t = readSnrTimingFromForm();
+      config.snrWordLeadMs   = t.snrWordLeadMs;
+      config.snrNoiseLeadMs  = t.snrNoiseLeadMs;
+      config.snrNoiseTrailMs = t.snrNoiseTrailMs;
+      config.snrNoiseRampMs  = t.snrNoiseRampMs;
+    }
+    return cfg;
+  }
+
+  // Apply to the session AND persist as the default.
+  function saveSetupAsDefault() {
+    const cfg = applySetupToSession();
+    if (typeof AdaptiveConfig !== "undefined") AdaptiveConfig.saveAdaptiveConfig(cfg);
+    try {
+      const t = readSnrTimingFromForm();
+      localStorage.setItem("uc4afc_snr_timing", JSON.stringify(t));
+    } catch (_) {}
+    _setupDirty = false;
+    updateDirtyUI();
+  }
+
+  // Any edit to a Setup control marks the form dirty and reflects it in the UI,
+  // so it's never ambiguous whether changes are the saved default yet. Delegated
+  // listener covers every input/select, including ones toggled in/out per mode.
+  const setupScreen = document.getElementById("setup");
+  if (setupScreen) {
+    const onEdit = (e) => {
+      const t = e.target;
+      if (!t || !/^(INPUT|SELECT)$/.test(t.tagName)) return;
+      if (t.readOnly) return;                    // A / target are display-only
+      markDirty();
+    };
+    setupScreen.addEventListener("input", onEdit);
+    setupScreen.addEventListener("change", onEdit);
+  }
+
+  const saveBtn = document.getElementById("setupSaveBtn");
+  if (saveBtn) saveBtn.onclick = () => {
+    saveSetupAsDefault();
     const status = document.getElementById("setupStatus");
-    if (status) status.textContent = "Saved.";
+    if (status) { status.textContent = "Saved as default."; status.style.color = ""; }
   };
 
   const resetBtn = document.getElementById("setupResetBtn");
@@ -3411,12 +3531,22 @@ function setupSetupScreen() {
       if (typeof config !== "undefined") config.adaptive = AdaptiveConfig.loadAdaptiveConfig();
     }
     populateSetupForm();
+    _setupDirty = false;
+    updateDirtyUI();
     const status = document.getElementById("setupStatus");
-    if (status) status.textContent = "Reset to defaults.";
+    if (status) { status.textContent = "Reset to defaults."; status.style.color = ""; }
   };
 
+  // Back applies the current form to THIS session (so a run started now uses it)
+  // but does not change the persisted default. Save-as-default is the only path
+  // that writes localStorage.
   const backBtn = document.getElementById("setupBackBtn");
-  if (backBtn) backBtn.onclick = () => showScreen("intro");
+  if (backBtn) backBtn.onclick = () => {
+    applySetupToSession();
+    _setupDirty = false;
+    updateDirtyUI();
+    showScreen("intro");
+  };
 }
 
 

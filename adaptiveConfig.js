@@ -90,11 +90,17 @@ const ADAPTIVE_DEFAULTS = {
   A: 4,                       // alternatives (fixed); floor = 1/A = 0.25
   target: 0.625,             // midpointTarget(4) = (A+1)/(2A)
 
-  // Start
-  startMode: "absolute",      // "absolute" | "relative"
-  startValue: PRESETS.lpf.start,     // Hz (LPF) or dB (quiet)
+  // Start (single absolute value per mode; no relative-to-threshold path)
+  startValue: PRESETS.lpf.start,     // Hz (LPF) / dB level (quiet) / dB SNR (snr)
   startCutoffHz: 1000,        // back-compat alias for LPF start (Hz)
-  startRelOctaves: 0,         // relative start: octaves (LPF) or dB (quiet)
+
+  // SNR noise presentation level: dB(A) when calibrated, else a dB FS
+  // attenuation (<= 0). Only consumed in SNR mode.
+  snrNoiseLevel: 65,
+
+  // LPF presentation level: dB(A) when calibrated, else dB FS attenuation.
+  // Only consumed in LPF mode.
+  lpfLevel: 65,
 
   // Trials
   nTrials: 33,
@@ -184,6 +190,15 @@ function loadAdaptiveConfig() {
   } catch (_) {}
   // Keep derived values consistent.
   cfg.target = midpointTarget(cfg.A || 4);
+  // --- Migrate stale persisted blobs -----------------------------------------
+  // Older builds saved axisIsLog and a "start mode / relative octaves" pair.
+  // axisIsLog is now derived STRICTLY from mode, so a stale axisIsLog could make
+  // a quiet/snr run get low-pass filtered. Re-derive it and drop the dead
+  // fields so nothing downstream can read them.
+  const mode = cfg.mode || "lpf";
+  cfg.axisIsLog = !(mode === "quiet" || mode === "snr");
+  delete cfg.startMode;
+  delete cfg.startRelOctaves;
   return cfg;
 }
 

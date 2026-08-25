@@ -261,17 +261,20 @@ function createTrack(cfg) {
 // value (Hz for LPF, dB for quiet) into the internal cfg the track consumes.
 // Mode-aware: LPF uses a log10(Hz) axis, quiet uses a linear dB axis.
 function resolveTrackConfig(adaptive, startValue) {
-  // Both quiet (dB level) and snr (dB SNR) are LINEAR-axis modes; only LPF is
-  // log10(Hz). Anything not explicitly linear stays on the log axis (LPF).
-  const linearMode = adaptive.mode === "quiet" || adaptive.mode === "snr";
-  const axisIsLog = adaptive.axisIsLog !== false && !linearMode;
-  const isSnr = adaptive.mode === "snr";
+  // Axis is derived STRICTLY from mode, ignoring any persisted axisIsLog (which
+  // could be stale from an older saved config): quiet (dB level) and snr (dB
+  // SNR) are linear; everything else (LPF) is log10(Hz). This guarantees LPF
+  // filtering can never be applied to a quiet/snr run because of leftover state.
+  const mode = adaptive.mode || "lpf";
+  const linearMode = mode === "quiet" || mode === "snr";
+  const axisIsLog = !linearMode;
+  const isSnr = mode === "snr";
   const toX = axisIsLog ? (v) => Math.log10(v) : (v) => v;
   const defStart = (startValue != null ? startValue : undefined)
     ?? adaptive.startValue
-    ?? (axisIsLog ? (adaptive.startCutoffHz || 1000) : (adaptive.start ?? (isSnr ? 2 : 65)));
+    ?? (axisIsLog ? (adaptive.startCutoffHz || 1000) : (isSnr ? 2 : 65));
   return {
-    mode: adaptive.mode || (axisIsLog ? "lpf" : "quiet"),
+    mode,
     procedure: adaptive.procedure || "wudr",
     A: adaptive.A || 4,
     target: adaptive.target ?? midpointTarget(adaptive.A || 4),
