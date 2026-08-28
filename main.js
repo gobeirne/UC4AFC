@@ -17,6 +17,15 @@ function abortPhase() {
     }
   };
 
+// Constant-stimuli run takes precedence: it manages its own state/save.
+if (typeof csRunActive === "function" && csRunActive()) {
+  if (confirm("Abort constant-stimuli run and save progress?")) {
+    stopAudio();
+    csAbort();
+  }
+  return;
+}
+
 if (phase === "training" && confirm("Abort training?")) {
   abortTraining(); //  tells flow.js to stop future audio/images
   stopAudio();
@@ -263,6 +272,9 @@ if (breakEveryInput) {
   const setupBtn = document.getElementById("setupBtn");
   if (setupBtn) setupBtn.onclick = () => { showScreen("setup"); populateSetupForm(); };
   setupSetupScreen();
+
+  // Constant-stimuli (normalisation) screen wiring.
+  if (typeof setupConstantScreen === "function") setupConstantScreen();
 };
 
 // --- Calibration screen wiring (mirrors UC_CVCV) -----------------------------

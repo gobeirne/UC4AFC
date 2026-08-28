@@ -237,12 +237,56 @@
     <p class="small">Applies to the stimuli for this run.</p>
   </div>
 
+  <div class="setup-block">
+    <span class="setup-label">Normalisation</span>
+    <p class="small" style="margin-top:0;">Collect normalisation data using the method of constant stimuli (fixed list of SNRs or LPF cutoffs, every word at every level, repeated).</p>
+    <button id="openConstBtn" type="button">Constant stimuli&hellip;</button>
+  </div>
+
   <div style="margin-top:1rem;">
     <button id="setupSaveBtn">Save as default</button>
     <button id="setupResetBtn" style="background:#777;">Reset defaults</button>
     <button id="setupBackBtn">Back</button>
   </div>
   <p id="setupStatus" class="small" style="min-height:1.2rem;"></p>
+</div>
+
+<!-- Constant Stimuli screen (method of constant stimuli; normalisation) -->
+<div id="conststim" class="screen">
+  <h2>Constant Stimuli</h2>
+
+  <div class="setup-block">
+    <span class="setup-label">Mode</span>
+    <div class="segmented" id="csModeSegmented">
+      <button type="button" data-csmode="snr" class="seg-btn active">Noise (SNR)</button>
+      <button type="button" data-csmode="lpf" class="seg-btn">Low-pass filter</button>
+    </div>
+    <p class="small" style="margin-bottom:0;">SNR and LPF each keep their own saved level list.</p>
+  </div>
+
+  <div class="setup-block">
+    <span class="setup-label">Levels</span>
+    <label style="display:block; font-weight:600; font-size:0.85rem; color:#333; text-align:left;">
+      <span id="csLevelsLabel">SNRs (dB, comma-separated)</span>
+      <input id="csLevels" type="text" style="width:100%; margin-top:0.25rem;" placeholder="-15, -12, -9, -6, -3">
+    </label>
+    <div class="setup-grid" style="margin-top:0.6rem;">
+      <label>Repeats
+        <input id="csRepeats" type="number" min="1" max="10" step="1" value="2">
+      </label>
+      <label>Break every (presentations)
+        <input id="csBreakEvery" type="number" min="0" step="1" value="40">
+      </label>
+    </div>
+    <p class="small" id="csSummary" style="margin-bottom:0;"></p>
+  </div>
+
+  <div style="margin-top:1rem;">
+    <button id="csStartBtn">Start run</button>
+    <button id="csSaveBtn" style="background:#777;">Save as default</button>
+    <button id="csBackBtn" style="background:#777;">Back</button>
+  </div>
+  <p id="csStatus" class="small" style="min-height:1.2rem;"></p>
 </div>
 
 <!-- Break screen -->
