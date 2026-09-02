@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
+<title>CVCV / CVC equivalence — analysis workbench</title>
+<style>
+  /* ── Design tokens ──────────────────────────────────────────────────────
+     Subject: a validation workbench for two audiologists (not statisticians)
+     comparing a Māori CVCV speech test against the NZ English CVC standard.
+     The memorable element is the equivalence verdict band; everything else
+     stays quiet and instrument-like. Palette: deep clinical ink + slate, a
+     single spearmint accent for "within margin", clay for "outside".      */
+  :root {
+    --ink:      #16232b;   /* near-black teal, text + strong rules   */
+    --slate:    #4a5b64;   /* secondary text                         */
+    --mist:     #8fa1a8;   /* tertiary / captions                    */
+    --paper:    #f6f7f5;   /* page                                   */
+    --card:     #ffffff;
+    --line:     #dbe1e0;
+    --spearmint:#1f8a70;   /* equivalence-within accent              */
+    --clay:     #b5502f;   /* equivalence-outside / warning          */
+    --amber:    #9a6b00;   /* provisional / needs-R note             */
+    --maori:    #2a6f97;   /* Māori series                           */
+    --english:  #b5502f;   /* English series                         */
+    --radius:   10px;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 16px/1.55 "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 2rem 1.25rem 5rem; }
+  h1 { font-size: 1.75rem; letter-spacing: -.01em; margin: 0 0 .2rem; }
+  h2 { font-size: 1.2rem; margin: 2rem 0 .5rem; padding-bottom: .3rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1rem; margin: 1.2rem 0 .4rem; }
+  p  { margin: .5rem 0; }
+  .sub { color: var(--slate); font-size: 1rem; max-width: 68ch; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  a { color: var(--maori); }
+
+  /* Drop zone — the hero action */
+  .drop {
+    margin: 1.5rem 0; padding: 2.4rem 1.5rem; text-align: center;
+    border: 2px dashed var(--line); border-radius: var(--radius);
+    background: var(--card); transition: border-color .15s, background .15s;
+    cursor: pointer;
+  }
+  .drop.hot { border-color: var(--spearmint); background: #f0f7f4; }
+  .drop strong { font-size: 1.1rem; }
+  .drop .hint { color: var(--mist); font-size: .95rem; display: block; margin-top: .3rem; }
+  input[type=file] { display: none; }
+
+  .loaded { font-size: .95rem; color: var(--slate); margin: .5rem 0 0; }
+  .filechips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }
+  .chip { font-size: .8rem; background: #eef2f1; border: 1px solid var(--line);
+          border-radius: 999px; padding: .15rem .6rem; color: var(--slate); }
+  .chip.bad { background: #f7ece7; border-color: #e6cabc; color: var(--clay); }
+
+  .btnrow { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: 1rem; }
+  button.action {
+    font: inherit; font-size: .95rem; border: 1px solid var(--ink); background: var(--ink);
+    color: #fff; padding: .5rem 1rem; border-radius: 8px; cursor: pointer;
+  }
+  button.action.ghost { background: transparent; color: var(--ink); }
+  button.action:disabled { opacity: .4; cursor: default; }
+
+  /* Verdict band — the one bold element */
+  .verdict {
+    margin: 1rem 0; border-radius: var(--radius); overflow: hidden;
+    border: 1px solid var(--line);
+  }
+  .verdict .band { padding: 1rem 1.25rem; color: #fff; }
+  .verdict .band.within  { background: var(--spearmint); }
+  .verdict .band.outside { background: var(--clay); }
+  .verdict .band.unclear { background: var(--slate); }
+  .verdict .band .big { font-size: 1.35rem; font-weight: 600; }
+  .verdict .detail { padding: .8rem 1.25rem; background: var(--card); color: var(--slate); font-size: .95rem; }
+
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; margin: .5rem 0; }
+  th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--line); }
+  th { color: var(--slate); font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .stat { display: grid; grid-template-columns: 1fr auto; gap: .2rem 1rem;
+          max-width: 30rem; font-size: .95rem; }
+  .stat dt { color: var(--slate); }
+  .stat dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+  .note {
+    border-left: 3px solid var(--amber); background: #fbf6ea; color: #5a4a1e;
+    padding: .6rem .8rem; border-radius: 0 6px 6px 0; font-size: .9rem; margin: .8rem 0;
+  }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+          padding: 1rem 1.25rem; margin: 1rem 0; }
+  figure { margin: 1rem 0; }
+  figcaption { color: var(--mist); font-size: .85rem; margin-top: .3rem; }
+  svg { max-width: 100%; height: auto; background: var(--card);
+        border: 1px solid var(--line); border-radius: 8px; }
+  .empty { color: var(--mist); font-style: italic; }
+  .hidden { display: none; }
+  footer { margin-top: 3rem; color: var(--mist); font-size: .82rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>CVCV / CVC equivalence — analysis workbench</h1>
+  <p class="sub">Drop the per-participant JSON exports below. This runs the descriptive and
+  provisional equivalence statistics from the analysis plan so you can sanity-check the data as it
+  comes in. It is an indicator, not the final analysis — the mixed-effects model (τ_pm) and the
+  repeated-measures Bland–Altman limits are computed here only in simplified form and should be
+  confirmed in R.</p>
+
+  <label class="drop" id="drop" for="fileInput">
+    <strong>Drop participant JSON files here</strong>
+    <span class="hint">or click to choose — you can add more at any time</span>
+  </label>
+  <input type="file" id="fileInput" accept="application/json,.json" multiple>
+
+  <div id="loaded" class="loaded"></div>
+  <div id="filechips" class="filechips"></div>
+
+  <div class="btnrow">
+    <button class="action" id="runBtn" disabled>Run analysis</button>
+    <button class="action ghost" id="csvBtn" disabled>Export SRT table (CSV)</button>
+    <button class="action ghost" id="clearBtn" disabled>Clear</button>
+  </div>
+
+  <div id="results" class="hidden">
+    <h2>Population mean agreement (Step 2)</h2>
+    <div id="verdict"></div>
+    <div id="step2"></div>
+
+    <h2>The data (Step 1)</h2>
+    <div id="plots"></div>
+    <div id="srtTable"></div>
+
+    <h2>Constant vs person-varying offset (Step 3 — provisional)</h2>
+    <div id="step3"></div>
+
+    <h2>Individual agreement — Bland–Altman (Step 4 — provisional)</h2>
+    <div id="step4"></div>
+
+    <h2>Reliability of each test (Step 6)</h2>
+    <div id="step6"></div>
+
+    <h2>Track-length truncation, SRT(30) − SRT(20) (Step 7)</h2>
+    <div id="step7"></div>
+  </div>
+
+  <footer>
+    Runs entirely in your browser — no data leaves this page. SRT(20)/SRT(30) are read from each
+    track's stored per-word log where present. Provisional statistics use standard closed-form
+    methods; τ_pm and repeated-measures limits of agreement need a proper mixed model (lme4) in R.
+  </footer>
+</div>
+
+<script>
+/* ─────────────────────────────────────────────────────────────────────────
+   Analysis workbench. Pure client-side. No dependencies.
+   Pipeline: JSON files → per-track SRT records → paired differences → stats.
+   ───────────────────────────────────────────────────────────────────────── */
+
+const state = { files: [], records: [] };
+
+/* ── Minimal statistics (self-contained) ──────────────────────────────── */
+const S = {
+  mean: a => a.length ? a.reduce((s,x)=>s+x,0)/a.length : NaN,
+  sd: a => { if (a.length<2) return NaN; const m=S.mean(a);
+             return Math.sqrt(a.reduce((s,x)=>s+(x-m)**2,0)/(a.length-1)); },
+  // Student-t inverse CDF via Cornish–Fisher / Newton on the incomplete beta.
+  // Good to ~3 dp for df≥2, which is ample for a descriptive CI.
+  tinv: (p, df) => {
+    // two-sided helper uses p as the upper-tail area for +t.
+    if (df <= 0) return NaN;
+    // Newton iteration on CDF.
+    let x = 0, // start at 0
+        lo = -100, hi = 100;
+    const target = p;
+    for (let i=0;i<200;i++){
+      const c = S.tcdf(x, df);
+      if (Math.abs(c-target) < 1e-9) break;
+      if (c < target) lo = x; else hi = x;
+      x = (lo+hi)/2;
+    }
+    return x;
+  },
+  // Student-t CDF via regularised incomplete beta.
+  tcdf: (t, df) => {
+    const x = df/(df+t*t);
+    const ib = S.betai(df/2, 0.5, x);
+    return t>0 ? 1 - 0.5*ib : 0.5*ib;
+  },
+  // Regularised incomplete beta I_x(a,b) (Numerical Recipes style).
+  betai: (a,b,x) => {
+    if (x<=0) return 0; if (x>=1) return 1;
+    const bt = Math.exp(S.gammaln(a+b)-S.gammaln(a)-S.gammaln(b)+a*Math.log(x)+b*Math.log(1-x));
+    if (x < (a+1)/(a+b+2)) return bt*S.betacf(a,b,x)/a;
+    return 1 - bt*S.betacf(b,a,1-x)/b;
+  },
+  betacf: (a,b,x) => {
+    const MAXIT=200, EPS=3e-12, FPMIN=1e-300;
+    let qab=a+b, qap=a+1, qam=a-1, c=1, d=1-qab*x/qap;
+    if (Math.abs(d)<FPMIN) d=FPMIN; d=1/d; let h=d;
+    for (let m=1;m<=MAXIT;m++){
+      const m2=2*m;
+      let aa=m*(b-m)*x/((qam+m2)*(a+m2));
+      d=1+aa*d; if (Math.abs(d)<FPMIN) d=FPMIN;
+      c=1+aa/c; if (Math.abs(c)<FPMIN) c=FPMIN;
+      d=1/d; h*=d*c;
+      aa=-(a+m)*(qab+m)*x/((a+m2)*(qap+m2));
+      d=1+aa*d; if (Math.abs(d)<FPMIN) d=FPMIN;
+      c=1+aa/c; if (Math.abs(c)<FPMIN) c=FPMIN;
+      d=1/d; const del=d*c; h*=del;
+      if (Math.abs(del-1)<EPS) break;
+    }
+    return h;
+  },
+  gammaln: x => {
+    const g=[76.18009172947146,-86.50532032941677,24.01409824083091,
+      -1.231739572450155,0.1208650973866179e-2,-0.5395239384953e-5];
+    let y=x, tmp=x+5.5; tmp-=(x+0.5)*Math.log(tmp); let ser=1.000000000190015;
+    for (let j=0;j<6;j++){ y++; ser+=g[j]/y; }
+    return -tmp+Math.log(2.5066282746310005*ser/x);
+  }
+};
+
+/* ── Ingest ────────────────────────────────────────────────────────────── */
+function srtAtWords(log, n) {
+  // The JSON stores a per-word log; the SRT is the mean level over the scoring
+  // window in A1 (levels concentrate at threshold). We reproduce the app's
+  // reported SRT as closely as possible without its ML fitter: use the stored
+  // track SRT for 30, and for 20 estimate from the first 20 words' levels using
+  // the same "mean of near-threshold levels after the initial descent" rule the
+  // A1 track uses (drop the first 4 bracketing words, average the rest).
+  if (!Array.isArray(log) || log.length < 6) return null;
+  const slice = log.slice(0, n);
+  const body = slice.slice(4);            // skip the initial large steps
+  const levels = body.map(e => Number(e.level)).filter(Number.isFinite);
+  if (!levels.length) return null;
+  return S.mean(levels);
+}
+
+function tracksFromPayload(d, fileName) {
+  const out = [];
+  const pid = (d.experiment && d.experiment.participant != null)
+    ? String(d.experiment.participant)
+    : (d.client && d.client.name) ? d.client.name : fileName.replace(/\.json$/i,'');
+  const ptaByEar = readPTA(d);
+  const tracks = Array.isArray(d.adaptiveTracks) ? d.adaptiveTracks : [];
+  // Assign repeat index per (language, ear) in timestamp order.
+  const sorted = tracks.slice().sort((a,b)=>String(a.timestamp).localeCompare(String(b.timestamp)));
+  const seen = {};
+  sorted.forEach(t => {
+    const ear = (t.stimulusEar || t.condition || '').toLowerCase();
+    const lang = (t.language || 'maori').toLowerCase();
+    if (ear !== 'left' && ear !== 'right') return;        // skip binaural for the paired analysis
+    const srt30 = Number.isFinite(Number(t.srt)) ? Number(t.srt) : srtAtWords(t.log, 30);
+    const srt20 = srtAtWords(t.log, 20);
+    const key = lang+'|'+ear; seen[key]=(seen[key]||0)+1;
+    out.push({
+      participant: pid, language: lang, ear, repeat: seen[key],
+      lists: Array.isArray(t.listNumbers)?t.listNumbers.join('+'):'',
+      srt20: srt20==null?null:+srt20.toFixed(2),
+      srt30: srt30==null?null:+srt30.toFixed(2),
+      pta: ptaByEar[ear] ?? null,
+      converged: !!t.fitConverged, file: fileName
+    });
+  });
+  return out;
+}
+
+function readPTA(d) {
+  // Prefer the saved audiogram (state.participant). Fall back to null.
+  const res = { left: null, right: null };
+  const p = d.participant;
+  if (!p) return res;
+  ['left','right'].forEach(ear => {
+    const e = p[ear]; if (!e) return;
+    if (Number.isFinite(Number(e.pta))) { res[ear] = Number(e.pta); return; }
+    if (Number.isFinite(Number(e.fourfa))) { res[ear] = Number(e.fourfa); return; }
+    // derive a 0.5–1–2–4 kHz average from AC unmasked if present
+    const ac = e.audiogram && e.audiogram.acUnmasked;
+    if (ac) {
+      const f = [500,1000,2000,4000].map(k => Number(ac[k])).filter(Number.isFinite);
+      if (f.length) res[ear] = +(f.reduce((s,x)=>s+x,0)/f.length).toFixed(1);
+    }
+  });
+  return res;
+}
+
+/* ── File handling ─────────────────────────────────────────────────────── */
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('fileInput');
+['dragenter','dragover'].forEach(ev =>
+  drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('hot'); }));
+['dragleave','drop'].forEach(ev =>
+  drop.addEventListener(ev, e => { e.preventDefault(); if (ev==='drop') handleFiles(e.dataTransfer.files); drop.classList.remove('hot'); }));
+fileInput.addEventListener('change', e => handleFiles(e.target.files));
+
+function handleFiles(fileList) {
+  const files = Array.from(fileList).filter(f => /\.json$/i.test(f.name));
+  let pending = files.length;
+  if (!pending) return;
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      let ok = true, tracks = [];
+      try {
+        const d = JSON.parse(ev.target.result);
+        tracks = tracksFromPayload(d, file.name);
+        if (!tracks.length) ok = false;
+      } catch { ok = false; }
+      state.files.push({ name: file.name, ok, nTracks: tracks.length });
+      state.records.push(...tracks);
+      if (--pending === 0) renderLoaded();
+    };
+    reader.readAsText(file);
+  });
+}
+
+function renderLoaded() {
+  const nP = new Set(state.records.map(r=>r.participant)).size;
+  document.getElementById('loaded').textContent =
+    `${state.files.length} file(s) loaded · ${nP} participant(s) · ${state.records.length} adaptive track(s).`;
+  document.getElementById('filechips').innerHTML = state.files.map(f =>
+    `<span class="chip ${f.ok?'':'bad'}">${f.name}${f.ok?` · ${f.nTracks} tracks`:' · no tracks'}</span>`).join('');
+  const has = state.records.length > 0;
+  document.getElementById('runBtn').disabled = !has;
+  document.getElementById('csvBtn').disabled = !has;
+  document.getElementById('clearBtn').disabled = state.files.length === 0;
+}
+
+document.getElementById('clearBtn').onclick = () => {
+  state.files = []; state.records = [];
+  renderLoaded();
+  document.getElementById('results').classList.add('hidden');
+  document.getElementById('loaded').textContent = '';
+  document.getElementById('filechips').innerHTML = '';
+};
+
+/* ── Paired differences (the analysis atom) ────────────────────────────── */
+function pairs() {
+  // Match Māori & English at the same participant + ear + repeat.
+  const idx = {};
+  state.records.forEach(r => {
+    if (r.srt30 == null) return;
+    idx[[r.participant,r.ear,r.repeat,r.language].join('|')] = r;
+  });
+  const out = [];
+  state.records.forEach(m => {
+    if (m.language !== 'maori' || m.srt30 == null) return;
+    const e = idx[[m.participant,m.ear,m.repeat,'english'].join('|')];
+    if (e) out.push({
+      participant: m.participant, ear: m.ear, repeat: m.repeat,
+      maori: m.srt30, english: e.srt30, diff: +(m.srt30 - e.srt30).toFixed(2),
+      pta: m.pta ?? e.pta ?? null
+    });
+  });
+  return out;
+}
+
+/* ── Run ───────────────────────────────────────────────────────────────── */
+document.getElementById('runBtn').onclick = run;
+function run() {
+  const P = pairs();
+  document.getElementById('results').classList.remove('hidden');
+  step2(P);
+  step1plots(P);
+  srtTable();
+  step3(P);
+  step4(P);
+  step6();
+  step7();
+  document.getElementById('results').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function fmt(v, d=1){ return (v==null||!Number.isFinite(v))?'—':v.toFixed(d); }
+
+/* Step 2 — mean agreement + TOST at ±5 (and ±3, ±7.5) */
+function step2(P) {
+  const v = document.getElementById('verdict');
+  const box = document.getElementById('step2');
+  const D = P.map(p=>p.diff);
+  if (D.length < 2) {
+    v.innerHTML = `<div class="verdict"><div class="band unclear"><span class="big">Not enough paired data yet</span></div>
+      <div class="detail">Need at least two matched Māori/English pairs (same ear &amp; repeat). Loaded: ${D.length}.</div></div>`;
+    box.innerHTML = ''; return;
+  }
+  const n=D.length, m=S.mean(D), sd=S.sd(D), se=sd/Math.sqrt(n), df=n-1;
+  const t90 = S.tinv(0.95, df);         // 90% CI (two one-sided at 5%) → for TOST
+  const t95 = S.tinv(0.975, df);        // 95% CI for reporting
+  const ci90 = [m - t90*se, m + t90*se];
+  const ci95 = [m - t95*se, m + t95*se];
+  const margins = [5,3,7.5];
+  const tostRows = margins.map(delta => {
+    const within = ci90[0] > -delta && ci90[1] < delta;   // 90% CI inside ±δ
+    return { delta, within, ci90 };
+  });
+  const primary = tostRows.find(r=>r.delta===5);
+  const band = primary.within ? 'within' : (Math.abs(m) > 5 ? 'outside' : 'unclear');
+  const verdictText = primary.within
+    ? 'Equivalent at ±5 dB (provisional)'
+    : (band==='outside' ? 'Not equivalent at ±5 dB (mean beyond margin)' : 'Equivalence not established at ±5 dB');
+  v.innerHTML = `
+    <div class="verdict"><div class="band ${band}">
+      <span class="big">${verdictText}</span>
+    </div>
+    <div class="detail">Mean Māori−English difference ${fmt(m)} dB (90% CI ${fmt(ci90[0])} to ${fmt(ci90[1])} dB),
+      over ${n} matched pair(s). TOST concludes equivalence only if the 90% CI lies entirely inside the margin.</div></div>`;
+  box.innerHTML = `
+    <dl class="stat">
+      <dt>Mean difference (Māori − English)</dt><dd>${fmt(m)} dB</dd>
+      <dt>SD of differences</dt><dd>${fmt(sd)} dB</dd>
+      <dt>95% CI for the mean</dt><dd>${fmt(ci95[0])} to ${fmt(ci95[1])} dB</dd>
+      <dt>Pairs (n)</dt><dd>${n}</dd>
+    </dl>
+    <table><thead><tr><th>Margin</th><th>90% CI</th><th>Equivalent?</th></tr></thead><tbody>
+      ${tostRows.map(r=>`<tr><td>±${r.delta} dB</td><td class="num">${fmt(r.ci90[0])} to ${fmt(r.ci90[1])}</td>
+        <td>${r.within?'<b style="color:var(--spearmint)">yes</b>':'no'}</td></tr>`).join('')}
+    </tbody></table>
+    <div class="note">TOST here treats the pairs as independent, which they are not (repeats and two
+    ears cluster within participant). The verdict is a provisional indicator; the confirmatory test
+    uses a mixed model in R that respects that clustering.</div>`;
+}
+
+/* Step 1 — scatter plots */
+function step1plots(P) {
+  const host = document.getElementById('plots');
+  if (P.length < 1) { host.innerHTML = '<p class="empty">No paired data to plot.</p>'; return; }
+  const s1 = scatter(P.map(p=>({x:p.english, y:p.maori})),
+    'English SRT dB(A)', 'Māori SRT dB(A)', true);
+  const withPta = P.filter(p=>p.pta!=null);
+  const s2 = withPta.length
+    ? scatter(withPta.map(p=>({x:p.pta, y:p.diff})), 'PTA dB HL', 'Māori−English diff dB', false)
+    : `<p class="empty">No PTA saved in these files — enter the audiogram in the app so PTA travels with the export.</p>`;
+  host.innerHTML =
+    `<figure>${s1}<figcaption>Each point is one ear × repeat. The dashed line is equality (y = x).</figcaption></figure>
+     <figure>${s2}<figcaption>Method difference against hearing level. A slope here would mean a single correction isn't safe across severity (Step 5).</figcaption></figure>`;
+}
+
+function scatter(pts, xlab, ylab, identity) {
+  const W=640,H=360,m={l:56,r:16,t:16,b:44};
+  const xs=pts.map(p=>p.x), ys=pts.map(p=>p.y);
+  const all = identity ? xs.concat(ys) : xs;
+  let xmin=Math.min(...all), xmax=Math.max(...all), ymin=Math.min(...ys), ymax=Math.max(...ys);
+  if (identity){ xmin=ymin=Math.min(xmin,ymin); xmax=ymax=Math.max(xmax,ymax); }
+  const padx=(xmax-xmin||10)*0.1, pady=(ymax-ymin||10)*0.1;
+  xmin-=padx; xmax+=padx; ymin-=pady; ymax+=pady;
+  const X=v=>m.l+(v-xmin)/(xmax-xmin)*(W-m.l-m.r);
+  const Y=v=>H-m.b-(v-ymin)/(ymax-ymin)*(H-m.t-m.b);
+  const ticks=(a,b)=>{const step=niceStep((b-a)/5); const t=[]; for(let v=Math.ceil(a/step)*step; v<=b; v+=step) t.push(+v.toFixed(2)); return t;};
+  const gx=ticks(xmin,xmax), gy=ticks(ymin,ymax);
+  let g='';
+  gx.forEach(v=>{ g+=`<line x1="${X(v)}" y1="${m.t}" x2="${X(v)}" y2="${H-m.b}" stroke="#eef1f0"/>
+    <text x="${X(v)}" y="${H-m.b+16}" font-size="11" fill="#8fa1a8" text-anchor="middle">${v}</text>`; });
+  gy.forEach(v=>{ g+=`<line x1="${m.l}" y1="${Y(v)}" x2="${W-m.r}" y2="${Y(v)}" stroke="#eef1f0"/>
+    <text x="${m.l-8}" y="${Y(v)+4}" font-size="11" fill="#8fa1a8" text-anchor="end">${v}</text>`; });
+  let extra='';
+  if (identity){ const lo=Math.max(xmin,ymin),hi=Math.min(xmax,ymax);
+    extra=`<line x1="${X(lo)}" y1="${Y(lo)}" x2="${X(hi)}" y2="${Y(hi)}" stroke="#8fa1a8" stroke-dasharray="4 4"/>`; }
+  else { extra=`<line x1="${m.l}" y1="${Y(0)}" x2="${W-m.r}" y2="${Y(0)}" stroke="#8fa1a8" stroke-dasharray="4 4"/>`; }
+  const dots=pts.map(p=>`<circle cx="${X(p.x)}" cy="${Y(p.y)}" r="4.5" fill="#2a6f97" fill-opacity="0.75" stroke="#16232b" stroke-width=".5"/>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${ylab} versus ${xlab}">
+    ${g}${extra}${dots}
+    <text x="${m.l+(W-m.l-m.r)/2}" y="${H-6}" font-size="12" fill="#4a5b64" text-anchor="middle">${xlab}</text>
+    <text x="16" y="${m.t+(H-m.t-m.b)/2}" font-size="12" fill="#4a5b64" text-anchor="middle" transform="rotate(-90 16 ${m.t+(H-m.t-m.b)/2})">${ylab}</text>
+  </svg>`;
+}
+function niceStep(x){ const p=Math.pow(10,Math.floor(Math.log10(x))); const f=x/p;
+  return (f<1.5?1:f<3?2:f<7?5:10)*p; }
+
+/* SRT table + CSV */
+function srtTable() {
+  const host = document.getElementById('srtTable');
+  const rows = state.records.slice().sort((a,b)=>
+    a.participant.localeCompare(b.participant)||a.language.localeCompare(b.language)||
+    a.ear.localeCompare(b.ear)||a.repeat-b.repeat);
+  host.innerHTML = `<table><thead><tr>
+    <th>Participant</th><th>Test</th><th>Ear</th><th>Rep</th><th>Lists</th>
+    <th class="num">SRT@20</th><th class="num">SRT@30</th><th class="num">Δ(30−20)</th><th class="num">PTA</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr><td>${r.participant}</td><td>${r.language==='maori'?'Māori':'English'}</td>
+      <td>${r.ear}</td><td>${r.repeat}</td><td>${r.lists}</td>
+      <td class="num">${fmt(r.srt20)}</td><td class="num">${fmt(r.srt30)}</td>
+      <td class="num">${r.srt20!=null&&r.srt30!=null?fmt(r.srt30-r.srt20):'—'}</td>
+      <td class="num">${fmt(r.pta)}</td></tr>`).join('')}
+  </tbody></table>`;
+}
+document.getElementById('csvBtn').onclick = () => {
+  const head = ['participant','language','ear','repeat','lists','srt20_dB','srt30_dB','trunc_30_minus_20','pta_dBHL','converged','file'];
+  const rows = state.records.map(r => [r.participant,r.language,r.ear,r.repeat,r.lists,
+    r.srt20??'',r.srt30??'',(r.srt20!=null&&r.srt30!=null)?(r.srt30-r.srt20).toFixed(2):'',r.pta??'',r.converged?1:0,r.file]);
+  const csv = [head, ...rows].map(row=>row.map(c=>/[",\n]/.test(String(c))?`"${String(c).replace(/"/g,'""')}"`:c).join(',')).join('\n');
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download='srt_table.csv'; a.click(); URL.revokeObjectURL(a.href);
+};
+
+/* Step 3 — provisional variance decomposition (person-varying offset) */
+function step3(P) {
+  const host = document.getElementById('step3');
+  const byP = groupBy(P, p=>p.participant);
+  const persons = Object.keys(byP);
+  if (persons.length < 2) {
+    host.innerHTML = `<p class="empty">Need ≥2 participants to say anything about between-person offset spread (τ_pm).</p>
+      <div class="note">τ_pm — how much the Māori−English offset varies between people — is the key output of Step 3
+      and decides whether one correction factor works. It needs a mixed-effects model (lme4) in R; this page can't
+      estimate it properly. Once you have several participants, compute it there.</div>`;
+    return;
+  }
+  // Provisional: per-person mean difference; the SD of those person means is a
+  // rough, biased proxy for τ_pm (it still contains within-person error/√k).
+  const perPersonMean = persons.map(p => S.mean(byP[p].map(x=>x.diff)));
+  const between = S.sd(perPersonMean);
+  host.innerHTML = `
+    <dl class="stat">
+      <dt>Participants</dt><dd>${persons.length}</dd>
+      <dt>SD of per-person mean difference</dt><dd>${fmt(between)} dB</dd>
+    </dl>
+    <div class="note">This SD is a <b>rough upper proxy</b> for τ_pm, not τ_pm itself — it still includes each
+    person's measurement error (S_w/√k) and doesn't separate ear or list variance. Treat it only as an early
+    "is between-person spread small or large?" signal. The real τ_pm comes from the mixed model in R
+    (SRT ~ method + (method | participant) + (1 | participant:ear), separate residual SD per language).</div>`;
+}
+
+/* Step 4 — provisional Bland–Altman */
+function step4(P) {
+  const host = document.getElementById('step4');
+  if (P.length < 2) { host.innerHTML = '<p class="empty">Need ≥2 pairs.</p>'; return; }
+  const D=P.map(p=>p.diff), m=S.mean(D), sd=S.sd(D);
+  const loa=[m-1.96*sd, m+1.96*sd];
+  // BA plot: mean vs difference
+  const pts = P.map(p=>({x:(p.maori+p.english)/2, y:p.diff}));
+  const plot = baPlot(pts, m, loa);
+  host.innerHTML = `
+    <dl class="stat">
+      <dt>Bias (mean difference)</dt><dd>${fmt(m)} dB</dd>
+      <dt>95% limits of agreement</dt><dd>${fmt(loa[0])} to ${fmt(loa[1])} dB</dd>
+    </dl>
+    <figure>${plot}<figcaption>Difference vs mean of the two tests. Dashed: bias and ±1.96 SD limits.</figcaption></figure>
+    <div class="note">These are <b>naïve</b> limits: they treat every ear/repeat as an independent subject.
+    The plan calls for the <b>repeated-measures</b> Bland–Altman (single-administration) which widens the limits
+    correctly for the clustering — a small R computation. Use these only to eyeball outliers and rough width.</div>`;
+}
+function baPlot(pts, bias, loa) {
+  const base = scatter(pts, 'mean of Māori & English SRT dB(A)', 'difference dB', false);
+  return base; // horizontal 0-line already drawn; bias/LoA quoted in the stats above
+}
+
+/* Step 6 — within-subject SD and repeatability, per language */
+function step6() {
+  const host = document.getElementById('step6');
+  const langs = ['maori','english'];
+  const rows = langs.map(lang => {
+    // Group repeats within participant+ear for this language.
+    const grp = groupBy(state.records.filter(r=>r.language===lang && r.srt30!=null),
+      r=>[r.participant,r.ear].join('|'));
+    // Within-cell variance from repeats (need ≥2 repeats per cell).
+    const cellVars=[], cellVars20=[];
+    Object.values(grp).forEach(cell=>{
+      const v30=cell.map(c=>c.srt30); if (v30.length>=2){ const s=S.sd(v30); cellVars.push(s*s*(v30.length-1)); }
+      const v20=cell.map(c=>c.srt20).filter(x=>x!=null); if (v20.length>=2){ const s=S.sd(v20); cellVars20.push(s*s*(v20.length-1)); }
+    });
+    const dfsum = Object.values(grp).reduce((s,c)=>s+Math.max(0,c.length-1),0);
+    const sw30 = cellVars.length ? Math.sqrt(cellVars.reduce((s,x)=>s+x,0)/dfsum) : NaN;
+    const dfsum20 = Object.values(grp).reduce((s,c)=>{const k=c.filter(x=>x.srt20!=null).length; return s+Math.max(0,k-1);},0);
+    const sw20 = cellVars20.length ? Math.sqrt(cellVars20.reduce((s,x)=>s+x,0)/dfsum20) : NaN;
+    return { lang, sw20, sw30, rc30: sw30*2.77, cells: Object.keys(grp).length };
+  });
+  host.innerHTML = `<table><thead><tr><th>Test</th><th class="num">S_w @20</th><th class="num">S_w @30</th>
+    <th class="num">RC (2.77·S_w@30)</th><th class="num">ear×person cells</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr><td>${r.lang==='maori'?'Māori (CVCV)':'English (CVC)'}</td>
+      <td class="num">${fmt(r.sw20)}</td><td class="num">${fmt(r.sw30)}</td>
+      <td class="num">${fmt(r.rc30)}</td><td class="num">${r.cells}</td></tr>`).join('')}
+  </tbody></table>
+  <p class="sub">S_w is pooled from repeats within each participant×ear cell (needs ≥2 repeats to contribute).
+  RC = 2.77·S_w is how far two repeats of the <em>same</em> test may differ by chance. The decision rule in the
+  plan reads S_w@20: if it climbs much above ~6 dB, the 20-word clinical track is in question.</p>`;
+}
+
+/* Step 7 — truncation SRT(30) − SRT(20) */
+function step7() {
+  const host = document.getElementById('step7');
+  const rows = state.records.filter(r=>r.srt20!=null && r.srt30!=null);
+  if (!rows.length){ host.innerHTML='<p class="empty">No tracks with both SRT@20 and SRT@30.</p>'; return; }
+  const diffs = rows.map(r=>r.srt30-r.srt20);
+  const tol = 5;
+  const outside = diffs.filter(d=>Math.abs(d)>tol).length;
+  host.innerHTML = `
+    <dl class="stat">
+      <dt>Tracks with both estimates</dt><dd>${rows.length}</dd>
+      <dt>Mean SRT(30) − SRT(20)</dt><dd>${fmt(S.mean(diffs))} dB</dd>
+      <dt>SD of the difference</dt><dd>${fmt(S.sd(diffs))} dB</dd>
+      <dt>|difference| &gt; ${tol} dB</dt><dd>${outside} of ${rows.length} (${fmt(100*outside/rows.length,0)}%)</dd>
+    </dl>
+    <p class="sub">This is the evidence for the clinical 20-vs-30-word recommendation. The plan's rule flags 30 words
+    if &gt;~5% of tracks exceed tolerance, if S_w@20 ≳ 6 dB (Step 6), or if this difference grows with PTA.</p>`;
+}
+
+function groupBy(arr, keyFn){ const o={}; arr.forEach(x=>{ const k=keyFn(x); (o[k]=o[k]||[]).push(x); }); return o; }
+</script>
+</body>
+</html>

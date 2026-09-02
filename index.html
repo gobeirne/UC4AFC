@@ -1,448 +1,838 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="en-NZ">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>UC4AFC</title>
-  <link rel="stylesheet" href="style.css" />
-  <link rel="manifest" href="manifest.json">
-<link rel="icon" href="icon-192.png" sizes="192x192">
-<meta name="theme-color" content="#004080">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes"> <!-- legacy -->
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="UC4AFC">
-<link rel="apple-touch-icon" href="icon-192.png">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Cache policy: always revalidate so a new deploy is picked up on a normal
+       reload, without needing "empty cache and hard reload". Combined with the
+       ?v= version query on each local asset below, this prevents stale JS/CSS. -->
+  <meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <title>UC Te Reo Māori Speech Audiometry</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="intro" class="screen">
-  <div class="branding">
-    <img src="UClogo.png" alt="UC Logo" class="uc-logo" />
-    <span class="afc-text">4AFC</span>
+  <div id="app">
+    <header class="uc-header">
+      <img id="ucLogo" src="assets/UClogo.png" alt="University of Canterbury logo" onerror="this.style.display='none'">
+      <div>
+        <h1>Te reo Māori CVCV Speech Audiometry</h1>
+        <p id="headerSubtitle">Setup</p>
+      </div>
+    </header>
+
+    <main>
+      <!-- ── SETUP (landing page) ── -->
+      <section id="screen-setup" class="screen active">
+        <div class="setup-layout">
+
+          <!-- Left: client + test config + queue -->
+          <div class="setup-main">
+
+            <div class="card">
+              <div class="card-header-row">
+                <h2>Client</h2>
+                <div class="training-controls">
+                  <button id="clearClientBtn" type="button" class="secondary">Clear client</button>
+                  <button id="trainingBtn" type="button" class="secondary">🎓 Train scoring</button>
+                  <select id="trainingClientSelect" hidden>
+                    <option value="">Choose a training client…</option>
+                  </select>
+                  <span id="trainingBadge" class="training-badge" hidden></span>
+                  <button id="exitTrainingBtn" type="button" class="secondary" hidden>Exit training</button>
+                </div>
+              </div>
+              <div class="grid two">
+                <label>Client name <input id="clientName" autocomplete="name" placeholder="Full name"></label>
+                <label>Identifier <input id="clientId" placeholder="ID"></label>
+                <label>Date of birth <input id="clientDob" type="date"></label>
+                <label>Test date <input id="sessionDate" type="date"></label>
+              </div>
+              <label>Location / facility <input id="facilityName" placeholder="e.g. Northland DHB"></label>
+              <label>
+                <span class="notes-label-row">Notes
+                  <button id="mitaBtn" type="button" class="mita-btn secondary">Mita / dialect…</button>
+                </span>
+                <textarea id="sessionNotes" rows="2"></textarea>
+              </label>
+              <div class="grid two">
+                <label>Clinician <input id="clinician" placeholder="Full name"></label>
+                <label>Role <input id="clinicianRole" placeholder="e.g. Audiologist"></label>
+              </div>
+            </div>
+
+            <div class="card">
+              <h2>Test configuration</h2>
+              <div class="language-selector">
+                <span class="language-selector-label">Test language</span>
+                <div class="language-toggle" role="tablist">
+                  <button type="button" id="langMaoriBtn" class="language-btn active" data-lang="maori">Te reo Māori</button>
+                  <button type="button" id="langEnglishBtn" class="language-btn" data-lang="english">NZ English</button>
+                </div>
+                <span class="language-selector-label" style="margin-top:.6rem">Test mode</span>
+                <div class="language-toggle" role="tablist">
+                  <button type="button" id="modeFixedBtn" class="language-btn active" data-mode="fixed">Fixed level</button>
+                  <button type="button" id="modeAdaptiveBtn" class="language-btn" data-mode="adaptive">Adaptive (SRT)</button>
+                </div>
+                <label class="randomise-toggle" title="When on, the words in each list are presented in a random order. When off, they follow the listed order.">
+                  <input type="checkbox" id="randomiseOrderToggle">
+                  <span id="randomiseOrderLabel">Randomise word order</span>
+                </label>
+                <span class="language-selector-hint inline-hint">Lists added to the queue are tagged with the language selected now. You can switch between lists.</span>
+              </div>
+              <div class="grid three">
+                <label>Presentation condition
+                  <select id="presentationCondition">
+                    <option value="left">Left</option>
+                    <option value="right">Right</option>
+                    <option value="binaural">Binaural</option>
+                    <option value="soundfield">Sound field</option>
+                    <option value="aided">Aided</option>
+                    <option value="unaided">Unaided</option>
+                  </select>
+                </label>
+                <label>Stimulus routing
+                  <select id="stimEar">
+                    <option value="left">Left channel</option>
+                    <option value="right">Right channel</option>
+                    <option value="binaural">Binaural channels</option>
+                  </select>
+                </label>
+                <label>Transducer
+                  <select id="transducer">
+                    <option value="insert earphones">Insert earphones</option>
+                    <option value="headphones">Supra-aural headphones</option>
+                    <option value="airpods">AirPods / earbuds</option>
+                    <option value="sound field speaker">Sound field speaker</option>
+                    <option value="bone conductor">Bone conductor</option>
+                    <option value="other">Other</option>
+                  </select>
+                </label>
+                <label>Masking
+                  <select id="maskingEnabled">
+                    <option value="off">Off</option>
+                    <option value="on">On</option>
+                  </select>
+                </label>
+                <label>Masker ear
+                  <select id="maskEar" disabled>
+                    <option value="off">Off</option>
+                    <option value="left">Left</option>
+                    <option value="right" selected>Right</option>
+                    <option value="binaural">Binaural</option>
+                  </select>
+                </label>
+                <label>Masker level, dB(A)
+                  <input id="maskLevel" type="number" step="5" value="40">
+                </label>
+              </div>
+
+              <div id="maskingAdvisor" class="masking-advisor" style="margin-top:.6rem">
+                <div id="maskingAdvice" class="hint"></div>
+                <div class="actions wrap" id="maskingAdviceActions" style="margin-top:.35rem;display:none">
+                  <label style="display:flex;align-items:center;gap:.4rem;font-size:.82rem">
+                    <input type="checkbox" id="maskingAuto"> Auto-apply &amp; track presentation level
+                  </label>
+                  <button type="button" id="maskingApplyBtn" class="secondary" style="font-size:.8rem;padding:.25rem .6rem">Apply recommendation</button>
+                </div>
+                <details id="iaaSettings" style="margin-top:.5rem">
+                  <summary style="font-size:.82rem">Interaural attenuation (IAA) settings</summary>
+                  <p class="hint" style="font-size:.8rem;margin:.3rem 0">
+                    Conservative speech defaults, in dB. Editable — e.g. set your own value for AirPods.
+                  </p>
+                  <div class="grid three" style="gap:.4rem">
+                    <label style="font-size:.8rem">Supra-aural
+                      <input id="iaa_supraaural" type="number" step="1" value="40">
+                    </label>
+                    <label style="font-size:.8rem">Insert
+                      <input id="iaa_insert" type="number" step="1" value="55">
+                    </label>
+                    <label style="font-size:.8rem">AirPods / earbuds
+                      <input id="iaa_airpods" type="number" step="1" value="45">
+                    </label>
+                  </div>
+                </details>
+              </div>
+            </div>
+
+            <div class="card" id="participantCard">
+              <details id="participantDetails">
+                <summary><strong>Participant / audiogram</strong> — optional, derives the starting level</summary>
+                <div id="participantInputsMount"></div>
+              </details>
+            </div>
+
+            <div class="card" id="adaptiveCard" hidden>
+              <h2>Adaptive procedure</h2>
+              <p class="hint" id="adaptiveIntro">
+                The clinician sets the starting level; the adaptive procedure moves the
+                presentation level after each word to home in on the 50% speech reception
+                threshold (SRT), then fits a psychometric function for the SRT and slope.
+              </p>
+              <div class="grid three">
+                <label>Procedure
+                  <select id="adaptiveProcedure">
+                    <option value="A1" selected>A1 — single track (SRT)</option>
+                    <option value="A2">A2 — dual track (SRT + slope)</option>
+                  </select>
+                </label>
+                <label>Starting level, dB(A)
+                  <input id="adaptiveStartLevel" type="number" step="1" value="60">
+                </label>
+                <label>Number of trials
+                  <input id="adaptiveNTrials" type="number" step="1" min="4" value="20">
+                </label>
+              </div>
+              <p class="hint" id="participantStartRationale" style="margin:.2rem 0 0"></p>
+              <p class="hint" id="adaptiveTrialsHint">
+                A1 default 20 trials (2 lists of 10); A2 default 30 trials (3 lists of 10).
+              </p>
+
+              <details id="adaptiveParams">
+                <summary>Brand &amp; Kollmeier parameters</summary>
+                <p class="hint">
+                  These constants are shared by A1 and A2 and by quiet and noise conditions;
+                  the defaults follow Brand &amp; Kollmeier (2002). You rarely need to change them.
+                </p>
+                <div class="grid three">
+                  <label>a (step base)
+                    <input id="bkA" type="number" step="0.01" value="1.5">
+                  </label>
+                  <label>b (step rate)
+                    <input id="bkB" type="number" step="0.01" value="1.41">
+                  </label>
+                  <label>Smallest step, dB
+                    <input id="bkMinStep" type="number" step="0.05" value="0.25">
+                  </label>
+                  <label>Tracking s50
+                    <input id="bkS50" type="number" step="0.01" value="0.1">
+                  </label>
+                  <label>Per-phoneme floor
+                    <input id="bkFloor" type="number" step="0.01" min="0" max="0.5" value="0.05">
+                  </label>
+                </div>
+                <div class="adaptive-target-row" id="a2Targets" hidden>
+                  <label>Track 1 target
+                    <input id="pTarget1" type="number" step="0.05" min="0.05" max="0.95" value="0.2">
+                  </label>
+                  <label>Track 2 target
+                    <input id="pTarget2" type="number" step="0.05" min="0.05" max="0.95" value="0.8">
+                  </label>
+                </div>
+              </details>
+
+              <h3 style="margin-top:1rem">Word lists for this track</h3>
+              <p class="hint">
+                Select the lists to draw words from, in order. The track uses as many words
+                as “Number of trials”, pooling the selected lists.
+              </p>
+              <div id="adaptiveListPicker" class="adaptive-list-picker"></div>
+              <p class="hint" id="adaptiveListStatus">No lists selected.</p>
+              <div class="actions">
+                <button id="startAdaptiveBtn" type="button">▶ Start adaptive track</button>
+              </div>
+            </div>
+
+            <div class="card" id="queueCard">
+              <h2>List queue</h2>
+              <div class="queue-add-row">
+                <label>List
+                  <select id="listChoice"></select>
+                </label>
+                <label>Level, dB(A)
+                  <input id="listLevel" type="number" step="5" value="60">
+                </label>
+                <button id="addListBtn" type="button">Add list</button>
+                <button id="addRandomBtn" type="button" class="secondary">Random</button>
+              </div>
+              <div class="queue-add-row">
+                <label>Add <input id="randomCount" type="number" min="1" max="10" value="1" style="width:4rem"> random lists at
+                  <input id="randomLevel" type="number" step="5" value="60" style="width:5rem"> dB(A)
+                </label>
+                <button id="addNRandomBtn" type="button" class="secondary">Add</button>
+              </div>
+              <div class="queue-toolbar">
+                <button id="addQueueBtn" type="button" class="small-add">+ Add list</button>
+              </div>
+              <div id="queueChips" class="chips queue-chips"></div>
+              <div class="actions">
+                <button id="startBtn" type="button">▶ Start testing</button>
+              </div>
+            </div>
+
+            <div class="card" id="recentSessionsCard">
+              <h2>Recent sessions</h2>
+              <div id="recentSessionsList"></div>
+              <p class="hint" id="noRecentHint">No saved session found.</p>
+            </div>
+
+          </div>
+
+          <!-- Right: persistent clinic settings + calibration -->
+          <aside class="setup-aside">
+
+            <div class="card">
+              <h3>Clinic / report settings</h3>
+              <label>Clinic / organisation name
+                <input id="clinicName" placeholder="e.g. UC Hearing Clinic">
+              </label>
+              <div class="logo-section">
+                <p class="hint" style="margin:.4rem 0 .3rem">Report logo</p>
+                <div class="logo-preview-row">
+                  <div id="logoPreview" class="logo-preview"></div>
+                  <div class="logo-btns">
+                    <button id="replaceLogoBtn" type="button" class="secondary">Replace logo…</button>
+                    <button id="removeLogoBtn" type="button" class="secondary danger-text" style="display:none">Remove logo</button>
+                    <input id="logoFileInput" type="file" accept="image/png,image/svg+xml" style="display:none">
+                  </div>
+                </div>
+                <p class="hint" style="font-size:.8rem">PNG or SVG recommended. Shown on printed reports.</p>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>Results</h3>
+              <p id="setupResultsSummary" class="hint" style="font-size:.85rem;margin:.2rem 0 .6rem">No results recorded yet.</p>
+              <div class="actions stack">
+                <button id="setupReportBtn" type="button">Report / print PDF</button>
+                <button id="setupDownloadJsonBtn" type="button" class="secondary">Download JSON</button>
+                <button id="setupDownloadTsvBtn" type="button" class="secondary">Download TSV</button>
+                <button id="setupCopyTsvBtn" type="button" class="secondary">Copy TSV</button>
+              </div>
+              <div style="margin-top:.75rem;border-top:1px solid var(--line);padding-top:.65rem">
+                <p class="hint" style="font-size:.82rem;margin:.1rem 0 .4rem">Open a previously saved JSON file to reload results:</p>
+                <button id="openJsonBtn" type="button" class="secondary" style="width:100%">📂 Open saved results…</button>
+                <input id="openJsonFileInput" type="file" accept="application/json,.json" style="display:none">
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>Calibration</h3>
+              <p class="hint" style="font-size:.85rem">Sets the level the app treats as full output. Choose your method and follow the steps.</p>
+              <p id="preloadStatus" class="hint" style="font-size:.8rem;color:var(--muted,#667)"></p>
+              <button id="preloadAllBtn" type="button" class="secondary" style="font-size:.8rem;padding:.25rem .6rem">⤓ Prepare all sounds for offline</button>
+              <div class="actions wrap">
+                <button id="calibrateBtn" type="button">▶ Calibration noise</button>
+                <button id="testCalBtn" type="button" class="secondary" hidden>Test level</button>
+              </div>
+              <div class="volume-panel" style="margin-top:.7rem">
+                <label>Test output level
+                  <input id="outputLevel" type="range" min="-100" max="0" step="0.1" value="0">
+                </label>
+                <div class="level-readout">
+                  <strong id="outputLevelLabel">0 dB FS</strong>
+                  <span id="modeBadge">Uncalibrated</span>
+                </div>
+              </div>
+              <p id="calStatus" class="status" style="margin-top:.5rem"></p>
+
+              <div style="margin-top:.85rem;border-top:1px solid var(--line);padding-top:.65rem">
+                <p class="hint" style="font-size:.82rem;margin:.1rem 0 .45rem">
+                  <strong>CVC file gain adjustment:</strong> applied to every sound played
+                  from the <code>sounds_cvc/</code> folder (the CVC words and the CVC 1&nbsp;kHz
+                  calibration tone). The default of <code>&minus;5.07&nbsp;dB</code> puts the CVC
+                  word set on the same effective level scale as the te reo CVCV set under one
+                  audiometer calibration. Do not change it unless you have re-measured the two
+                  word sets.
+                </p>
+                <label style="display:flex;align-items:center;gap:.5rem;font-size:.85rem">
+                  CVC file gain adjustment
+                  <input id="cvcGainInput" type="number" step="0.01" style="width:6.5rem" value="-5.07">
+                  dB
+                </label>
+                <div class="actions wrap" style="margin-top:.4rem">
+                  <button id="cvcGainApplyBtn" type="button" class="secondary" style="font-size:.8rem;padding:.25rem .6rem">Apply adjustment…</button>
+                  <button id="cvcGainResetBtn" type="button" class="secondary" style="font-size:.8rem;padding:.25rem .6rem">Reset to default</button>
+                </div>
+                <p id="cvcGainStatus" class="hint" style="font-size:.8rem;margin-top:.35rem"></p>
+              </div>
+            </div>
+
+          </aside>
+        </div>
+      </section>
+
+      <!-- ── TEST ── -->
+      <section id="screen-test" class="screen">
+        <div class="test-layout">
+          <div class="card">
+            <div class="test-top">
+              <div>
+                <h2 id="currentWord">—</h2>
+                <p id="currentMeta" class="hint">—</p>
+              </div>
+              <button id="abandonBtn" class="small danger" title="Abandon list">×</button>
+            </div>
+
+            <div class="level-nudge-bar">
+              <button id="levelDownBtn" type="button" class="secondary level-nudge-btn" title="Decrease level 5 dB (←)">−5</button>
+              <span class="level-nudge-display"><span id="levelNudgeLabel">60</span> <span class="level-nudge-unit">dB(A)</span></span>
+              <button id="levelUpBtn" type="button" class="secondary level-nudge-btn" title="Increase level 5 dB (→)">+5</button>
+              <span id="runningScore" class="running-score">—</span>
+            </div>
+
+            <div id="progressIndicator" class="chips"></div>
+
+            <div class="playback-status">
+              <span id="maskerStatus" class="status-pill off">Masker off</span>
+              <span id="stimulusStatus" class="status-pill off">Kupu idle</span>
+            </div>
+
+            <div class="masker-live">
+              <label>Masker level, dB(A)
+                <input id="maskLevelLive" type="number" step="5" value="40">
+              </label>
+              <label>Masker ear
+                <select id="maskEarLive">
+                  <option value="off">Off</option>
+                  <option value="left">Left</option>
+                  <option value="right">Right</option>
+                  <option value="binaural">Binaural</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="actions wrap">
+              <button id="playWordBtn" type="button" class="big">Play "Kōrero mai..." + kupu</button>
+              <button id="repeatWordBtn" type="button" class="secondary">Replay kupu only</button>
+              <button id="replayResponseBtn" type="button" class="secondary" hidden>Replay client response</button>
+              <button id="toggleMaskBtn" type="button" class="secondary">Start masker</button>
+            </div>
+
+            <h3>Fast score</h3>
+            <div class="score-buttons"></div>
+
+            <div class="phoneme-heading"><h3 id="phonemeHeading">Phoneme scoring</h3></div>
+            <div id="targetPhonemes" class="phoneme-row"></div>
+            <details id="advancedDetails">
+              <summary>Advanced response phoneme selection</summary>
+              <div id="advancedColumns" class="advanced-grid"></div>
+            </details>
+
+            <label>Comment / heard response
+              <input id="trialComment" placeholder="Optional">
+            </label>
+
+            <div class="sticky-next actions">
+              <button id="clearScoreBtn" type="button" class="secondary">Clear</button>
+              <button id="nextTrialBtn" type="button">Next</button>
+            </div>
+          </div>
+
+          <aside class="card">
+            <div id="adaptiveTabs" class="pi-tabs" hidden>
+              <button type="button" class="pi-tab active" data-atab="track">Track</button>
+              <button type="button" class="pi-tab" data-atab="estimate">Estimate</button>
+            </div>
+
+            <div id="adaptivePanel" hidden>
+              <div id="adaptiveTrackView">
+                <h3 id="adaptiveTrackTitle">Adaptive track</h3>
+                <p class="hint" id="adaptiveProgressLine">—</p>
+                <canvas id="adaptiveTrackCanvas" width="440" height="420"></canvas>
+                <p class="hint">Top: psychometric function with per-word markers (red = none correct → green = all correct) and the 50% → SRT line. Bottom: the adaptive track on the same dB(A) scale.</p>
+              </div>
+              <div id="adaptiveEstimateView" hidden>
+                <h3>Psychometric estimate</h3>
+                <div id="adaptiveEstimateNumbers" class="adaptive-estimate-numbers">—</div>
+                <canvas id="adaptiveFitCanvas" width="440" height="420"></canvas>
+                <p class="hint">Fitted per-phoneme intelligibility; the SRT is the 50% point. Track shown below on the same scale.</p>
+              </div>
+            </div>
+
+            <h3 id="currentListHeading">Current list</h3>
+            <div id="trialNavigator" class="trial-navigator"></div>
+
+            <h3 id="piHeading">Performance intensity</h3>
+            <div id="piTabs" class="pi-tabs" hidden></div>
+            <canvas id="piCanvas" width="420" height="300"></canvas>
+            <div class="legend">
+              <span><b class="blue">×</b> Left</span>
+              <span><b class="red">○</b> Right</span>
+              <span><b>B</b> Binaural</span><span><b>S/A/U</b> SF/Aided/Unaided</span>
+            </div>
+            <div class="legend legend-masked">
+              <span><b class="blue">××</b> Masked left</span>
+              <span><b class="red">●</b> Masked right</span>
+              <span>Left dashed · Right solid</span>
+            </div>
+            <h3>Exports</h3>
+            <div class="actions stack">
+              <button id="downloadJsonBtn" type="button" class="secondary">Download JSON</button>
+              <button id="emailAnonBtn" type="button" class="secondary">Email anonymised results</button>
+              <button id="convertBackupBtn" type="button" class="secondary">Convert email backup…</button>
+              <button id="downloadTsvBtn" type="button" class="secondary">Download TSV</button>
+              <button id="copyTsvBtn" type="button" class="secondary">Copy TSV</button>
+              <button id="reportBtn" type="button" class="secondary">Report / print PDF</button>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ── REPORT ── -->
+      <section id="screen-report" class="screen">
+        <div class="card report-card">
+          <div class="actions no-print">
+            <button id="backToTestBtn" type="button" class="secondary">Back</button>
+            <button id="printBtn" type="button">Print / save PDF</button>
+          </div>
+          <div id="reportContent"></div>
+        </div>
+      </section>
+    </main>
   </div>
 
-  <p class="small">University of Canterbury Four-Alternative Forced Choice Speech Test</p>
-
-  <input id="name" placeholder="Participant name/code" /><br />
-<label hidden>
-    Delay (ms): <input id="delay" type="number" value="1500" />
-  </label><br hidden>
-
-  <button id="trainBtn">Training</button>
-  <button id="startBtn">Start</button><br />
-  <button id="setupBtn">Setup</button>
-  <button id="calibrateBtn">Calibration</button>
-<label>
-  <br>Take a break every
-  <input id="breakEvery" type="number" min="0" value="32" style="width:4em;">
-  presentations
-</label>
- <!-- <p class="footer">
-    &copy; 2025 G.O'B.
-  </p>-->
-</div>
-
-<div id="instructions" class="screen">
-  <h2 id="instructions-title"></h2>
-  <p id="instructions-text"></p>
-  <button id="backBtn">Back</button>
-  <button id="okBtn">OK</button>
-</div>
-
-<!-- Calibration screen -->
-<div id="calibration" class="screen">
-  <h2>Calibration</h2>
-  <p class="small" style="max-width:34rem; margin:0.5rem auto;">
-    Turn device volume fully up, play the calibration noise, set the level by
-    your chosen method, then stop and enter the value. The measured level becomes
-    the reference; presentation level is set with the slider below.
-  </p>
-
-  <div class="cal-method" style="max-width:34rem; margin:0.75rem auto; text-align:left;">
-    <label for="calMethodSelect"><strong>Calibration method</strong></label><br>
-    <select id="calMethodSelect" style="margin:0.35rem 0;">
-      <option value="audiometer">Audiometer — via aux / tape input</option>
-      <option value="soundfield">Sound field — sound level meter</option>
-    </select>
-    <ol id="calSteps" class="small" style="margin:0.5rem 0 0 1.1rem; padding:0;"></ol>
-  </div>
-
-  <div id="calEarWrap" class="cal-ear" style="max-width:34rem; margin:0.75rem auto; text-align:left;">
-    <label for="calEarSelect"><strong>Calibrate channel</strong></label>
-    <select id="calEarSelect" style="margin-left:0.5rem;">
-      <option value="left">Left</option>
-      <option value="right">Right</option>
-      <option value="binaural">Both</option>
-    </select>
-    <div id="calEarHint" class="small" style="margin-top:0.35rem;"></div>
-  </div>
-
-  <div style="margin:1rem 0;">
-    <button id="calToneToggleBtn">Calibration noise</button>
-    <button id="testCalBtn" hidden>Test level</button>
-  </div>
-
-  <div class="volume-panel">
-    <label for="outputLevel">Test output level</label><br>
-    <input id="outputLevel" type="range" min="-100" max="0" step="0.1" value="0" style="width:min(340px,80vw);">
-    <div class="level-readout">
-      <strong id="outputLevelLabel">0 dB FS</strong>
-      <span id="modeBadge">Uncalibrated</span>
-    </div>
-  </div>
-
-  <p id="calStatus" class="small" style="min-height:1.4rem;"></p>
-
-  <div style="margin-top:1.25rem;">
-    <button id="calClearBtn" style="background:#777;">Clear calibration</button>
-    <button id="calBackBtn">Back</button>
-  </div>
-</div>
-
-<!-- Setup screen (adaptive track controls) -->
-<div id="setup" class="screen">
-  <h2>Setup</h2>
-
-  <div class="setup-block">
-    <span class="setup-label">Mode</span>
-    <div class="segmented" id="modeSegmented">
-      <button type="button" data-mode="lpf" class="seg-btn active">Low-pass filter</button>
-      <button type="button" data-mode="quiet" class="seg-btn">Quiet (level)</button>
-      <button type="button" data-mode="snr" class="seg-btn">Noise (SNR)</button>
-    </div>
-    <p class="small" id="modeHint">Adapts the equivalent low-pass cutoff (Hz).</p>
-  </div>
-
-  <div class="setup-block">
-    <span class="setup-label">Procedure</span>
-    <div class="segmented" id="procSegmented">
-      <button type="button" data-proc="wudr" class="seg-btn active">WUDR</button>
-      <button type="button" data-proc="a1" class="seg-btn">A1</button>
-      <button type="button" data-proc="a2" class="seg-btn">A2</button>
-    </div>
-  </div>
-
-  <div class="setup-block">
-    <span class="setup-label">Common</span>
-    <div class="setup-grid">
-      <label id="setStartCutoffWrap"><span id="lblStart">Starting cutoff (Hz)</span>
-        <input id="setStartCutoff" type="number" min="80" max="6000" step="10" value="1000">
-      </label>
-      <label>Number of trials
-        <input id="setNTrials" type="number" min="1" max="66" value="33">
-      </label>
-      <label>Alternatives (A)
-        <input id="setA" type="number" value="4" readonly>
-      </label>
-      <label>Target (4AFC midpoint)
-        <input id="setTarget" type="text" value="62.5%" readonly>
-      </label>
-    </div>
-  </div>
-
-  <div class="setup-block" id="lpfLevelBlock">
-    <span class="setup-label">Presentation level</span>
-    <div class="setup-grid">
-      <label><span id="lblLpfLevel">Level (dB A)</span>
-        <input id="setLpfLevel" type="number" step="1" value="65">
-      </label>
-    </div>
-    <p class="small" id="lpfLevelHint">Calibrated: dB(A). Uncalibrated: dB FS attenuation (0 = full scale); device volume sets absolute loudness.</p>
-  </div>
-
-  <div class="setup-block" id="wudrBlock">
-    <span class="setup-label">WUDR (two-phase)</span>
-    <div class="setup-grid">
-      <label><span class="lblStepUnit-wd">Working down step (dec)</span>
-        <input id="setWorkDown" type="number" step="0.0001" value="0.0212">
-      </label>
-      <label><span class="lblStepUnit-wu">Working up step (dec)</span>
-        <input id="setWorkUp" type="number" step="0.0001" value="0.0348">
-      </label>
-      <label><span class="lblStepUnit-id">Initial down step (dec)</span>
-        <input id="setInitDown" type="number" step="0.0001" value="0.0511">
-      </label>
-      <label><span class="lblStepUnit-iu">Initial up step (dec)</span>
-        <input id="setInitUp" type="number" step="0.0001" value="0.0822">
-      </label>
-      <label>Switch to working after N reversals
-        <input id="setSwitchRev" type="number" min="0" step="1" value="5">
-      </label>
-    </div>
-    <p class="small" id="wudrHint">Defaults: down &minus;4.76% / up +8.33% (working); down &minus;11.1% / up +20.8% (initial). 0 reversals = single-phase.</p>
-  </div>
-
-  <div class="setup-block" id="snrBlock" hidden>
-    <span class="setup-label">Noise (SNR)</span>
-    <div class="setup-grid">
-      <label><span id="lblSnrNoiseLevel">Noise level (dB A)</span>
-        <input id="setSnrNoiseLevel" type="number" step="1" value="65">
-      </label>
-      <label>WUDR step multiplier
-        <input id="setSnrStepMult" type="number" min="0.05" max="2" step="0.05" value="0.2">
-      </label>
-      <label>Word onset in file (ms)
-        <input id="setSnrWordLead" type="number" min="0" max="3000" step="10" value="600">
-      </label>
-      <label>Noise lead before word (ms)
-        <input id="setSnrNoiseLead" type="number" min="0" max="3000" step="10" value="600">
-      </label>
-      <label>Noise trail after word (ms)
-        <input id="setSnrNoiseTrail" type="number" min="0" max="3000" step="10" value="600">
-      </label>
-      <label>Noise ramp in/out (ms)
-        <input id="setSnrNoiseRamp" type="number" min="0" max="1000" step="10" value="100">
-      </label>
-    </div>
-    <p class="small" id="snrHint">WUDR steps = quiet-mode dB steps &times; the multiplier. Noise (noise.mp3) is fixed at the presentation level; the signal moves by the SNR. Noise starts <em>lead</em> ms before the word&rsquo;s audible onset and ends <em>trail</em> ms after it, ramping in/out. &ldquo;Word onset in file&rdquo; is the silent lead-in inside each stimulus file &mdash; adjust so the noise lines up with the actual speech.</p>
-  </div>
-
-  <div class="setup-block" id="a1Block" hidden>
-    <span class="setup-label">A1</span>
-    <div class="setup-grid">
-      <label>Tracking-slope constant
-        <input id="setA1Slope" type="number" step="0.1" value="10">
-      </label>
-    </div>
-  </div>
-
-  <div class="setup-block" id="a2Block" hidden>
-    <span class="setup-label">A2</span>
-    <div class="setup-grid">
-      <label>Tracking-slope constant
-        <input id="setA2Slope" type="number" step="0.1" value="10">
-      </label>
-      <label>Lower sweet point
-        <input id="setPLow" type="text" value="0.40" readonly>
-      </label>
-      <label>Upper sweet point
-        <input id="setPHigh" type="text" value="0.85" readonly>
-      </label>
-    </div>
-    <label class="setup-check"><input type="checkbox" id="setA2Doubling" checked> B&amp;K step-doubling at sweet points</label>
-    <p class="small">Dual tracks interleaved; sweet points auto-derived from the floor (0.40 / 0.85 for 4AFC).</p>
-  </div>
-
-  <div class="setup-block">
-    <span class="setup-label">Presentation routing</span>
-    <div class="setup-grid">
-      <label>Ear / channel
-        <select id="setRouting">
-          <option value="binaural">Binaural</option>
-          <option value="left">Left</option>
-          <option value="right">Right</option>
+  <!-- Dialogs -->
+  <dialog id="trialEditDialog">
+    <form method="dialog" class="dialog-card">
+      <h2 id="trialEditTitle">Edit trial</h2>
+      <input id="trialEditResultIndex" type="hidden">
+      <label>Score
+        <select id="trialEditScore">
+          <option value="0">0/4</option>
+          <option value="1">1/4</option>
+          <option value="2">2/4</option>
+          <option value="3">3/4</option>
+          <option value="4">4/4</option>
         </select>
       </label>
-    </div>
-    <p class="small">Applies to the stimuli for this run.</p>
-  </div>
-
-  <div class="setup-block">
-    <span class="setup-label">Normalisation</span>
-    <p class="small" style="margin-top:0;">Collect normalisation data using the method of constant stimuli (fixed list of SNRs or LPF cutoffs, every word at every level, repeated).</p>
-    <button id="openConstBtn" type="button">Constant stimuli&hellip;</button>
-  </div>
-
-  <div style="margin-top:1rem;">
-    <button id="setupSaveBtn">Save as default</button>
-    <button id="setupResetBtn" style="background:#777;">Reset defaults</button>
-    <button id="setupBackBtn">Back</button>
-  </div>
-  <p id="setupStatus" class="small" style="min-height:1.2rem;"></p>
-</div>
-
-<!-- Constant Stimuli screen (method of constant stimuli; normalisation) -->
-<div id="conststim" class="screen">
-  <h2>Constant Stimuli</h2>
-
-  <div class="setup-block">
-    <span class="setup-label">Mode</span>
-    <div class="segmented" id="csModeSegmented">
-      <button type="button" data-csmode="snr" class="seg-btn active">Noise (SNR)</button>
-      <button type="button" data-csmode="lpf" class="seg-btn">Low-pass filter</button>
-    </div>
-    <p class="small" style="margin-bottom:0;">SNR and LPF each keep their own saved level list.</p>
-  </div>
-
-  <div class="setup-block">
-    <span class="setup-label">Levels</span>
-    <label style="display:block; font-weight:600; font-size:0.85rem; color:#333; text-align:left;">
-      <span id="csLevelsLabel">SNRs (dB, comma-separated)</span>
-      <input id="csLevels" type="text" style="width:100%; margin-top:0.25rem;" placeholder="-15, -12, -9, -6, -3">
-    </label>
-    <div class="setup-grid" style="margin-top:0.6rem;">
-      <label>Repeats
-        <input id="csRepeats" type="number" min="1" max="10" step="1" value="2">
+      <label>Comment / heard response
+        <input id="trialEditComment">
       </label>
-      <label>Break every (presentations)
-        <input id="csBreakEvery" type="number" min="0" step="1" value="40">
+      <menu>
+        <button value="cancel" class="secondary">Cancel</button>
+        <button id="trialEditSaveBtn" type="button">Save</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="calibrationDialog">
+    <form method="dialog" class="dialog-card">
+      <h2>Calibration</h2>
+      <label>Method
+        <select id="calMethodSelect">
+          <option value="audiometer">Audiometer — via aux / tape input</option>
+          <option value="soundfield">Sound field — sound level meter</option>
+        </select>
       </label>
-    </div>
-    <p class="small" id="csSummary" style="margin-bottom:0;"></p>
-  </div>
+      <ol id="calSteps" class="cal-steps"></ol>
+      <div class="actions wrap" style="align-items:center;gap:.5rem">
+        <button id="calPlayBtn" type="button">▶ Play 1 kHz tone</button>
+        <label id="calEarWrap" style="display:flex;align-items:center;gap:.35rem;font-size:.85rem;margin:0">
+          Route to
+          <select id="calEarSelect" style="width:auto">
+            <option value="left">Left only</option>
+            <option value="right">Right only</option>
+            <option value="binaural">Both</option>
+          </select>
+        </label>
+      </div>
+      <p id="calEarHint" class="hint" style="font-size:.8rem"></p>
+      <label id="calLevelSingleWrap">
+        <span id="calLevelLabelText">Audiometer dial setting, dB(A)</span>
+        <input id="calLevelInput" type="number" step="5" inputmode="decimal">
+      </label>
+      <div id="calDialDualWrap" style="display:none">
+        <p class="hint" style="font-size:.8rem;margin:.2rem 0">
+          Set each audiometer channel's dial and zero it to VU 0 off the tone. Give an
+          ear more headroom (a higher dial) if its loss needs it — the software uses each
+          side's dial for that ear.
+        </p>
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:.6rem">
+          <label>Left dial, dB(A)
+            <input id="calDialLeft" type="number" step="5" inputmode="decimal">
+          </label>
+          <label>Right dial, dB(A)
+            <input id="calDialRight" type="number" step="5" inputmode="decimal">
+          </label>
+        </div>
+      </div>
+      <p id="calLevelHint" class="hint"></p>
+      <p id="calDialogStatus" class="status"></p>
+      <menu>
+        <button value="cancel" class="secondary">Cancel</button>
+        <button id="calSaveBtn" type="button">Save calibration</button>
+      </menu>
+    </form>
+  </dialog>
 
-  <div style="margin-top:1rem;">
-    <button id="csStartBtn">Start run</button>
-    <button id="csSaveBtn" style="background:#777;">Save as default</button>
-    <button id="csBackBtn" style="background:#777;">Back</button>
-  </div>
-  <p id="csStatus" class="small" style="min-height:1.2rem;"></p>
-</div>
+  <dialog id="conditionDialog">
+    <form method="dialog" class="dialog-card">
+      <h2>Change presentation condition</h2>
+      <p class="hint">Changes condition for future trials. Previous data unchanged.</p>
+      <label>Presentation condition
+        <select id="conditionEditSelect">
+          <option value="left">Left</option>
+          <option value="right">Right</option>
+          <option value="binaural">Binaural</option>
+          <option value="soundfield">Sound field</option>
+          <option value="aided">Aided</option>
+          <option value="unaided">Unaided</option>
+        </select>
+      </label>
+      <menu>
+        <button value="cancel" class="secondary">Cancel</button>
+        <button id="conditionSaveBtn" type="button">Save</button>
+      </menu>
+    </form>
+  </dialog>
 
-<!-- Break screen -->
-<div id="break" class="screen" style="display:none;">
-  <h2>You're doing a great job!</h2>
-  <p>Let's take a break.</p>
-  <button id="breakOkBtn">Ready to keep going?</button>
-</div>
+  <dialog id="queueDialog">
+    <form method="dialog" class="dialog-card">
+      <h2 id="queueDialogTitle">Edit list</h2>
+      <input id="queueEditIndex" type="hidden">
+      <div class="grid two">
+        <label>List <select id="queueListNumber"></select></label>
+        <label>Level, dB(A) <input id="queueLevel" type="number" step="5" value="60"></label>
+      </div>
+      <menu>
+        <button id="queueDeleteBtn" value="delete" class="danger" type="button">Delete</button>
+        <button value="cancel" class="secondary">Cancel</button>
+        <button id="queueSaveBtn" value="save" type="button">Save</button>
+      </menu>
+    </form>
+  </dialog>
 
-<div id="loading" class="screen" style="display:none; text-align:center; padding:2em;">
-  <h2>[wait] Loading assets...</h2>
-  <p>This may take a few seconds. Please wait...</p>
-  <button id="loading-ok" style="display:none; margin-top: 1em;">OK</button>
-</div>
+  <dialog id="mitaDialog">
+    <form method="dialog" class="dialog-card mita-dialog-card">
+      <h2 id="mitaTitle">Mita / dialect substitutions</h2>
+      <p class="hint" id="mitaIntro">Select the realisations this client uses. Selected substitutions score as correct wherever the target phoneme occurs.</p>
+      <div class="mita-groups">
+        <div class="mita-group">
+          <h4>ng <span class="mita-target">/ŋ/</span></h4>
+          <div class="mita-toggle-row">
+            <button type="button" class="mita-toggle" data-target="ŋ" data-sub="k">/ŋ/ → /k/</button>
+            <button type="button" class="mita-toggle" data-target="ŋ" data-sub="n">/ŋ/ → /n/</button>
+          </div>
+        </div>
+        <div class="mita-group">
+          <h4>wh <span class="mita-target">/f/</span></h4>
+          <div class="mita-toggle-row">
+            <button type="button" class="mita-toggle" data-target="f" data-sub="w">/f/ → /w/</button>
+            <button type="button" class="mita-toggle" data-target="f" data-sub="h">/f/ → /h/</button>
+          </div>
+        </div>
+      </div>
+      <menu>
+        <button id="mitaCancelBtn" value="cancel" class="secondary">Cancel</button>
+        <button id="mitaSaveBtn" type="button">Save</button>
+      </menu>
+    </form>
+  </dialog>
 
-<div id="countdown" style="font-size: 2rem; margin: 1rem auto; color: #444; display: none;"></div>
+  <dialog id="abandonDialog">
+    <form method="dialog" class="dialog-card">
+      <h2>Abandon this list?</h2>
+      <p>Data already entered will be saved.</p>
+      <menu>
+        <button value="cancel" class="secondary">Cancel</button>
+        <button id="confirmAbandonBtn" value="abandon" class="danger">Abandon list</button>
+      </menu>
+    </form>
+  </dialog>
 
-<div id="main" class="screen">
-  <img id="training-img" />
-</div>
+  <dialog id="trainingFeedbackDialog">
+    <form method="dialog" class="dialog-card">
+      <h2 id="tfTitle">Feedback</h2>
+      <div id="tfBody" class="tf-body"></div>
+      <menu>
+        <button id="tfPlayKupuBtn" type="button" class="secondary" hidden>🔊 Kupu</button>
+        <button id="tfPlayResponseBtn" type="button" class="secondary" hidden>🔊 Response</button>
+        <button id="tfRevealBtn" type="button" class="secondary" hidden>Use correct score &amp; continue</button>
+        <button id="tfContinueBtn" type="button" hidden>Continue ▶</button>
+        <button id="tfCloseBtn" value="cancel" class="secondary">Close</button>
+      </menu>
+    </form>
+  </dialog>
 
-<div id="test" class="screen">
-  <button id="abortBtn" title="Abort test">[X]</button> 
-  <audio id="stimulus"></audio>
-<div class="grid-container">
-  <div class="grid">
-      <div><img id="opt0" /></div>
-      <div><img id="opt1" /></div>
-      <div><img id="opt2" /></div>
-      <div><img id="opt3" /></div>
-  </div>
-</div>
-</div>
+  <dialog id="trainingSummaryDialog">
+    <form method="dialog" class="dialog-card">
+      <h2 id="tsTitle">Training summary</h2>
+      <div id="tsBody" class="tf-body"></div>
+      <menu>
+        <button id="tsContinueBtn" value="ok">Continue ▶</button>
+      </menu>
+    </form>
+  </dialog>
 
-<div id="thankyou" class="screen">
-  <h1>Thank you for participating!</h1>
-  <div class="small" id="fileinfo"></div>
-  <button id="saveAgainBtn">Save again</button>
-  <button id="emailBtn">Email</button>
-  <button id="returnBtn">Return to Start</button>
-</div>
+  <dialog id="adaptiveRailDialog">
+    <form method="dialog" class="dialog-card">
+      <h2>Calibration limit reached</h2>
+      <div id="adaptiveRailBody" class="tf-body"></div>
+      <menu>
+        <button id="adaptiveRailAbandon" value="abandon" class="danger" type="button">Abandon track</button>
+        <button id="adaptiveRailContinue" value="continue" type="button">Continue at limit</button>
+      </menu>
+    </form>
+  </dialog>
 
+  <dialog id="adaptiveSummaryDialog">
+    <form method="dialog" class="dialog-card">
+      <h2>Adaptive track complete</h2>
+      <div id="adaptiveSummaryBody" class="tf-body"></div>
+      <menu>
+        <button id="adaptiveSummaryContinue" value="ok">Done ▶</button>
+      </menu>
+    </form>
+  </dialog>
 
-  <script id="list-fallback" type="text/plain">
-nose	rose	keys	tongue	nose	nose.mp3
-dad	sad	hood	mum	dad	dad.mp3
-purse	nurse	bus	keys	purse	purse.mp3
-sock	rock	duck	boot	sock	sock.mp3
-van	man	hen	bus	van	van.mp3
-chalk	fork	duck	note	chalk	chalk.mp3
-zip	ship	shop	suit	zip	zip.mp3
-boat	coat	kite	van	boat	boat.mp3
-rose	nose	keys	leaf	rose	rose.mp3
-hen	pen	pan	bird	hen	hen.mp3
-goat	boat	hut	hen	goat	goat.mp3
-head	bed	card	feet	head	head.mp3
-mop	shop	chip	hug	mop	mop.mp3
-hug	bug	bag	seed	hug	hug.mp3
-rug	bug	pig	mop	rug	rug.mp3
-fan	van	bone	shark	fan	fan.mp3
-night	kite	coat	rug	night	night.mp3
-man	fan	pen	shark	man	man.mp3
-fork	chalk	back	rug	fork	fork.mp3
-rock	sock	fork	boot	rock	rock.mp3
-nurse	purse	bus	coat	nurse	nurse.mp3
-sad	dad	road	mum	sad	sad.mp3
-shirt	dirt	nut	bed	shirt	shirt.mp3
-kite	night	cot	park	kite	kite.mp3
-coat	note	kite	sock	coat	coat.mp3
-nut	hut	night	leaf	nut	nut.mp3
-cat	hat	cot	bird	cat	cat.mp3
-lock	sock	lick	knees	lock	lock.mp3
-bug	hug	bag	hood	bug	bug.mp3
-log	dog	leg	chin	log	log.mp3
-pan	man	pen	king	pan	pan.mp3
-beach	peach	beak	gate	beach	beach.mp3
-chip	zip	chin	cake	chip	chip.mp3
-bat	hat	back	duck	bat	bat.mp3
-cone	bone	comb	pig	cone	cone.mp3
-bite	light	bike	cap	bite	bite.mp3
-cage	page	cake	knees	cage	cage.mp3
-mouse	house	mouth	gate	mouse	mouse.mp3
-suit	boot	soup	zip	suit	suit.mp3
-shark	park	heart	goat	shark	shark.mp3
-keys	knees	sheep	house	keys	keys.mp3
-dog	log	rock	sheep	dog	dog.mp3
-note	boat	cone	book	note	note.mp3
-page	cage	cake	book	page	page.mp3
-house	mouse	mouth	gate	house	house.mp3
-ship	chip	lick	beach	ship	ship.mp3
-feet	meat	seed	sack	feet	feet.mp3
-boot	suit	soup	sack	boot	boot.mp3
-bed	head	hen	hat	bed	bed.mp3
-peach	beach	feet	log	peach	peach.mp3
-bone	cone	comb	nut	bone	bone.mp3
-park	shark	heart	road	park	park.mp3
-light	bite	knife	mop	light	light.mp3
-hat	bat	back	lick	hat	hat.mp3
-tap	cap	cat	dog	tap	tap.mp3
-meat	feet	dirt	dad	meat	meat.mp3
-mum	hug	comb	lock	mum	mum.mp3
-leaf	beach	knife	road	leaf	leaf.mp3
-bus	duck	nurse	tap	bus	bus.mp3
-bin	ship	man	shark	bin	bin.mp3
-bag	dad	rug	meat	bag	bag.mp3
-dirt	purse	boat	card	dirt	dirt.mp3
-hood	book	bird	note	hood	hood.mp3
-pig	bin	bug	hen	pig	pig.mp3
-king	bin	tongue	man	king	king.mp3
-card	heart	bird	page	card	card.mp3
-heart	card	bite	nose	heart	heart.mp3
-knees	leaf	rose	head	knees	knees.mp3
-tongue	bug	king	mouth	tongue	tongue.mp3
-beak	sheep	chalk	head	beak	beak.mp3
-leg	pen	log	chin	leg	leg.mp3
-back	cap	bike	shirt	back	back.mp3
-pen	leg	pan	chalk	pen	pen.mp3
-book	hood	beak	note	book	book.mp3
-lick	chip	lock	mouth	lick	lick.mp3
-duck	bus	park	goat	duck	duck.mp3
-cot	rock	cat	bed	cot	cot.mp3
-sheep	meat	shop	dog	sheep	sheep.mp3
-seed	keys	sword	rose	seed	seed.mp3
-bird	nurse	bed	tap	bird	bird.mp3
-gate	cake	goat	fan	gate	gate.mp3
-shop	cot	ship	bin	shop	shop.mp3
-hut	mum	hat	king	hut	hut.mp3
-sack	cat	sock	knife	sack	sack.mp3
-sword	fork	sad	mum	sword	sword.mp3
-knife	light	night	fork	knife	knife.mp3
-soup	boot	suit	peach	soup	soup.mp3
-chin	zip	chip	nose	chin	chin.mp3
-bike	light	bite	van	bike	bike.mp3
-mouth	house	mouse	nose	mouth	mouth.mp3
-comb	bone	cone	pig	comb	comb.mp3
-cap	bat	cat	dog	cap	cap.mp3
-road	rose	sword	shirt	road	road.mp3
-cake	cage	park	soup	cake	cake.mp3
-  </script>
-
-<script src="main.inline.js"></script>
-
-<script>
-  if ("serviceWorker" in navigator) {
-    const isLocal = location.protocol === "file:";
-
-    if (isLocal) {
-      console.warn("[stop] Skipping service worker: running from file://");
-    } else {
-      navigator.serviceWorker.register("service-worker.js")
-        .then(reg => console.log("[OK] Service Worker registered:", reg.scope))
-        .catch(err => console.warn("[!] Service Worker failed to register:", err));
+  <style>
+    /* Training mode additions (self-contained) */
+    .card-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: .6rem;
+      flex-wrap: wrap;
+      margin-bottom: .4rem;
     }
-  }
-</script>
+    .card-header-row h2 { margin: 0; }
+    .training-controls {
+      display: flex;
+      gap: .6rem;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .training-controls select { width: auto; min-width: 240px; margin-top: 0; }
+    .training-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: .4rem;
+      background: #eef4ff;
+      border: 1px solid #b6cdf5;
+      color: #1d4ed8;
+      border-radius: 6px;
+      padding: .35rem .65rem;
+      font-weight: 700;
+      font-size: .88rem;
+    }
+    .tf-body { font-size: .95rem; line-height: 1.45; max-width: 560px; }
+    .tf-body .tf-row {
+      display: grid;
+      grid-template-columns: 5.2rem 1fr;
+      gap: .5rem;
+      align-items: baseline;
+      padding: .35rem .45rem;
+      border-radius: 8px;
+      margin: .25rem 0;
+    }
+    .tf-row.ok    { background: #f0fdf4; border: 1px solid #bbf7d0; }
+    .tf-row.bad   { background: #fff5f5; border: 1px solid #fecaca; }
+    .tf-row.note  { background: #fffbe6; border: 1px solid #fde68a; }
+    .tf-phon { font-weight: 800; font-size: 1.05rem; }
+    .tf-summary { font-weight: 800; margin: .4rem 0 .55rem; font-size: 1.05rem; }
+    .tf-teach { color: #92400e; }
 
+    /* Mita / dialect substitutions */
+    .notes-label-row {
+      display: inline-flex;
+      align-items: center;
+      gap: .6rem;
+    }
+    .mita-btn {
+      font-weight: 650;
+      font-size: .82rem;
+      line-height: 1;
+      padding: .28rem .6rem;
+      border-radius: 7px;
+    }
+    .mita-dialog-card { min-width: min(460px, 92vw); }
+    .mita-groups {
+      display: grid;
+      gap: .9rem;
+      margin: .8rem 0 .4rem;
+    }
+    .mita-group {
+      border: 1px solid var(--line, #d7d7d7);
+      border-radius: 12px;
+      padding: .6rem .7rem .75rem;
+    }
+    .mita-group h4 {
+      margin: 0 0 .5rem;
+      font-size: 1rem;
+      font-weight: 800;
+      display: flex;
+      align-items: baseline;
+      gap: .45rem;
+    }
+    .mita-group h4 .mita-target {
+      font-weight: 500;
+      color: #666;
+      font-size: .9rem;
+    }
+    .mita-toggle-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: .55rem;
+    }
+    .mita-toggle {
+      background: #f3f3f3;
+      color: #222;
+      border: 2px solid #d0d0d0;
+      border-radius: 10px;
+      padding: .65rem .4rem;
+      font-size: 1.1rem;
+      font-weight: 750;
+      cursor: pointer;
+    }
+    .mita-toggle.active {
+      background: #ecfdf3;
+      color: #166534;
+      border-color: #15803d;
+    }
+    .mita-dialog-card.readonly .mita-toggle {
+      cursor: default;
+      opacity: .92;
+    }
+    .mita-dialog-card.readonly .mita-toggle:not(.active) {
+      opacity: .5;
+    }
+  </style>
 
+  <!-- ─────────────────────────────────────────────────────────────────────
+       Versioned asset loader (cache-busting).
+
+       Every local script and the stylesheet are loaded with a ?v=BUILD query.
+       Bump BUILD once per deploy (any new value works — a date-time stamp is
+       easy) and every client picks up ALL new files on their next normal reload,
+       with no "empty cache and hard reload" needed.
+
+       Scripts are loaded strictly in order to preserve dependencies (app.js and
+       the allocation must be present before experiment.js, etc.).
+       ───────────────────────────────────────────────────────────────────── -->
+  <script>
+    (function () {
+      // Cache-busting version. Bumped on every delivery so uploaded files are
+      // picked up on a normal reload — no manual editing needed on upload.
+      // Current: 2026-09-02-5
+      var BUILD = "2026-09-02-5";
+      window.__APP_BUILD__ = BUILD;
+
+      // Version the stylesheet too (swap the href for a ?v= copy).
+      var link = document.querySelector('link[rel="stylesheet"][href="style.css"]');
+      if (link) link.href = "style.css?v=" + BUILD;
+
+      var scripts = [
+        "config.js", "sessions.js", "anonymiser.js", "adaptive.js", "app.js",
+        "experiment_allocation.js", "participant_inputs.js", "masking.js",
+        "masking_ui.js", "nonadaptive.js", "experiment.js"
+      ];
+      // Load sequentially so execution order matches the old static tags exactly.
+      (function next(i) {
+        if (i >= scripts.length) return;
+        var s = document.createElement("script");
+        s.src = scripts[i] + "?v=" + BUILD;
+        s.async = false;
+        s.onload = function () { next(i + 1); };
+        s.onerror = function () {
+          console.error("Failed to load", s.src);
+          next(i + 1);   // continue so a single 404 doesn't halt the whole app
+        };
+        document.body.appendChild(s);
+      })(0);
+    })();
+  </script>
 </body>
 </html>
