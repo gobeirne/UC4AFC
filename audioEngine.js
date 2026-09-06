@@ -648,16 +648,14 @@ const AudioEngine = (() => {
   let calibRouter = null;
   const CALIB_KEY = "__calib__";
 
-  // Decode + cache a noise file (idempotent), keyed BY URL. Used by both the
-  // calibration tone (calib.wav, looped in the cal routine) and the SNR mix path
-  // (noise.mp3 — same underlying audio as calib.wav, but a separate file because
-  // the mp3 has a tiny start/end dropout that only matters when looping, which
-  // the calibration routine does and the SNR path no longer does). Keying by URL
-  // lets those two files coexist instead of the first-fetched one winning a
-  // shared slot.
+  // Decode + cache an audio asset (idempotent), keyed BY URL. Used by both the
+  // calibration tone (calibration_UC4AFC_1kHz.mp3 — a 1 kHz sine, looped in the
+  // cal routine) and the SNR mix path (noise.mp3 — speech-shaped noise). These are
+  // now distinct files with different content, so keying the cache by URL is what
+  // lets them coexist instead of the first-fetched one winning a shared slot.
   //
-  // No LUFS measurement: the noise level is set purely by the presentation gain
-  // (calibration slider / device volume), and the word↔noise ratio is fixed at
+  // No LUFS measurement: the presentation level is set by the calibration gain
+  // (audiometer dial / device volume) and the word-to-noise ratio is fixed at
   // source, so nothing here needs the file's measured loudness. `momentary` is
   // left null for the one informational caller (startCalibrationTone).
   async function ensureCalibNoise(url = "sounds/noise.mp3") {
@@ -674,7 +672,7 @@ const AudioEngine = (() => {
     return entry;
   }
 
-  async function startCalibrationTone(url = "sounds/calib.mp3", { onStarted = null, extraGainDb = 0, ear = "binaural" } = {}) {
+  async function startCalibrationTone(url = "sounds/calibration_UC4AFC_1kHz.mp3", { onStarted = null, extraGainDb = 0, ear = "binaural" } = {}) {
     const c = context();
     stopCalibrationTone();
 

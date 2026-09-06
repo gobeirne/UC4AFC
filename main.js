@@ -278,8 +278,12 @@ if (breakEveryInput) {
 };
 
 // --- Calibration screen wiring (mirrors UC_CVCV) -----------------------------
+// The calibration tone is the 1 kHz reference (audiometer aux-input nulling; also
+// available for free-field/masking). The sound-field noise is config.calibNoiseFile.
 const CALIB_URL = () => (typeof config !== "undefined" && config && config.calibFile)
-  ? `sounds/${config.calibFile}` : "sounds/calib.wav";
+  ? `sounds/${config.calibFile}` : "sounds/calibration_UC4AFC_1kHz.mp3";
+const CALIB_NOISE_URL = () => (typeof config !== "undefined" && config && config.calibNoiseFile)
+  ? `sounds/${config.calibNoiseFile}` : "sounds/noise.mp3";
 
 function refreshCalStatus() {
   const el = document.getElementById("calStatus");
@@ -387,7 +391,7 @@ function setupCalibrationScreen() {
       const el = document.getElementById("calStatus");
       if (el) el.textContent = "Calibration sound playing.";
     } catch (err) {
-      alert("No calibration sound file found (" + CALIB_URL() + ").\nAdd calib.wav to the sounds/ folder.");
+      alert("No calibration sound file found (" + CALIB_URL() + ").\nAdd " + ((config && config.calibFile) || "calibration_UC4AFC_1kHz.mp3") + " to the sounds/ folder.");
       console.error(err);
     }
   };

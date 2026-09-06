@@ -1,4 +1,4 @@
-const CACHE_NAME = "uc4afc-cache-v2";
+const CACHE_NAME = "uc4afc-cache-v3";
 
 // You can automate this with a build step later
 const ASSETS_TO_CACHE = [
@@ -161,7 +161,8 @@ const ASSETS_TO_CACHE = [
 "./sounds/bus.mp3",
 "./sounds/cage.mp3",
 "./sounds/cake.mp3",
-"./sounds/calib.mp3",
+"./sounds/calibration_UC4AFC_1kHz.mp3",
+"./sounds/noise.mp3",
 "./sounds/cap.mp3",
 "./sounds/card.mp3",
 "./sounds/cat.mp3",
