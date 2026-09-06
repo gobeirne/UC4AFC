@@ -43,7 +43,8 @@ function snap5(v) {
 // Calibration state (mirrors UC_CVCV state.calibration).
 const cal = {
   method: null,          // "audiometer" | "soundfield" (see CAL_METHODS)
-  measuredDbA: null,
+  measuredDbA: null,     // representative reference (max of dials) for bounds/displays
+  dial: { left: null, right: null }, // per-ear audiometer dial settings (dB(A))
   timestamp: null,
   isCalibrated: false,
   sliderMinDb: -100,
@@ -103,18 +104,44 @@ function lessLevelAdvice() {
 
 function state() { return cal; }
 
+// ── Per-ear calibration reference (ported from UC_CVCV) ────────────────────
+// Audiometer calibration has an independent dial per channel (A/B → left/right),
+// so a clinician can give one ear more headroom for asymmetric losses or masking.
+// The reference for a given ear is:
+//   • audiometer: cal.dial[ear] if set, else the other ear's dial, else measuredDbA
+//   • sound-field: the single measuredDbA (one speaker/meter for both)
+// `ear` is "left" | "right" | "binaural" | null/undefined. Binaural/unknown falls
+// back to whichever dial is set (then the representative measuredDbA), matching
+// CVCV: a single reference still serves both channels when the dials are equal.
+function referenceDbA(ear) {
+  if (!cal || !cal.isCalibrated) return null;
+  if (calMethod() === "audiometer" && cal.dial && typeof cal.dial === "object") {
+    const has = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
+    const side = (ear === "left" || ear === "right") ? ear : null;
+    if (side && has(cal.dial[side])) return Number(cal.dial[side]);
+    // No dial for this side (or binaural/unknown): fall back to the other side.
+    const other = side === "left" ? "right" : (side === "right" ? "left" : null);
+    if (other && has(cal.dial[other])) return Number(cal.dial[other]);
+    // Binaural/unknown with both set: prefer left, then right.
+    if (!side) {
+      if (has(cal.dial.left)) return Number(cal.dial.left);
+      if (has(cal.dial.right)) return Number(cal.dial.right);
+    }
+  }
+  return cal.measuredDbA === null ? null : Number(cal.measuredDbA);
+}
+
 // Bounds for any dB(A) level that can be presented. null when uncalibrated (the
 // dB FS path is a different quantity and is left alone). Ceiling = reference
 // (unity — nothing louder can play without clipping); floor = reference minus
 // the recording's dynamic range, but never below the physical floor of 0 dB(A).
 // Both ends are placed ON the 5 dB grid (ceiling rounded DOWN, floor rounded UP)
-// so every selectable position is genuinely inside the bounds. This replaces the
-// old `Math.floor(level/5)*5 - 60` span, which drifted off 60 dB, dropped below
-// audibility, and went NEGATIVE for references under 60 dB(A). (Ported from
-// UC_CVCV levelBounds.)
-function levelBounds() {
-  if (!cal.isCalibrated || cal.measuredDbA === null) return null;
-  const reference = Number(cal.measuredDbA);
+// so every selectable position is genuinely inside the bounds. Optionally scoped
+// to a specific ear's dial (audiometer per-channel). (Ported from UC_CVCV.)
+function levelBounds(ear) {
+  if (!cal.isCalibrated) return null;
+  const reference = referenceDbA(ear);
+  if (reference === null) return null;
   const max = Math.floor(reference / 5) * 5;
   const attenuationFloor = reference - MAX_ATTENUATION_DB;
   const min = Math.ceil(Math.max(ABSOLUTE_FLOOR_DBA, attenuationFloor) / 5) * 5;
@@ -124,9 +151,9 @@ function levelBounds() {
 // Snap to the grid, then hold inside the bounds. Uncalibrated → grid only
 // (gain is unity anyway). This is the clamp the AUDIO PATH uses, not just the
 // slider, so no out-of-range level can reach the gain maths. (UC_CVCV clampLevel.)
-function clampLevel(value) {
+function clampLevel(value, ear) {
   const snapped = snap5(value);
-  const b = levelBounds();
+  const b = levelBounds(ear);
   if (!b || !b.usable) return snapped;
   return Math.min(b.max, Math.max(b.min, snapped));
 }
@@ -167,15 +194,47 @@ function applyCalibrationLevel(level, timestamp = new Date().toISOString(), meth
   return true;
 }
 
-// Digital linear gain for a target presentation level in dB(A). The requested
+// Apply a dual-dial audiometer calibration. left/right are per-ear dial settings
+// (either may be null → falls back to the other ear at use time via referenceDbA).
+// The slider bounds use the higher of the two (widest headroom); the per-ear gain
+// path picks the correct dial for each ear. (Ported from UC_CVCV applyCalibrationDials.)
+function applyCalibrationDials(left, right, timestamp = new Date().toISOString(), method) {
+  const isNum = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
+  const vals = [left, right].filter(isNum).map(Number);
+  if (!vals.length) return false;
+  const representative = Math.max(...vals);
+
+  cal.method = method || "audiometer";
+  cal.dial = {
+    left:  isNum(left)  ? Number(left)  : null,
+    right: isNum(right) ? Number(right) : null
+  };
+  cal.measuredDbA = representative;   // for slider bounds & displays
+  cal.timestamp = timestamp;
+  cal.isCalibrated = true;
+
+  const b = levelBounds();
+  if (!b || !b.usable) {
+    cal.isCalibrated = false;
+    cal.measuredDbA = null;
+    cal.dial = { left: null, right: null };
+    return false;
+  }
+  cal.sliderMinDb = b.min;
+  cal.sliderMaxDb = b.max;
+  cal.currentSliderDb = b.max;
+  persist();
+  return true;
+}
 // level is CLAMPED to the calibrated bounds first (Finding 5) so a stray value
 // can never reach the gain maths, and the result is capped at unity — nothing
 // can play louder than the reference without clipping. A cap that fires is
 // logged, because it means a level reached here without being clamped upstream.
-function gainForLevel(levelDbA) {
-  if (cal.isCalibrated && cal.measuredDbA !== null) {
-    const target = clampLevel(levelDbA);
-    const attenuation = Number(cal.measuredDbA) - Number(target);
+function gainForLevel(levelDbA, ear) {
+  const reference = referenceDbA(ear);
+  if (cal.isCalibrated && reference !== null) {
+    const target = clampLevel(levelDbA, ear);
+    const attenuation = Number(reference) - Number(target);
     let g = Math.pow(10, -attenuation / 20);
     if (g > 1.0) { console.warn(`[cal] gain ${g.toFixed(3)} > 1 capped at unity`); g = 1.0; }
     return g;
@@ -184,11 +243,13 @@ function gainForLevel(levelDbA) {
 }
 
 // dB form of the same, convenient for the engine's extraGainDb parameter.
-// Also clamped and capped at 0 dB (unity).
-function gainDbForLevel(levelDbA) {
-  if (cal.isCalibrated && cal.measuredDbA !== null) {
-    const target = clampLevel(levelDbA);
-    return Math.min(0, Number(target) - Number(cal.measuredDbA));
+// Also clamped and capped at 0 dB (unity). Optional `ear` selects the per-channel
+// dial (audiometer); omit or "binaural" for the shared/representative reference.
+function gainDbForLevel(levelDbA, ear) {
+  const reference = referenceDbA(ear);
+  if (cal.isCalibrated && reference !== null) {
+    const target = clampLevel(levelDbA, ear);
+    return Math.min(0, Number(target) - Number(reference));
   }
   return 0;
 }
@@ -207,6 +268,7 @@ function measuredDbA() { return cal.measuredDbA; }
 function clearCalibration() {
   cal.method = null;
   cal.measuredDbA = null;
+  cal.dial = { left: null, right: null };
   cal.timestamp = null;
   cal.isCalibrated = false;
   cal.sliderMinDb = -100;
@@ -217,9 +279,15 @@ function clearCalibration() {
 
 function persist() {
   try {
-    localStorage.setItem(CAL_KEY, JSON.stringify({
-      level: cal.measuredDbA, timestamp: cal.timestamp, method: cal.method
-    }));
+    if (cal.method === "audiometer") {
+      localStorage.setItem(CAL_KEY, JSON.stringify({
+        dial: cal.dial, method: cal.method, timestamp: cal.timestamp
+      }));
+    } else {
+      localStorage.setItem(CAL_KEY, JSON.stringify({
+        level: cal.measuredDbA, timestamp: cal.timestamp, method: cal.method
+      }));
+    }
   } catch (_) {}
 }
 
@@ -234,13 +302,27 @@ function readStored() {
     const raw = localStorage.getItem(CAL_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
-    const level = Number(data.level);
-    if (data.level == null || !isFinite(level)) return null;
     let ageDays = null, stale = false;
     if (data.timestamp) {
       const ms = Date.now() - new Date(data.timestamp).getTime();
       if (isFinite(ms)) { ageDays = ms / 86400000; stale = ageDays > CAL_STALE_DAYS; }
     }
+    // Audiometer per-channel record: { dial:{left,right}, method, timestamp }.
+    if (data.dial && typeof data.dial === "object") {
+      const l = Number(data.dial.left), r = Number(data.dial.right);
+      const lHas = data.dial.left != null && isFinite(l);
+      const rHas = data.dial.right != null && isFinite(r);
+      if (!lHas && !rHas) return null;
+      const representative = Math.max(...[lHas ? l : -Infinity, rHas ? r : -Infinity].filter(isFinite));
+      return {
+        dial: { left: lHas ? l : null, right: rHas ? r : null },
+        level: representative, timestamp: data.timestamp || null,
+        method: data.method || "audiometer", ageDays, stale
+      };
+    }
+    // Sound-field single-level record: { level, method, timestamp }.
+    const level = Number(data.level);
+    if (data.level == null || !isFinite(level)) return null;
     return { level, timestamp: data.timestamp || null, method: data.method || null, ageDays, stale };
   } catch (_) {
     return null;
@@ -248,9 +330,18 @@ function readStored() {
 }
 
 // Activate a previously-read stored calibration (called after the operator
-// confirms). Returns true on success.
+// confirms). Returns true on success. Handles both per-channel (dial) and
+// single-level (sound-field) records.
 function confirmStored(rec) {
-  if (!rec || !isFinite(Number(rec.level))) return false;
+  if (!rec) return false;
+  if (rec.dial && typeof rec.dial === "object" &&
+      (isFinite(Number(rec.dial.left)) || isFinite(Number(rec.dial.right)))) {
+    return applyCalibrationDials(
+      isFinite(Number(rec.dial.left)) ? Number(rec.dial.left) : null,
+      isFinite(Number(rec.dial.right)) ? Number(rec.dial.right) : null,
+      rec.timestamp || undefined, rec.method || "audiometer");
+  }
+  if (!isFinite(Number(rec.level))) return false;
   return applyCalibrationLevel(Number(rec.level), rec.timestamp || undefined, rec.method || undefined);
 }
 
@@ -258,16 +349,26 @@ function confirmStored(rec) {
 // (never auto-activates), so nothing gets silently restored.
 function loadStored() { return readStored(); }
 
-// Header string for the results file.
+// Header string for the results file. Audiometer reports both dials when they
+// differ; sound-field reports the single measured level.
 function calibrationHeader() {
   if (!cal.isCalibrated || cal.measuredDbA == null) return "not set";
-  const m = calMethod() === "audiometer" ? "audiometer (aux input)" : "sound field (level meter)";
-  return `${cal.measuredDbA} dB(A) — ${m}`;
+  if (calMethod() === "audiometer") {
+    const l = cal.dial ? cal.dial.left : null;
+    const r = cal.dial ? cal.dial.right : null;
+    const fmt = (v) => (v == null ? "—" : `${v}`);
+    const dials = (l != null && r != null && l === r)
+      ? `${l} dB(A)`
+      : `L ${fmt(l)} / R ${fmt(r)} dB(A)`;
+    return `${dials} — audiometer (aux input)`;
+  }
+  return `${cal.measuredDbA} dB(A) — sound field (level meter)`;
 }
 
 if (typeof window !== "undefined") {
   window.Calibration = {
-    state, applyCalibrationLevel, gainForLevel, gainDbForLevel,
+    state, applyCalibrationLevel, applyCalibrationDials,
+    gainForLevel, gainDbForLevel, referenceDbA,
     setCurrentSliderDb, isCalibrated, measuredDbA, clearCalibration,
     loadStored, readStored, confirmStored, calibrationHeader,
     levelBounds, clampLevel,

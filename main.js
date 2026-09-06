@@ -289,7 +289,7 @@ function refreshCalStatus() {
   const el = document.getElementById("calStatus");
   if (!el || typeof Calibration === "undefined") return;
   if (Calibration.isCalibrated()) {
-    el.textContent = `Calibrated to ${Calibration.measuredDbA()} dB(A). Device volume must be at maximum.`;
+    el.textContent = `Calibrated: ${Calibration.calibrationHeader()}. Device volume must be at maximum.`;
   } else {
     el.textContent = "";
   }
@@ -332,88 +332,216 @@ function updateOutputLevelFromSlider() {
   }
 }
 
+// True when the current method uses the 1 kHz tone (audiometer) vs noise (sound field).
+function calSignalIsTone() {
+  const sel = document.getElementById("calMethodSelect");
+  const method = (sel && sel.value) || (typeof Calibration !== "undefined" ? Calibration.calMethod() : "audiometer");
+  return method === "audiometer";
+}
+function calPlayLabel(playing) {
+  const sig = calSignalIsTone() ? "1 kHz tone" : "calibration noise";
+  return `${playing ? "■ Stop" : "▶ Play"} ${sig}`;
+}
+// The signal URL for the current method: tone for audiometer, noise for sound field.
+function calSignalUrl() {
+  return calSignalIsTone() ? CALIB_URL() : CALIB_NOISE_URL();
+}
+
+// Render the method-dependent parts of the calibration screen: steps, the
+// single-vs-dual level inputs, the play-button label, and the routing hint.
+function renderCalMethodUI() {
+  if (typeof Calibration === "undefined") return;
+  const sel = document.getElementById("calMethodSelect");
+  const method = (sel && sel.value) || Calibration.calMethod();
+  const info = (Calibration.CAL_METHODS && Calibration.CAL_METHODS[method])
+    || Calibration.CAL_METHODS.audiometer;
+
+  // Steps.
+  const ol = document.getElementById("calSteps");
+  if (ol) {
+    ol.innerHTML = "";
+    (info.steps || []).forEach(s => {
+      const li = document.createElement("li");
+      li.textContent = s;
+      ol.appendChild(li);
+    });
+  }
+
+  const isAud = method === "audiometer";
+
+  // Level label + hint.
+  const lbl = document.getElementById("calLevelLabelText");
+  if (lbl) lbl.textContent = info.levelLabel || "Level, dB(A)";
+  const hint = document.getElementById("calLevelHint");
+  if (hint) {
+    hint.textContent = isAud
+      ? "Levels are presented from this figure downward. Set the dial to the loudest " +
+        "level you'll need, plus a little margin — at least 6 dB if you'll be masking."
+      : "This is the most this setup can deliver with the device at full volume. The " +
+        "calibration is valid only for this speaker, seat and room — recalibrate if any change.";
+  }
+
+  // Routing selector is an audiometer concern (per-channel aux calibration).
+  const earWrap = document.getElementById("calEarWrap");
+  const earHint = document.getElementById("calEarHint");
+  if (earWrap) earWrap.style.display = isAud ? "" : "none";
+  if (earHint) {
+    earHint.textContent = isAud
+      ? "Play the tone to both channels and zero each audiometer input (A and B) to " +
+        "VU 0 off this one tone. Both channels are then referenced to the tone, so the " +
+        "software can place speech and masker correctly on either side."
+      : "";
+  }
+  // Default routing to both in every method.
+  const earSel = document.getElementById("calEarSelect");
+  if (earSel) { earSel.value = "binaural"; if (AudioEngine.setCalibrationEar) AudioEngine.setCalibrationEar("binaural"); }
+
+  // Single (sound field) vs dual dials (audiometer).
+  const dual = document.getElementById("calDialDualWrap");
+  const single = document.getElementById("calLevelSingleWrap");
+  if (dual) dual.style.display = isAud ? "" : "none";
+  if (single) single.style.display = isAud ? "none" : "";
+  if (isAud) {
+    const c = Calibration.state();
+    const d = c.dial || {};
+    const dl = document.getElementById("calDialLeft");
+    const dr = document.getElementById("calDialRight");
+    if (dl) dl.value = d.left ?? (c.measuredDbA ?? "");
+    if (dr) dr.value = d.right ?? (c.measuredDbA ?? "");
+  } else {
+    const inp = document.getElementById("calLevelInput");
+    if (inp) inp.value = Calibration.state().measuredDbA ?? "";
+  }
+
+  // Play-button label follows the method.
+  const toggleBtn = document.getElementById("calToneToggleBtn");
+  if (toggleBtn && !toggleBtn.classList.contains("active")) toggleBtn.textContent = calPlayLabel(false);
+}
+
 function setupCalibrationScreen() {
   const toggleBtn = document.getElementById("calToneToggleBtn");
   const testBtn   = document.getElementById("testCalBtn");
   const clearBtn  = document.getElementById("calClearBtn");
   const backBtn   = document.getElementById("calBackBtn");
+  const saveBtn   = document.getElementById("calSaveBtn");
+  const methodSel = document.getElementById("calMethodSelect");
+  const earSel    = document.getElementById("calEarSelect");
   const slider    = document.getElementById("outputLevel");
   if (!toggleBtn) return; // screen not present
 
-  let toneOn = false;
+  let playing = false;
   let testOn = false;
 
   // Offer any stored calibration on load, and initialise the slider.
   if (typeof Calibration !== "undefined") {
     const restored = Calibration.loadStored();
     if (restored) {
+      if (methodSel && restored.method) methodSel.value = restored.method;
       if (testBtn) testBtn.hidden = false;
       const when = restored.timestamp
         ? new Date(restored.timestamp).toLocaleString("en-NZ", { dateStyle: "short", timeStyle: "short" })
         : "earlier";
       const el = document.getElementById("calStatus");
-      if (el) el.textContent = `Calibration restored: ${restored.level} dB(A) from ${when}. Device volume must be at maximum.`;
+      if (el) {
+        const desc = (restored.dial)
+          ? (restored.dial.left != null && restored.dial.right != null && restored.dial.left === restored.dial.right
+              ? `${restored.dial.left} dB(A)`
+              : `L ${restored.dial.left ?? "—"} / R ${restored.dial.right ?? "—"} dB(A)`)
+          : `${restored.level} dB(A)`;
+        el.textContent = `Stored calibration found: ${desc} from ${when}. ` +
+          `Re-save to activate it — device volume must be at maximum.` +
+          (restored.stale ? " (Over 30 days old — recalibration recommended.)" : "");
+      }
     }
   }
   setupCalibrationSlider();
+  renderCalMethodUI();
 
-  // Toggle: play calibration tone (unity) -> stop & prompt for measured dB(A).
+  // Method change: re-render the method-dependent UI and reset the signal.
+  if (methodSel) methodSel.onchange = () => {
+    if (typeof Calibration !== "undefined" && Calibration.setMethod) Calibration.setMethod(methodSel.value);
+    if (playing) { AudioEngine.stopCalibrationTone(); playing = false; }
+    toggleBtn.classList.remove("active");
+    renderCalMethodUI();
+  };
+
+  // Live per-channel re-route while the signal plays.
+  if (earSel) earSel.onchange = () => {
+    if (AudioEngine.setCalibrationEar) AudioEngine.setCalibrationEar(earSel.value);
+  };
+
+  // Play / stop the calibration signal (tone for audiometer, noise for sound field).
   toggleBtn.onclick = async () => {
     if (typeof AudioEngine === "undefined") return;
-
-    if (toneOn) {
-      // Stop and prompt (UC_CVCV flow).
+    if (playing) {
       AudioEngine.stopCalibrationTone();
-      toneOn = false;
-      toggleBtn.textContent = "Calibration tone";
+      playing = false;
+      toggleBtn.textContent = calPlayLabel(false);
       toggleBtn.classList.remove("active");
-      const measured = prompt("Enter measured calibration level (in dB A):");
-      if (measured === null || measured === "" || isNaN(measured)) return;
-      const level = parseFloat(measured);
-      Calibration.applyCalibrationLevel(level);
-      setupCalibrationSlider();
-      if (testBtn) testBtn.hidden = false;
-      refreshCalStatus();
       return;
     }
-
     await AudioEngine.resume();
-    // Stop any test playback first.
     AudioEngine.stopCalibrationTone();
     testOn = false;
     if (testBtn) testBtn.textContent = "Test level";
-    alert("Turn your device volume all the way up, then tap OK to play the calibration tone.");
+    const ear = earSel ? earSel.value : "binaural";
     try {
-      await AudioEngine.startCalibrationTone(CALIB_URL());
-      toneOn = true;
-      toggleBtn.textContent = "Stop & Enter Level";
+      await AudioEngine.startCalibrationTone(calSignalUrl(), { ear });
+      playing = true;
+      toggleBtn.textContent = calPlayLabel(true);
       toggleBtn.classList.add("active");
-      const el = document.getElementById("calStatus");
-      if (el) el.textContent = "Calibration sound playing.";
     } catch (err) {
-      alert("No calibration sound file found (" + CALIB_URL() + ").\nAdd " + ((config && config.calibFile) || "calibration_UC4AFC_1kHz.mp3") + " to the sounds/ folder.");
+      const el = document.getElementById("calStatus");
+      const what = calSignalIsTone()
+        ? ((config && config.calibFile) || "calibration_UC4AFC_1kHz.mp3")
+        : ((config && config.calibNoiseFile) || "noise.mp3");
+      if (el) el.textContent = `Calibration signal not found (${calSignalUrl()}). Add ${what} to the sounds/ folder.`;
       console.error(err);
     }
   };
 
-  // Test level: replay calibration file at the current slider level.
+  // Save calibration: dual dials (audiometer) or single level (sound field).
+  if (saveBtn) saveBtn.onclick = () => {
+    if (typeof Calibration === "undefined") return;
+    const method = methodSel ? methodSel.value : Calibration.calMethod();
+    const status = document.getElementById("calStatus");
+
+    if (method === "audiometer") {
+      const lRaw = document.getElementById("calDialLeft")?.value ?? "";
+      const rRaw = document.getElementById("calDialRight")?.value ?? "";
+      const lHas = lRaw !== "" && Number.isFinite(Number(lRaw));
+      const rHas = rRaw !== "" && Number.isFinite(Number(rRaw));
+      if (!lHas && !rHas) { if (status) status.textContent = "Enter at least one dial setting before saving."; return; }
+      const ok = Calibration.applyCalibrationDials(
+        lHas ? Number(lRaw) : null, rHas ? Number(rRaw) : null,
+        new Date().toISOString(), method);
+      if (!ok) { if (status) status.textContent = "Those dial settings don't give a usable range. Check they're dB(A) audiometer dial settings."; return; }
+    } else {
+      const raw = document.getElementById("calLevelInput")?.value ?? "";
+      if (raw === "" || !Number.isFinite(Number(raw))) { if (status) status.textContent = "Enter the measured level before saving."; return; }
+      const ok = Calibration.applyCalibrationLevel(Number(raw), new Date().toISOString(), method);
+      if (!ok) { if (status) status.textContent = `${raw} dB(A) is not a usable reference. Check the figure is the meter reading in dB(A).`; return; }
+    }
+    if (playing) { AudioEngine.stopCalibrationTone(); playing = false; toggleBtn.textContent = calPlayLabel(false); toggleBtn.classList.remove("active"); }
+    setupCalibrationSlider();
+    if (testBtn) testBtn.hidden = false;
+    refreshCalStatus();
+  };
+
+  // Test level: replay the signal at the current slider level.
   if (testBtn) {
     testBtn.onclick = async () => {
       if (typeof Calibration === "undefined" || !Calibration.isCalibrated()) return;
-      if (testOn) {
-        AudioEngine.stopCalibrationTone();
-        testOn = false;
-        testBtn.textContent = "Test level";
-        return;
-      }
+      if (testOn) { AudioEngine.stopCalibrationTone(); testOn = false; testBtn.textContent = "Test level"; return; }
       await AudioEngine.resume();
-      const gainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb);
+      const ear = earSel ? earSel.value : "binaural";
+      const gainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb, ear);
       try {
-        await AudioEngine.startCalibrationTone(CALIB_URL(), { extraGainDb: gainDb });
+        await AudioEngine.startCalibrationTone(calSignalUrl(), { extraGainDb: gainDb, ear });
         testOn = true;
         testBtn.textContent = "Stop";
       } catch (err) {
-        alert("No calibration sound file found.");
+        if (document.getElementById("calStatus")) document.getElementById("calStatus").textContent = "Calibration signal not found.";
         console.error(err);
       }
     };
@@ -427,18 +555,19 @@ function setupCalibrationScreen() {
   clearBtn.onclick = () => {
     if (typeof Calibration !== "undefined") Calibration.clearCalibration();
     AudioEngine.stopCalibrationTone();
-    toneOn = testOn = false;
-    toggleBtn.textContent = "Calibration tone";
+    playing = testOn = false;
+    toggleBtn.textContent = calPlayLabel(false);
     toggleBtn.classList.remove("active");
     if (testBtn) { testBtn.hidden = true; testBtn.textContent = "Test level"; }
     setupCalibrationSlider();
+    renderCalMethodUI();
     refreshCalStatus();
   };
 
   backBtn.onclick = () => {
     if (typeof AudioEngine !== "undefined") AudioEngine.stopCalibrationTone();
-    toneOn = testOn = false;
-    toggleBtn.textContent = "Calibration tone";
+    playing = testOn = false;
+    toggleBtn.textContent = calPlayLabel(false);
     toggleBtn.classList.remove("active");
     if (testBtn) testBtn.textContent = "Test level";
     showScreen("intro");

@@ -53,9 +53,10 @@
 <div id="calibration" class="screen">
   <h2>Calibration</h2>
   <p class="small" style="max-width:34rem; margin:0.5rem auto;">
-    Turn device volume fully up, play the calibration noise, set the level by
-    your chosen method, then stop and enter the value. The measured level becomes
-    the reference; presentation level is set with the slider below.
+    Turn device volume fully up and leave it there. Choose your method, play the
+    1&nbsp;kHz tone (or, for sound field, the calibration noise), set the level by
+    your chosen method, then stop and enter the value(s). That becomes the
+    reference; presentation level is set with the slider below.
   </p>
 
   <div class="cal-method" style="max-width:34rem; margin:0.75rem auto; text-align:left;">
@@ -67,20 +68,44 @@
     <ol id="calSteps" class="small" style="margin:0.5rem 0 0 1.1rem; padding:0;"></ol>
   </div>
 
-  <div id="calEarWrap" class="cal-ear" style="max-width:34rem; margin:0.75rem auto; text-align:left;">
-    <label for="calEarSelect"><strong>Calibrate channel</strong></label>
-    <select id="calEarSelect" style="margin-left:0.5rem;">
-      <option value="left">Left</option>
-      <option value="right">Right</option>
-      <option value="binaural">Both</option>
-    </select>
-    <div id="calEarHint" class="small" style="margin-top:0.35rem;"></div>
+  <div style="max-width:34rem; margin:1rem auto; text-align:left; display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">
+    <button id="calToneToggleBtn">▶ Play 1 kHz tone</button>
+    <button id="testCalBtn" hidden>Test level</button>
+    <label id="calEarWrap" style="display:flex; align-items:center; gap:0.35rem; font-size:0.85rem; margin:0;">
+      Route to
+      <select id="calEarSelect" style="width:auto;">
+        <option value="left">Left only</option>
+        <option value="right">Right only</option>
+        <option value="binaural">Both</option>
+      </select>
+    </label>
+  </div>
+  <div id="calEarHint" class="small" style="max-width:34rem; margin:0 auto 0.5rem; text-align:left;"></div>
+
+  <!-- Sound-field: single measured level -->
+  <div id="calLevelSingleWrap" style="max-width:34rem; margin:0.5rem auto; text-align:left;">
+    <label for="calLevelInput"><strong id="calLevelLabelText">Audiometer dial setting, dB(A)</strong></label><br>
+    <input id="calLevelInput" type="number" step="5" inputmode="decimal" style="margin-top:0.25rem; width:12rem;">
   </div>
 
-  <div style="margin:1rem 0;">
-    <button id="calToneToggleBtn">Calibration noise</button>
-    <button id="testCalBtn" hidden>Test level</button>
+  <!-- Audiometer: per-channel dials -->
+  <div id="calDialDualWrap" style="max-width:34rem; margin:0.5rem auto; text-align:left; display:none;">
+    <p class="small" style="margin:0.2rem 0;">
+      Set each audiometer channel's dial and zero it to VU&nbsp;0 off the tone. Give an
+      ear more headroom (a higher dial) if its loss needs it — the software uses each
+      side's dial for that ear.
+    </p>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.6rem; max-width:24rem;">
+      <label>Left dial, dB(A)
+        <input id="calDialLeft" type="number" step="5" inputmode="decimal" style="width:100%;">
+      </label>
+      <label>Right dial, dB(A)
+        <input id="calDialRight" type="number" step="5" inputmode="decimal" style="width:100%;">
+      </label>
+    </div>
   </div>
+
+  <p id="calLevelHint" class="small" style="max-width:34rem; margin:0.4rem auto; text-align:left;"></p>
 
   <div class="volume-panel">
     <label for="outputLevel">Test output level</label><br>
@@ -94,6 +119,7 @@
   <p id="calStatus" class="small" style="min-height:1.4rem;"></p>
 
   <div style="margin-top:1.25rem;">
+    <button id="calSaveBtn">Save calibration</button>
     <button id="calClearBtn" style="background:#777;">Clear calibration</button>
     <button id="calBackBtn">Back</button>
   </div>

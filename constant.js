@@ -377,7 +377,7 @@ function csPlayLpf(item, level, calibrated, routing, offset, revealOptions) {
       : (calibrated ? 65 : 0)
   );
   const extraGainDb = calibrated
-    ? Calibration.gainDbForLevel(lpfLevel)
+    ? Calibration.gainDbForLevel(lpfLevel, routing)
     : Math.min(0, lpfLevel);   // dB FS attenuation, never boost
 
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
@@ -396,7 +396,7 @@ function csPlaySnr(item, snrDb, calibrated, routing, offset, revealOptions) {
       : (calibrated ? 65 : 0)
   );
   const noiseGainDb = calibrated
-    ? Calibration.gainDbForLevel(noiseLevelSetting)
+    ? Calibration.gainDbForLevel(noiseLevelSetting, routing)
     : Math.min(0, noiseLevelSetting);
   const noiseUrl = (config && config.snrNoiseFile)
     ? `sounds/${config.snrNoiseFile}` : "sounds/noise.mp3";
