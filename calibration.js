@@ -66,9 +66,9 @@ const CAL_METHODS = {
     perChannel: true,
     steps: [
       "Set the device volume to maximum and leave it there for the whole session.",
-      "Route the calibration noise to Left, then adjust the audiometer's aux input gain for that channel until its VU meter reads 0. Switch to Right and repeat.",
-      "Set the audiometer dial to the highest level you expect to present, plus a margin.",
-      "Stop the noise and enter that dial setting below."
+      "Play the 1 kHz tone to both channels and zero each audiometer input (A and B) to VU 0 off this one tone. Both channels are then referenced to the tone.",
+      "Set the audiometer dial to the highest level you expect to present, plus a margin. Use at least 6 dB of margin if you will be masking.",
+      "Stop the tone and enter that dial setting below."
     ]
   },
   soundfield: {

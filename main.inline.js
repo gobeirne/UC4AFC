@@ -914,9 +914,9 @@ const CAL_METHODS = {
     perChannel: true,
     steps: [
       "Set the device volume to maximum and leave it there for the whole session.",
-      "Route the calibration noise to Left, then adjust the audiometer's aux input gain for that channel until its VU meter reads 0. Switch to Right and repeat.",
-      "Set the audiometer dial to the highest level you expect to present, plus a margin.",
-      "Stop the noise and enter that dial setting below."
+      "Play the 1 kHz tone to both channels and zero each audiometer input (A and B) to VU 0 off this one tone. Both channels are then referenced to the tone.",
+      "Set the audiometer dial to the highest level you expect to present, plus a margin. Use at least 6 dB of margin if you will be masking.",
+      "Stop the tone and enter that dial setting below."
     ]
   },
   soundfield: {
@@ -2508,13 +2508,15 @@ const CS_DEFAULTS = {
   lpf: [500, 800, 1200, 2000, 3150],
   repeats: 2,
   breakEvery: 40,
-  mode: "snr"
+  mode: "snr",
+  ear: "binaural"
 };
 
 // --- Module state -------------------------------------------------------------
 const CS = {
   active: false,        // true while a run is in progress (guards handlers)
   mode: "snr",          // "snr" | "lpf"
+  ear: "binaural",      // "left" | "right" | "binaural" (presentation routing)
   levels: [],           // numeric levels for the run (ascending in tables)
   repeats: 2,
   breakEvery: 40,
@@ -2561,17 +2563,18 @@ function csLoadOpts() {
       return {
         repeats: Number.isFinite(Number(o.repeats)) ? Number(o.repeats) : CS_DEFAULTS.repeats,
         breakEvery: Number.isFinite(Number(o.breakEvery)) ? Number(o.breakEvery) : CS_DEFAULTS.breakEvery,
-        mode: (o.mode === "lpf" || o.mode === "snr") ? o.mode : CS_DEFAULTS.mode
+        mode: (o.mode === "lpf" || o.mode === "snr") ? o.mode : CS_DEFAULTS.mode,
+        ear: (o.ear === "left" || o.ear === "right" || o.ear === "binaural") ? o.ear : CS_DEFAULTS.ear
       };
     }
   } catch (_) {}
-  return { repeats: CS_DEFAULTS.repeats, breakEvery: CS_DEFAULTS.breakEvery, mode: CS_DEFAULTS.mode };
+  return { repeats: CS_DEFAULTS.repeats, breakEvery: CS_DEFAULTS.breakEvery, mode: CS_DEFAULTS.mode, ear: CS_DEFAULTS.ear };
 }
 
-function csSaveDefaults(mode, levels, repeats, breakEvery) {
+function csSaveDefaults(mode, levels, repeats, breakEvery, ear) {
   try {
     localStorage.setItem(CS_KEYS[mode], JSON.stringify(levels));
-    localStorage.setItem(CS_KEYS.opts, JSON.stringify({ repeats, breakEvery, mode }));
+    localStorage.setItem(CS_KEYS.opts, JSON.stringify({ repeats, breakEvery, mode, ear }));
     return true;
   } catch (_) { return false; }
 }
@@ -2608,6 +2611,13 @@ function csPopulateForm() {
   if (rep) rep.value = opts.repeats;
   const brk = document.getElementById("csBreakEvery");
   if (brk) brk.value = opts.breakEvery;
+  CS.ear = opts.ear;
+  const earSeg = document.getElementById("csEarSegmented");
+  if (earSeg) {
+    earSeg.querySelectorAll(".seg-btn").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.csear === CS.ear);
+    });
+  }
   csUpdateSummary();
   csStatus("");
 }
@@ -2665,6 +2675,21 @@ function setupConstantScreen() {
     });
   }
 
+  // Ear/routing toggle: left / right / binaural.
+  const earSeg = document.getElementById("csEarSegmented");
+  if (earSeg) {
+    earSeg.querySelectorAll(".seg-btn").forEach(btn => {
+      btn.onclick = () => {
+        const e = btn.dataset.csear;
+        if (e === CS.ear) return;
+        CS.ear = e;
+        earSeg.querySelectorAll(".seg-btn").forEach(b =>
+          b.classList.toggle("active", b === btn));
+        csStatus("");
+      };
+    });
+  }
+
   // Live summary as the operator edits levels/repeats.
   ["csLevels", "csRepeats"].forEach(id => {
     const el = document.getElementById(id);
@@ -2678,7 +2703,7 @@ function setupConstantScreen() {
     if (!levels.length) { csStatus("Enter at least one valid level before saving.", true); return; }
     const reps = Math.max(1, Math.round(Number(document.getElementById("csRepeats").value) || 1));
     const brk = Math.max(0, Math.round(Number(document.getElementById("csBreakEvery").value) || 0));
-    const ok = csSaveDefaults(CS.mode, levels, reps, brk);
+    const ok = csSaveDefaults(CS.mode, levels, reps, brk, CS.ear);
     csStatus(ok ? `Saved as default for ${CS.mode.toUpperCase()} mode.` : "Could not save (storage unavailable).", !ok);
   };
 
@@ -2803,7 +2828,9 @@ function csNextTrial() {
 
   const calibrated = (typeof Calibration !== "undefined" &&
     Calibration.isCalibrated && Calibration.isCalibrated());
-  const routing = (config && config.routing) || "binaural";
+  const routing = (CS.ear === "left" || CS.ear === "right" || CS.ear === "binaural")
+    ? CS.ear
+    : ((config && config.routing) || "binaural");
 
   if (CS.mode === "snr") {
     csPlaySnr(item, trial.level, calibrated, routing, offset, revealOptions);
@@ -2993,7 +3020,7 @@ function csSaveResults(note) {
   lines.push(`# Words\t${words.length}`);
   lines.push(`# Total presentations\t${CS.logRows.length}`);
   lines.push(`# Break every\t${CS.breakEvery || "off"}`);
-  lines.push(`# Routing\t${(config && config.routing) || "binaural"}`);
+  lines.push(`# Routing\t${CS.ear || (config && config.routing) || "binaural"}`);
   if (CS.mode === "snr") {
     const nl = (config && config.adaptive && isFinite(config.adaptive.snrNoiseLevel))
       ? config.adaptive.snrNoiseLevel : (calibrated ? 65 : 0);
@@ -3092,7 +3119,7 @@ function csSaveResults(note) {
       breakEvery: CS.breakEvery,
       startedAt: CS.startedAt ? CS.startedAt.toISOString() : null,
       savedAt: now.toISOString(),
-      routing: (config && config.routing) || "binaural",
+      routing: CS.ear || (config && config.routing) || "binaural",
       tables: {
         presentations: tableToObj(CS.presented, false),
         correct: tableToObj(CS.correct, false),
