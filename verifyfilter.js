@@ -31,9 +31,31 @@ const VF = {
   noiseLen: 1 << 15        // 32768 samples per noise run (~0.68 s at 48 kHz)
 };
 
+// Frequency range shared by the probe grid, the plot x-axis, AND the slider.
+// fMax is just under Nyquist at the 48 kHz build rate (same as the x-axis).
+const VF_FMIN = 20;
+const VF_FMAX = 48000 / 2 * 0.98;   // 23520 Hz
+const VF_SLIDER_STEPS = 1000;       // slider positions across the log range
+
+// Slider position (0..VF_SLIDER_STEPS) → frequency (Hz), logarithmic.
+function vfPosToFreq(pos) {
+  const t = Math.min(1, Math.max(0, pos / VF_SLIDER_STEPS));
+  const lg = Math.log10(VF_FMIN) + t * (Math.log10(VF_FMAX) - Math.log10(VF_FMIN));
+  return Math.pow(10, lg);
+}
+// Frequency (Hz) → slider position (0..VF_SLIDER_STEPS), logarithmic.
+function vfFreqToPos(f) {
+  const cl = Math.min(VF_FMAX, Math.max(VF_FMIN, Number(f) || VF_FMIN));
+  const t = (Math.log10(cl) - Math.log10(VF_FMIN)) / (Math.log10(VF_FMAX) - Math.log10(VF_FMIN));
+  return Math.round(t * VF_SLIDER_STEPS);
+}
+function vfClampFreq(f) {
+  return Math.min(VF_FMAX, Math.max(VF_FMIN, Number(f)));
+}
+
 // Log-spaced probe frequencies from 20 Hz to just under Nyquist.
 function vfBuildFreqs() {
-  const fMin = 20, fMax = VF.sr / 2 * 0.98;
+  const fMin = VF_FMIN, fMax = VF_FMAX;
   const n = 240;
   const out = [];
   const logMin = Math.log10(fMin), logMax = Math.log10(fMax);
@@ -274,6 +296,18 @@ function vfSlopeDbPerOct() {
   return (db2 - db1); // one octave apart → dB/oct
 }
 
+// Reflect VF.cutoff into both the slider (log position) and the number box,
+// without retriggering their handlers (we set .value directly).
+function vfSyncCutoffControls() {
+  const slider = document.getElementById("vfCutoff");
+  const box = document.getElementById("vfCutoffInput");
+  if (slider) slider.value = String(vfFreqToPos(VF.cutoff));
+  if (box && document.activeElement !== box) {
+    // Don't clobber what the operator is typing; only round when unfocused.
+    box.value = String(Math.round(VF.cutoff));
+  }
+}
+
 function vfUpdateReadout() {
   const el = document.getElementById("vfReadout");
   if (!el) return;
@@ -313,28 +347,51 @@ function setupVerifyFilter() {
     }
     showScreen("verifyfilter");
     if (!VF.freqs.length) VF.freqs = vfBuildFreqs();
-    // Seed cutoff from the slider's current value.
-    const sl = document.getElementById("vfCutoff");
-    if (sl) VF.cutoff = Number(sl.value) || VF.cutoff;
+    // Seed cutoff from the number box (falls back to current VF.cutoff).
+    const box = document.getElementById("vfCutoffInput");
+    if (box && box.value !== "" && isFinite(Number(box.value))) {
+      VF.cutoff = vfClampFreq(Number(box.value));
+    }
+    vfSyncCutoffControls();
     vfRecompute();
   };
 
   const screen = document.getElementById("verifyfilter");
   if (!screen) return;
 
+  // Show the shared min/max next to the box so the range is explicit.
+  const rangeEl = document.getElementById("vfCutoffRange");
+  if (rangeEl) rangeEl.textContent = `(${VF_FMIN}–${Math.round(VF_FMAX)} Hz)`;
+
   const slider = document.getElementById("vfCutoff");
-  const label = document.getElementById("vfCutoffLabel");
+  const box = document.getElementById("vfCutoffInput");
+
+  // Apply a new cutoff from either control: clamp, sync both widgets, redraw the
+  // analytic curve live. `commit` (release / Enter / blur) restarts averaging.
+  const applyCutoff = (freq, commit) => {
+    VF.cutoff = vfClampFreq(freq);
+    vfSyncCutoffControls();
+    vfComputeAnalytic();
+    vfUpdateReadout();
+    vfDraw();
+    if (commit) vfRunAveraging();
+  };
+
   if (slider) {
-    const onMove = () => {
-      VF.cutoff = Number(slider.value) || VF.cutoff;
-      if (label) label.textContent = `${VF.cutoff} Hz`;
-      // Analytic updates instantly on drag; measurement restarts on release.
-      vfComputeAnalytic();
-      vfUpdateReadout();
-      vfDraw();
-    };
-    slider.addEventListener("input", onMove);
-    slider.addEventListener("change", () => { onMove(); vfRunAveraging(); });
+    slider.addEventListener("input", () => applyCutoff(vfPosToFreq(Number(slider.value)), false));
+    slider.addEventListener("change", () => applyCutoff(vfPosToFreq(Number(slider.value)), true));
+  }
+  if (box) {
+    // Live analytic redraw as they type; commit (restart noise) on Enter/blur.
+    box.addEventListener("input", () => {
+      if (box.value === "" || !isFinite(Number(box.value))) return;
+      applyCutoff(Number(box.value), false);
+    });
+    box.addEventListener("change", () => {
+      if (box.value === "" || !isFinite(Number(box.value))) { vfSyncCutoffControls(); return; }
+      applyCutoff(Number(box.value), true);
+    });
+    box.addEventListener("keydown", (e) => { if (e.key === "Enter") box.blur(); });
   }
 
   const avg = document.getElementById("vfAverages");

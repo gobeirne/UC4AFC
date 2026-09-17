@@ -341,10 +341,14 @@
   </p>
 
   <div style="max-width:44rem; margin:0.75rem auto; text-align:left;">
-    <label for="vfCutoff"><strong>Corner frequency:</strong>
-      <span id="vfCutoffLabel">2000 Hz</span></label><br>
-    <input id="vfCutoff" type="range" min="100" max="8000" step="10" value="2000"
-           style="width:min(560px,90vw);">
+    <label for="vfCutoffInput"><strong>Corner frequency (Hz):</strong></label>
+    <input id="vfCutoffInput" type="number" step="1" value="2000"
+           style="width:8rem; margin-left:0.4rem;">
+    <span id="vfCutoffRange" class="small" style="margin-left:0.5rem;"></span><br>
+    <!-- Slider is a 0..1000 log-position index over [fMin,fMax] (shared with the
+         plot x-axis); the number box above holds the exact frequency. -->
+    <input id="vfCutoff" type="range" min="0" max="1000" step="1" value="500"
+           style="width:min(560px,90vw); margin-top:0.4rem;">
   </div>
 
   <div style="max-width:44rem; margin:0.5rem auto;">
