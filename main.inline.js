@@ -2609,7 +2609,14 @@ const CS_KEYS = {
 // Sensible starting defaults (only used until the operator saves their own).
 const CS_DEFAULTS = {
   snr: [-15, -12, -9, -6, -3],
-  lpf: [500, 800, 1200, 2000, 3150],
+  // LPF cutoffs (Hz), six log-spaced points (~0.58 octave apart) across 200–1500 Hz.
+  // Chosen to bracket BOTH the historical closed-set and open-set per-word SRT
+  // distributions (only weakly correlated, r≈0.31, so a word's new-foil threshold
+  // could land anywhere in that combined range) AND to sample inside each word's
+  // transition finely enough to estimate slope, not just SRT — a five-point grid
+  // (~0.70 oct) can bracket a steep transition without an observation in it.
+  // 396 presentations/participant at 2 repeats.
+  lpf: [200, 300, 450, 675, 1000, 1500],
   repeats: 2,
   breakEvery: 40,
   mode: "snr",
