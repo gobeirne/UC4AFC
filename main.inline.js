@@ -1,7 +1,5 @@
 "use strict";
 
-// --- Bundled main.inline.js ---
-
 // --- global.js ---
 // File: global.js
 
@@ -15,7 +13,7 @@ const config = {
   showAbortXOnTouchDevices: true,
   instructions: {
     training:
-      "Youâ€™ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
+      "You'll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
     test:
       "You will hear a word and see four pictures. Click the picture that matches the word you heard. If you're not sure, have a guess."
   },
@@ -68,7 +66,7 @@ async function loadConfig() {
   const isLocal = location.protocol === "file:";
 
   if (isLocal) {
-    console.warn("ðŸ“ Running locally. Skipping fetch(config.json) and using fallback config.");
+    console.warn("Running locally. Skipping fetch(config.json) and using fallback config.");
     Object.assign(config, {
       arrows: false,
       defaultDelay: 1500,
@@ -77,7 +75,7 @@ async function loadConfig() {
       saveJson: false,
       imageRevealOffsetMs: 600,
       instructions: {
-        training: "Youâ€™ll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
+        training: "You'll see and hear words one at a time. Look at the picture while you listen. Try to remember what the word is.",
         test: "You will hear a word and see four pictures. Click the picture that matches the word you heard. If you're not sure, have a guess."
       }
     });
@@ -88,10 +86,10 @@ async function loadConfig() {
     const res = await fetch("config.json");
     const externalConfig = await res.json();
     Object.assign(config, externalConfig);
-    console.log("âœ… Loaded config.json:", config);
+    console.log("[ok] Loaded config.json:", config);
   } catch (err) {
-    console.error("âŒ Failed to load config.json:", err);
-    console.warn("âš ï¸ Could not load config.json. Using fallback config.");
+    console.error("Failed to load config.json:", err);
+    console.warn("Could not load config.json. Using fallback config.");
   }
 }
 
@@ -1827,9 +1825,9 @@ function showInstructions(phase, onContinue) {
 // File: setImage.js
 
 function setImage(imgElement, name, useArrows = true) {
-  // 🔍 Validate the name before using it
+  // Validate the name before using it
   if (typeof name !== "string" || !name.trim()) {
-    console.warn("⚠️ setImage called with bad name:", name, imgElement);
+    console.warn("setImage called with bad name:", name, imgElement);
     imgElement.removeAttribute("src"); // or point to a known placeholder if you prefer
     return;
   }
@@ -2201,7 +2199,7 @@ async function loadList() {
       // Split to exactly 6 fields, trim each, and validate
       const parts = line.split(/\t/).map(s => (s ?? "").trim());
       if (parts.length !== 6 || parts.some(p => !p)) {
-        console.warn(`âš ï¸ Bad list row skipped @ line ${i + 1} (${sourceLabel}):`, line);
+        console.warn(`Bad list row skipped @ line ${i + 1} (${sourceLabel}):`, line);
         return null;
       }
       const [a, b, c, d, correct, audioFile] = parts;
@@ -2209,7 +2207,7 @@ async function loadList() {
     }).filter(Boolean);
 
     if (rows.length === 0) {
-      console.error(`âŒ No valid rows parsed from ${sourceLabel}.`);
+      console.error(`No valid rows parsed from ${sourceLabel}.`);
     }
     return rows;
   }
@@ -2224,21 +2222,21 @@ async function loadList() {
     const rows = parseLines(raw, "inline fallback");
     list.length = 0;
     list.push(...rows);
-    console.warn("ðŸ“¦ Loaded inline fallback list (file://)");
+    console.warn("Loaded inline fallback list (file://)");
   } else {
     try {
       const txt = await fetch("UC4AFC_lists.txt").then(r => r.text());
       const rows = parseLines(txt, "UC4AFC_lists.txt");
       list.length = 0;
       list.push(...rows);
-      console.log("âœ… Loaded list from UC4AFC_lists.txt");
+      console.log("[ok] Loaded list from UC4AFC_lists.txt");
     } catch (err) {
-      console.error("âŒ Failed to load UC4AFC_lists.txt:", err);
+      console.error("Failed to load UC4AFC_lists.txt:", err);
       alert("Failed to load stimulus list.");
     }
   }
 
-  // âœ… All assets are preloaded via preloadAllAssets() in main.js
+  // [ok] All assets are preloaded via preloadAllAssets() in main.js
 }
 
 
@@ -2254,7 +2252,7 @@ async function preloadAllAssets() {
   const isLocal = location.protocol === "file:";
 
   if (isLocal) {
-    // ðŸš§ Fallback list for local mode
+    // Fallback list for local mode
 assetList = [
   "images/bag.jpg",
   "images/back.jpg",
@@ -2469,7 +2467,7 @@ assetList = [
   "sounds/van.mp3",
   "sounds/zip.mp3"
 ];
-    console.warn("ðŸ“¦ Using fallback preload asset list (file:// mode)");
+    console.warn("Using fallback preload asset list (file:// mode)");
   } else {
     try {
       const res = await fetch("preloadfilelist.txt");
@@ -2477,7 +2475,7 @@ assetList = [
       const raw = await res.text();
       assetList = raw.split(/\r?\n/).filter(x => x.trim().length > 0);
     } catch (err) {
-      console.error("âŒ Failed to load preloadfilelist.txt:", err);
+      console.error("Failed to load preloadfilelist.txt:", err);
       return;
     }
   }
@@ -2488,9 +2486,9 @@ const tasks = assetList.map(src => () => {
   return Promise.resolve();
 }).filter(Boolean);
 
-console.log(`ðŸ“¦ Preloading ${tasks.length} assets...`);
+console.log(`Preloading ${tasks.length} assets...`);
 await runWithConcurrency(tasks, 8); // keep this modest on mobile
-console.log(`âœ… Finished preloading ${tasks.length} assets.`);
+console.log(`[ok] Finished preloading ${tasks.length} assets.`);
 
 async function runWithConcurrency(fns, limit = 8) {
   let i = 0;
@@ -2508,12 +2506,12 @@ function preloadImage(src, timeoutMs = 7000) {
 
     const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
     const timer = setTimeout(() => {
-      console.warn(`â±ï¸ Image preload timed out: ${src}`);
+      console.warn(`Image preload timed out: ${src}`);
       done();
     }, timeoutMs);
 
     img.onload = done;
-    img.onerror = () => { console.warn(`âš ï¸ Failed to load image: ${src}`); done(); };
+    img.onerror = () => { console.warn(`Failed to load image: ${src}`); done(); };
     img.src = src;
 
     // On some browsers, decode can resolve earlier/more reliably
@@ -2531,7 +2529,7 @@ function preloadSound(src, timeoutMs = 7000) {
 
     const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
     const timer = setTimeout(() => {
-      console.warn(`â±ï¸ Sound preload timed out: ${src}`);
+      console.warn(`Sound preload timed out: ${src}`);
       done();
     }, timeoutMs);
 
@@ -2539,7 +2537,7 @@ function preloadSound(src, timeoutMs = 7000) {
     once("canplaythrough");
     once("loadeddata");
     once("loadedmetadata");
-    audio.addEventListener("error", () => { console.warn(`âš ï¸ Failed to load sound: ${src}`); done(); }, { once: true });
+    audio.addEventListener("error", () => { console.warn(`Failed to load sound: ${src}`); done(); }, { once: true });
 
     audio.preload = "auto";
     audio.src = src;
@@ -3299,8 +3297,9 @@ function saveResults(optionalNote = "") {
   const isAdaptive = responseLog.some(r => typeof r.value === "number" || typeof r.cutoffHz === "number");
   const adaptiveCfg = (config && config.adaptive) ? config.adaptive : null;
   const mode = (adaptiveCfg && adaptiveCfg.mode) || "lpf";
-  const unit = (mode === "quiet") ? "dB" : "Hz";
-  const stepUnit = (mode === "quiet") ? "dB" : "dec";
+  const isLinear = (mode === "quiet" || mode === "snr");
+  const unit = (mode === "snr") ? "dB SNR" : (mode === "quiet") ? "dB" : "Hz";
+  const stepUnit = isLinear ? "dB" : "dec";
   const valOf = (r) => (typeof r.value === "number" ? r.value : r.cutoffHz);
   const estOf = (r) => (typeof r.estimate === "number" ? r.estimate : r.estimateHz);
   const lastEstimate = (() => {
@@ -3318,7 +3317,7 @@ function saveResults(optionalNote = "") {
   ];
 
   if (isAdaptive && adaptiveCfg) {
-    const startShown = (mode === "quiet")
+    const startShown = isLinear
       ? (adaptiveCfg.startValue ?? adaptiveCfg.start ?? "")
       : (adaptiveCfg.startValue ?? adaptiveCfg.startCutoffHz ?? "");
     txtLines.push(
@@ -3334,6 +3333,33 @@ function saveResults(optionalNote = "") {
       `# Routing\t${(config && config.routing) || "binaural"}`,
       `# Threshold estimate (${unit})\t${lastEstimate != null ? lastEstimate : "n/a"}`
     );
+    if (mode === "lpf") {
+      // LPF presentation level: dB(A) if calibrated, else a dB FS attenuation.
+      const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+      const lvl = (adaptiveCfg && isFinite(adaptiveCfg.lpfLevel)) ? adaptiveCfg.lpfLevel : (cal ? 65 : 0);
+      txtLines.push(
+        `# Presentation level\t${cal ? `${lvl} dB(A)` : `${lvl} dB FS attenuation (device volume sets absolute level)`}`
+      );
+    }
+    if (mode === "snr") {
+      // Noise presentation level from the dedicated SNR setting: dB(A) if
+      // calibrated, else a dB FS attenuation (device volume sets absolute level).
+      const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+      const nlv = (adaptiveCfg && isFinite(adaptiveCfg.snrNoiseLevel)) ? adaptiveCfg.snrNoiseLevel : (cal ? 65 : 0);
+      const noiseLevel = cal
+        ? `${nlv} dB(A)`
+        : `${nlv} dB FS attenuation (device volume sets absolute level)`;
+      const cfgc = (typeof config !== "undefined" && config) ? config : {};
+      txtLines.push(
+        `# Noise level (fixed)\t${noiseLevel}`,
+        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`,
+        `# Noise file\t${cfgc.snrNoiseFile ?? "noise.mp3"}`,
+        `# Word onset in file (ms)\t${cfgc.snrWordLeadMs ?? cfgc.imageRevealOffsetMs ?? 600}`,
+        `# Noise lead before word (ms)\t${cfgc.snrNoiseLeadMs ?? 600}`,
+        `# Noise trail after word (ms)\t${cfgc.snrNoiseTrailMs ?? 600}`,
+        `# Noise ramp in/out (ms)\t${cfgc.snrNoiseRampMs ?? 100}`
+      );
+    }
   }
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
     txtLines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
@@ -3341,8 +3367,8 @@ function saveResults(optionalNote = "") {
 
   txtLines.push("");
   if (isAdaptive) {
-    const valCol = (mode === "quiet") ? "Level_dB" : "Cutoff_Hz";
-    const estCol = (mode === "quiet") ? "Estimate_dB" : "Estimate_Hz";
+    const valCol = (mode === "snr") ? "SNR_dB" : (mode === "quiet") ? "Level_dB" : "Cutoff_Hz";
+    const estCol = (mode === "snr") ? "EstimateSNR_dB" : (mode === "quiet") ? "Estimate_dB" : "Estimate_Hz";
     txtLines.push(`Trial\tSound\tCorrect\tChosen\tCorrect?\t${valCol}\tProcedure\t${estCol}\tTime_ms`);
     for (const r of responseLog) {
       txtLines.push(
@@ -3838,6 +3864,15 @@ function renderCalMethodUI() {
     if (inp) inp.value = Calibration.state().measuredDbA ?? "";
   }
 
+  // Test-output slider + Test-level button belong to SOUND-FIELD ONLY, and only
+  // once calibrated. Audiometer never shows them (no slider, no test playback).
+  const calibrated = Calibration.isCalibrated();
+  const showTestUI = (!isAud && calibrated);
+  const panel = document.getElementById("calVolumePanel");
+  const testBtn = document.getElementById("testCalBtn");
+  if (panel) panel.style.display = showTestUI ? "" : "none";
+  if (testBtn) testBtn.hidden = !showTestUI;
+
   // Play-button label follows the method.
   const toggleBtn = document.getElementById("calToneToggleBtn");
   if (toggleBtn && !toggleBtn.classList.contains("active")) toggleBtn.textContent = calPlayLabel(false);
@@ -3862,20 +3897,18 @@ function setupCalibrationScreen() {
     const restored = Calibration.loadStored();
     if (restored) {
       if (methodSel && restored.method) methodSel.value = restored.method;
-      if (testBtn) testBtn.hidden = false;
+      if (typeof Calibration.setMethod === "function" && restored.method) Calibration.setMethod(restored.method);
+      // Auto-activate the stored calibration on return so the test UI is live
+      // immediately (operator confirmed device volume when they first saved).
+      Calibration.confirmStored(restored);
       const when = restored.timestamp
         ? new Date(restored.timestamp).toLocaleString("en-NZ", { dateStyle: "short", timeStyle: "short" })
         : "earlier";
       const el = document.getElementById("calStatus");
       if (el) {
-        const desc = (restored.dial)
-          ? (restored.dial.left != null && restored.dial.right != null && restored.dial.left === restored.dial.right
-              ? `${restored.dial.left} dB(A)`
-              : `L ${restored.dial.left ?? "—"} / R ${restored.dial.right ?? "—"} dB(A)`)
-          : `${restored.level} dB(A)`;
-        el.textContent = `Stored calibration found: ${desc} from ${when}. ` +
-          `Re-save to activate it — device volume must be at maximum.` +
-          (restored.stale ? " (Over 30 days old — recalibration recommended.)" : "");
+        el.textContent = `Calibrated: ${Calibration.calibrationHeader()} (restored from ${when}). ` +
+          `Device volume must be at maximum.` +
+          (restored.stale ? " Over 30 days old — recalibration recommended." : "");
       }
     }
   }
@@ -3949,7 +3982,7 @@ function setupCalibrationScreen() {
     }
     if (playing) { AudioEngine.stopCalibrationTone(); playing = false; toggleBtn.textContent = calPlayLabel(false); toggleBtn.classList.remove("active"); }
     setupCalibrationSlider();
-    if (testBtn) testBtn.hidden = false;
+    renderCalMethodUI();
     refreshCalStatus();
   };
 

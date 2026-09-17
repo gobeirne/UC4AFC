@@ -5,7 +5,7 @@ export async function loadConfig() {
   const isLocal = location.protocol === "file:";
 
   if (isLocal) {
-    console.warn(" Running locally. Skipping fetch(config.json) and using fallback config.");
+    console.warn("Running locally. Skipping fetch(config.json) and using fallback config.");
     Object.assign(config, {
       arrows: false,
       defaultDelay: 1500,
@@ -25,10 +25,10 @@ export async function loadConfig() {
     const res = await fetch("config.json");
     const externalConfig = await res.json();
     Object.assign(config, externalConfig);
-    console.log("[OK] Loaded config.json:", config);
+    console.log("[ok] Loaded config.json:", config);
   } catch (err) {
-    console.error("[X] Failed to load config.json:", err);
-    console.warn("[!] Could not load config.json. Using fallback config.");
+    console.error("Failed to load config.json:", err);
+    console.warn("Could not load config.json. Using fallback config.");
   }
 }
 

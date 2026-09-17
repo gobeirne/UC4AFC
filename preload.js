@@ -9,7 +9,7 @@ export async function preloadAllAssets() {
   const isLocal = location.protocol === "file:";
 
   if (isLocal) {
-    // ðŸš§ Fallback list for local mode
+    // Fallback list for local mode
 assetList = [
   "images/bag.jpg",
   "images/back.jpg",
@@ -224,7 +224,7 @@ assetList = [
   "sounds/van.mp3",
   "sounds/zip.mp3"
 ];
-    console.warn("ðŸ“¦ Using fallback preload asset list (file:// mode)");
+    console.warn("Using fallback preload asset list (file:// mode)");
   } else {
     try {
       const res = await fetch("preloadfilelist.txt");
@@ -232,7 +232,7 @@ assetList = [
       const raw = await res.text();
       assetList = raw.split(/\r?\n/).filter(x => x.trim().length > 0);
     } catch (err) {
-      console.error("âŒ Failed to load preloadfilelist.txt:", err);
+      console.error("Failed to load preloadfilelist.txt:", err);
       return;
     }
   }
@@ -243,9 +243,9 @@ const tasks = assetList.map(src => () => {
   return Promise.resolve();
 }).filter(Boolean);
 
-console.log(`ðŸ“¦ Preloading ${tasks.length} assets...`);
+console.log(`Preloading ${tasks.length} assets...`);
 await runWithConcurrency(tasks, 8); // keep this modest on mobile
-console.log(`âœ… Finished preloading ${tasks.length} assets.`);
+console.log(`[ok] Finished preloading ${tasks.length} assets.`);
 
 async function runWithConcurrency(fns, limit = 8) {
   let i = 0;
@@ -263,12 +263,12 @@ function preloadImage(src, timeoutMs = 7000) {
 
     const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
     const timer = setTimeout(() => {
-      console.warn(`â±ï¸ Image preload timed out: ${src}`);
+      console.warn(`Image preload timed out: ${src}`);
       done();
     }, timeoutMs);
 
     img.onload = done;
-    img.onerror = () => { console.warn(`âš ï¸ Failed to load image: ${src}`); done(); };
+    img.onerror = () => { console.warn(`Failed to load image: ${src}`); done(); };
     img.src = src;
 
     // On some browsers, decode can resolve earlier/more reliably
@@ -286,7 +286,7 @@ function preloadSound(src, timeoutMs = 7000) {
 
     const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
     const timer = setTimeout(() => {
-      console.warn(`â±ï¸ Sound preload timed out: ${src}`);
+      console.warn(`Sound preload timed out: ${src}`);
       done();
     }, timeoutMs);
 
@@ -294,7 +294,7 @@ function preloadSound(src, timeoutMs = 7000) {
     once("canplaythrough");
     once("loadeddata");
     once("loadedmetadata");
-    audio.addEventListener("error", () => { console.warn(`âš ï¸ Failed to load sound: ${src}`); done(); }, { once: true });
+    audio.addEventListener("error", () => { console.warn(`Failed to load sound: ${src}`); done(); }, { once: true });
 
     audio.preload = "auto";
     audio.src = src;

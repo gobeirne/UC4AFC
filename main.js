@@ -413,6 +413,15 @@ function renderCalMethodUI() {
     if (inp) inp.value = Calibration.state().measuredDbA ?? "";
   }
 
+  // Test-output slider + Test-level button belong to SOUND-FIELD ONLY, and only
+  // once calibrated. Audiometer never shows them (no slider, no test playback).
+  const calibrated = Calibration.isCalibrated();
+  const showTestUI = (!isAud && calibrated);
+  const panel = document.getElementById("calVolumePanel");
+  const testBtn = document.getElementById("testCalBtn");
+  if (panel) panel.style.display = showTestUI ? "" : "none";
+  if (testBtn) testBtn.hidden = !showTestUI;
+
   // Play-button label follows the method.
   const toggleBtn = document.getElementById("calToneToggleBtn");
   if (toggleBtn && !toggleBtn.classList.contains("active")) toggleBtn.textContent = calPlayLabel(false);
@@ -437,20 +446,18 @@ function setupCalibrationScreen() {
     const restored = Calibration.loadStored();
     if (restored) {
       if (methodSel && restored.method) methodSel.value = restored.method;
-      if (testBtn) testBtn.hidden = false;
+      if (typeof Calibration.setMethod === "function" && restored.method) Calibration.setMethod(restored.method);
+      // Auto-activate the stored calibration on return so the test UI is live
+      // immediately (operator confirmed device volume when they first saved).
+      Calibration.confirmStored(restored);
       const when = restored.timestamp
         ? new Date(restored.timestamp).toLocaleString("en-NZ", { dateStyle: "short", timeStyle: "short" })
         : "earlier";
       const el = document.getElementById("calStatus");
       if (el) {
-        const desc = (restored.dial)
-          ? (restored.dial.left != null && restored.dial.right != null && restored.dial.left === restored.dial.right
-              ? `${restored.dial.left} dB(A)`
-              : `L ${restored.dial.left ?? "—"} / R ${restored.dial.right ?? "—"} dB(A)`)
-          : `${restored.level} dB(A)`;
-        el.textContent = `Stored calibration found: ${desc} from ${when}. ` +
-          `Re-save to activate it — device volume must be at maximum.` +
-          (restored.stale ? " (Over 30 days old — recalibration recommended.)" : "");
+        el.textContent = `Calibrated: ${Calibration.calibrationHeader()} (restored from ${when}). ` +
+          `Device volume must be at maximum.` +
+          (restored.stale ? " Over 30 days old — recalibration recommended." : "");
       }
     }
   }
@@ -524,7 +531,7 @@ function setupCalibrationScreen() {
     }
     if (playing) { AudioEngine.stopCalibrationTone(); playing = false; toggleBtn.textContent = calPlayLabel(false); toggleBtn.classList.remove("active"); }
     setupCalibrationSlider();
-    if (testBtn) testBtn.hidden = false;
+    renderCalMethodUI();
     refreshCalStatus();
   };
 

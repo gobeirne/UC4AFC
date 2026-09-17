@@ -6,7 +6,7 @@ async function loadList() {
       // Split to exactly 6 fields, trim each, and validate
       const parts = line.split(/\t/).map(s => (s ?? "").trim());
       if (parts.length !== 6 || parts.some(p => !p)) {
-        console.warn(`[!] Bad list row skipped @ line ${i + 1} (${sourceLabel}):`, line);
+        console.warn(`Bad list row skipped @ line ${i + 1} (${sourceLabel}):`, line);
         return null;
       }
       const [a, b, c, d, correct, audioFile] = parts;
@@ -14,7 +14,7 @@ async function loadList() {
     }).filter(Boolean);
 
     if (rows.length === 0) {
-      console.error(`[X] No valid rows parsed from ${sourceLabel}.`);
+      console.error(`No valid rows parsed from ${sourceLabel}.`);
     }
     return rows;
   }
@@ -29,19 +29,19 @@ async function loadList() {
     const rows = parseLines(raw, "inline fallback");
     list.length = 0;
     list.push(...rows);
-    console.warn("[pkg] Loaded inline fallback list (file://)");
+    console.warn("Loaded inline fallback list (file://)");
   } else {
     try {
       const txt = await fetch("UC4AFC_lists.txt").then(r => r.text());
       const rows = parseLines(txt, "UC4AFC_lists.txt");
       list.length = 0;
       list.push(...rows);
-      console.log("[OK] Loaded list from UC4AFC_lists.txt");
+      console.log("[ok] Loaded list from UC4AFC_lists.txt");
     } catch (err) {
-      console.error("[X] Failed to load UC4AFC_lists.txt:", err);
+      console.error("Failed to load UC4AFC_lists.txt:", err);
       alert("Failed to load stimulus list.");
     }
   }
 
-  // [OK] All assets are preloaded via preloadAllAssets() in main.js
+  // [ok] All assets are preloaded via preloadAllAssets() in main.js
 }
