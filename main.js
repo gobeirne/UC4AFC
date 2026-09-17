@@ -275,6 +275,7 @@ if (breakEveryInput) {
 
   // Constant-stimuli (normalisation) screen wiring.
   if (typeof setupConstantScreen === "function") setupConstantScreen();
+  if (typeof setupVerifyFilter === "function") setupVerifyFilter();
 };
 
 // --- Calibration screen wiring (mirrors UC_CVCV) -----------------------------

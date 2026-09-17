@@ -177,6 +177,7 @@
       </label>
     </div>
     <p class="small" id="lpfLevelHint">Calibrated: dB(A). Uncalibrated: dB FS attenuation (0 = full scale); device volume sets absolute loudness.</p>
+    <button id="verifyFilterBtn" type="button" style="margin-top:0.5rem;">Verify filter…</button>
   </div>
 
   <div class="setup-block" id="wudrBlock">
@@ -326,6 +327,44 @@
     <button id="csBackBtn" style="background:#777;">Back</button>
   </div>
   <p id="csStatus" class="small" style="min-height:1.2rem;"></p>
+</div>
+
+<!-- Verify filter screen: plots the exact Butterworth LPF frequency response -->
+<div id="verifyfilter" class="screen">
+  <h2>Verify low-pass filter</h2>
+  <p class="small" style="max-width:44rem; margin:0.5rem auto;">
+    Frequency response of the exact filter applied to the stimuli (10th-order
+    Butterworth, built at 48&nbsp;kHz — the sound-file rate). The smooth line is the
+    analytic response of the filter coefficients; the dots are measured by passing
+    white noise through the identical filter code and averaging. Unfiltered =
+    0&nbsp;dB; the dashed marker shows the −3&nbsp;dB point at the corner frequency.
+  </p>
+
+  <div style="max-width:44rem; margin:0.75rem auto; text-align:left;">
+    <label for="vfCutoff"><strong>Corner frequency:</strong>
+      <span id="vfCutoffLabel">2000 Hz</span></label><br>
+    <input id="vfCutoff" type="range" min="100" max="8000" step="10" value="2000"
+           style="width:min(560px,90vw);">
+  </div>
+
+  <div style="max-width:44rem; margin:0.5rem auto;">
+    <canvas id="vfCanvas" width="880" height="440" style="width:100%; max-width:880px; border:1px solid #ccc; background:#fff;"></canvas>
+    <p id="vfReadout" class="small" style="margin:0.35rem 0;"></p>
+  </div>
+
+  <div style="max-width:44rem; margin:0.5rem auto; text-align:left;">
+    <label class="small" style="display:inline-flex; align-items:center; gap:0.35rem;">
+      Noise averages (n)
+      <input id="vfAverages" type="number" min="1" max="1000" step="1" value="100" style="width:6rem;">
+    </label>
+    <span id="vfProgress" class="small" style="margin-left:0.75rem;"></span>
+  </div>
+
+  <div style="margin-top:1rem;">
+    <button id="vfCopyBtn">Copy TSV to clipboard</button>
+    <button id="vfBackBtn" style="background:#777;">Back</button>
+  </div>
+  <p id="vfStatus" class="small" style="min-height:1.2rem;"></p>
 </div>
 
 <!-- Break screen -->

@@ -748,6 +748,8 @@ const AudioEngine = (() => {
     // pipeline
     prepare, measure: measureLUFS,
     butterworthSections: butterworthLowpassSections,
+    applyBiquad,                       // exact per-section filter (for the verify tool)
+    butterworthOrder: BUTTERWORTH_ORDER,
     // playback
     playBuffer, playStimulus, playStimulusWithNoise, stop, setMasterGainDb,
     // calibration
