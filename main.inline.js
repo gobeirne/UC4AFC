@@ -744,6 +744,7 @@ const AudioEngine = (() => {
   // is the reference. Decoded once and cached under a reserved key.
   let calibSource = null;
   let calibRouter = null;
+  let calibGain = null;   // the running cal tone's gain node, for live level changes
   const CALIB_KEY = "__calib__";
 
   // Decode + cache an audio asset (idempotent), keyed BY URL. Used by both the
@@ -796,6 +797,7 @@ const AudioEngine = (() => {
     // Sound-field callers pass "binaural" (a single meter at the head).
     calibRouter = makeEarRouter(c, g, ear === "left" || ear === "right" ? ear : "binaural");
     calibSource = src;
+    calibGain = g;
     src.start();
     if (onStarted) requestAnimationFrame(() => onStarted());
     return entry.momentary;       // informational only
@@ -808,7 +810,27 @@ const AudioEngine = (() => {
       calibSource = null;
     }
     calibRouter = null;
+    calibGain = null;
   }
+
+  // Live-set the running calibration tone's level (dB, relative to unity/reference)
+  // so moving the Test-output slider changes what's heard in real time. A short
+  // ramp avoids clicks. No-op if nothing is playing.
+  function setCalibrationGainDb(db) {
+    if (!calibGain) return;
+    const c = context();
+    const target = LIN(Number(db) || 0);
+    try {
+      calibGain.gain.cancelScheduledValues(c.currentTime);
+      calibGain.gain.setTargetAtTime(target, c.currentTime, 0.015);
+    } catch (_) {
+      calibGain.gain.value = target;
+    }
+  }
+
+  // Whether the calibration tone is currently playing (for the UI to decide
+  // whether a slider move should update the live level).
+  function isCalibrationTonePlaying() { return !!calibSource; }
 
   // Live re-route the running calibration tone to left / right / both, so the
   // clinician can flip channels without restarting. No-op if nothing is playing.
@@ -827,7 +849,7 @@ const AudioEngine = (() => {
     // playback
     playBuffer, playStimulus, playStimulusWithNoise, stop, setMasterGainDb,
     // calibration
-    startCalibrationTone, stopCalibrationTone, setCalibrationEar, ensureCalibNoise,
+    startCalibrationTone, stopCalibrationTone, setCalibrationEar, setCalibrationGainDb, isCalibrationTonePlaying, ensureCalibNoise,
     // audio-graph diagnostics
     rateMismatch,
     // caches (exposed for diagnostics / teardown)
@@ -3758,7 +3780,7 @@ function setupCalibrationSlider() {
   updateOutputLevelFromSlider();
 }
 
-function updateOutputLevelFromSlider() {
+function updateOutputLevelFromSlider(snap = true) {
   const slider = document.getElementById("outputLevel");
   const label = document.getElementById("outputLevelLabel");
   const badge = document.getElementById("modeBadge");
@@ -3769,11 +3791,22 @@ function updateOutputLevelFromSlider() {
   if (c.isCalibrated && c.measuredDbA !== null) {
     const max = parseFloat(slider.max);
     const tol = 0.25;
-    const snapped = Math.abs(raw - max) <= tol ? max : Math.round(raw / 5) * 5;
-    slider.value = snapped;
-    Calibration.setCurrentSliderDb(snapped);
-    if (label) label.textContent = `${snapped} dB A`;
+    // While dragging (snap=false) keep the exact value for smooth audition;
+    // on release (snap=true) settle onto the 5 dB grid.
+    const shown = snap
+      ? (Math.abs(raw - max) <= tol ? max : Math.round(raw / 5) * 5)
+      : raw;
+    if (snap) slider.value = shown;
+    Calibration.setCurrentSliderDb(shown);
+    if (label) label.textContent = `${snap ? shown : Math.round(shown)} dB A`;
     if (badge) { badge.textContent = "Calibrated Mode"; badge.classList.add("calibrated"); }
+    // Live: if the Test tone is auditioning, move its level with the slider.
+    if (typeof AudioEngine !== "undefined" && AudioEngine.isCalibrationTonePlaying &&
+        AudioEngine.isCalibrationTonePlaying()) {
+      const earSel = document.getElementById("calEarSelect");
+      const ear = earSel ? earSel.value : "binaural";
+      AudioEngine.setCalibrationGainDb(Calibration.gainDbForLevel(shown, ear));
+    }
   } else {
     const snapped = Math.round(raw / 5) * 5;
     slider.value = snapped;
@@ -3868,10 +3901,8 @@ function renderCalMethodUI() {
   // once calibrated. Audiometer never shows them (no slider, no test playback).
   const calibrated = Calibration.isCalibrated();
   const showTestUI = (!isAud && calibrated);
-  const panel = document.getElementById("calVolumePanel");
-  const testBtn = document.getElementById("testCalBtn");
-  if (panel) panel.style.display = showTestUI ? "" : "none";
-  if (testBtn) testBtn.hidden = !showTestUI;
+  const testRow = document.getElementById("calTestRow");
+  if (testRow) testRow.style.display = showTestUI ? "flex" : "none";
 
   // Play-button label follows the method.
   const toggleBtn = document.getElementById("calToneToggleBtn");
@@ -4006,8 +4037,8 @@ function setupCalibrationScreen() {
   }
 
   if (slider) {
-    slider.addEventListener("input", updateOutputLevelFromSlider);
-    slider.addEventListener("change", updateOutputLevelFromSlider);
+    slider.addEventListener("input", () => updateOutputLevelFromSlider(false));
+    slider.addEventListener("change", () => updateOutputLevelFromSlider(true));
   }
 
   clearBtn.onclick = () => {

@@ -646,6 +646,7 @@ const AudioEngine = (() => {
   // is the reference. Decoded once and cached under a reserved key.
   let calibSource = null;
   let calibRouter = null;
+  let calibGain = null;   // the running cal tone's gain node, for live level changes
   const CALIB_KEY = "__calib__";
 
   // Decode + cache an audio asset (idempotent), keyed BY URL. Used by both the
@@ -698,6 +699,7 @@ const AudioEngine = (() => {
     // Sound-field callers pass "binaural" (a single meter at the head).
     calibRouter = makeEarRouter(c, g, ear === "left" || ear === "right" ? ear : "binaural");
     calibSource = src;
+    calibGain = g;
     src.start();
     if (onStarted) requestAnimationFrame(() => onStarted());
     return entry.momentary;       // informational only
@@ -710,7 +712,27 @@ const AudioEngine = (() => {
       calibSource = null;
     }
     calibRouter = null;
+    calibGain = null;
   }
+
+  // Live-set the running calibration tone's level (dB, relative to unity/reference)
+  // so moving the Test-output slider changes what's heard in real time. A short
+  // ramp avoids clicks. No-op if nothing is playing.
+  function setCalibrationGainDb(db) {
+    if (!calibGain) return;
+    const c = context();
+    const target = LIN(Number(db) || 0);
+    try {
+      calibGain.gain.cancelScheduledValues(c.currentTime);
+      calibGain.gain.setTargetAtTime(target, c.currentTime, 0.015);
+    } catch (_) {
+      calibGain.gain.value = target;
+    }
+  }
+
+  // Whether the calibration tone is currently playing (for the UI to decide
+  // whether a slider move should update the live level).
+  function isCalibrationTonePlaying() { return !!calibSource; }
 
   // Live re-route the running calibration tone to left / right / both, so the
   // clinician can flip channels without restarting. No-op if nothing is playing.
@@ -729,7 +751,7 @@ const AudioEngine = (() => {
     // playback
     playBuffer, playStimulus, playStimulusWithNoise, stop, setMasterGainDb,
     // calibration
-    startCalibrationTone, stopCalibrationTone, setCalibrationEar, ensureCalibNoise,
+    startCalibrationTone, stopCalibrationTone, setCalibrationEar, setCalibrationGainDb, isCalibrationTonePlaying, ensureCalibNoise,
     // audio-graph diagnostics
     rateMismatch,
     // caches (exposed for diagnostics / teardown)

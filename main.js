@@ -307,7 +307,7 @@ function setupCalibrationSlider() {
   updateOutputLevelFromSlider();
 }
 
-function updateOutputLevelFromSlider() {
+function updateOutputLevelFromSlider(snap = true) {
   const slider = document.getElementById("outputLevel");
   const label = document.getElementById("outputLevelLabel");
   const badge = document.getElementById("modeBadge");
@@ -318,11 +318,22 @@ function updateOutputLevelFromSlider() {
   if (c.isCalibrated && c.measuredDbA !== null) {
     const max = parseFloat(slider.max);
     const tol = 0.25;
-    const snapped = Math.abs(raw - max) <= tol ? max : Math.round(raw / 5) * 5;
-    slider.value = snapped;
-    Calibration.setCurrentSliderDb(snapped);
-    if (label) label.textContent = `${snapped} dB A`;
+    // While dragging (snap=false) keep the exact value for smooth audition;
+    // on release (snap=true) settle onto the 5 dB grid.
+    const shown = snap
+      ? (Math.abs(raw - max) <= tol ? max : Math.round(raw / 5) * 5)
+      : raw;
+    if (snap) slider.value = shown;
+    Calibration.setCurrentSliderDb(shown);
+    if (label) label.textContent = `${snap ? shown : Math.round(shown)} dB A`;
     if (badge) { badge.textContent = "Calibrated Mode"; badge.classList.add("calibrated"); }
+    // Live: if the Test tone is auditioning, move its level with the slider.
+    if (typeof AudioEngine !== "undefined" && AudioEngine.isCalibrationTonePlaying &&
+        AudioEngine.isCalibrationTonePlaying()) {
+      const earSel = document.getElementById("calEarSelect");
+      const ear = earSel ? earSel.value : "binaural";
+      AudioEngine.setCalibrationGainDb(Calibration.gainDbForLevel(shown, ear));
+    }
   } else {
     const snapped = Math.round(raw / 5) * 5;
     slider.value = snapped;
@@ -417,10 +428,8 @@ function renderCalMethodUI() {
   // once calibrated. Audiometer never shows them (no slider, no test playback).
   const calibrated = Calibration.isCalibrated();
   const showTestUI = (!isAud && calibrated);
-  const panel = document.getElementById("calVolumePanel");
-  const testBtn = document.getElementById("testCalBtn");
-  if (panel) panel.style.display = showTestUI ? "" : "none";
-  if (testBtn) testBtn.hidden = !showTestUI;
+  const testRow = document.getElementById("calTestRow");
+  if (testRow) testRow.style.display = showTestUI ? "flex" : "none";
 
   // Play-button label follows the method.
   const toggleBtn = document.getElementById("calToneToggleBtn");
@@ -555,8 +564,8 @@ function setupCalibrationScreen() {
   }
 
   if (slider) {
-    slider.addEventListener("input", updateOutputLevelFromSlider);
-    slider.addEventListener("change", updateOutputLevelFromSlider);
+    slider.addEventListener("input", () => updateOutputLevelFromSlider(false));
+    slider.addEventListener("change", () => updateOutputLevelFromSlider(true));
   }
 
   clearBtn.onclick = () => {

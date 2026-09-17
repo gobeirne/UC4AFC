@@ -68,10 +68,9 @@
     <ol id="calSteps" class="small" style="margin:0.5rem 0 0 1.1rem; padding:0;"></ol>
   </div>
 
-  <div style="max-width:34rem; margin:1rem auto; text-align:left; display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">
-    <button id="calToneToggleBtn">▶ Play 1 kHz tone</button>
-    <button id="testCalBtn" hidden>Test level</button>
-    <label id="calEarWrap" style="display:flex; align-items:center; gap:0.35rem; font-size:0.85rem; margin:0;">
+  <div style="max-width:34rem; margin:1rem auto 0.35rem; text-align:left; display:flex; align-items:flex-end; gap:0.9rem; flex-wrap:wrap;">
+    <button id="calToneToggleBtn" style="align-self:center;">▶ Play 1 kHz tone</button>
+    <label id="calEarWrap" style="display:flex; align-items:center; gap:0.35rem; font-size:0.85rem; margin:0; align-self:center;">
       Route to
       <select id="calEarSelect" style="width:auto;">
         <option value="left">Left only</option>
@@ -79,14 +78,13 @@
         <option value="binaural">Both</option>
       </select>
     </label>
+    <!-- Sound-field: single measured level, sits beside the Play button -->
+    <div id="calLevelSingleWrap" style="display:flex; flex-direction:column; gap:0.15rem;">
+      <label for="calLevelInput"><strong id="calLevelLabelText">Measured level, dB(A)</strong></label>
+      <input id="calLevelInput" type="number" step="5" inputmode="decimal" style="width:8rem;">
+    </div>
   </div>
   <div id="calEarHint" class="small" style="max-width:34rem; margin:0 auto 0.5rem; text-align:left;"></div>
-
-  <!-- Sound-field: single measured level -->
-  <div id="calLevelSingleWrap" style="max-width:34rem; margin:0.5rem auto; text-align:left;">
-    <label for="calLevelInput"><strong id="calLevelLabelText">Audiometer dial setting, dB(A)</strong></label><br>
-    <input id="calLevelInput" type="number" step="5" inputmode="decimal" style="margin-top:0.25rem; width:12rem;">
-  </div>
 
   <!-- Audiometer: per-channel dials -->
   <div id="calDialDualWrap" style="max-width:34rem; margin:0.5rem auto; text-align:left; display:none;">
@@ -107,21 +105,26 @@
 
   <p id="calLevelHint" class="small" style="max-width:34rem; margin:0.4rem auto; text-align:left;"></p>
 
-  <div class="volume-panel" id="calVolumePanel">
-    <label for="outputLevel">Test output level</label><br>
-    <input id="outputLevel" type="range" min="-100" max="0" step="0.1" value="0" style="width:min(340px,80vw);">
-    <div class="level-readout">
-      <strong id="outputLevelLabel">0 dB FS</strong>
-      <span id="modeBadge">Uncalibrated</span>
-    </div>
-  </div>
-
   <p id="calStatus" class="small" style="min-height:1.4rem;"></p>
 
   <div style="margin-top:1.25rem;">
     <button id="calSaveBtn">Save calibration</button>
     <button id="calClearBtn" style="background:#777;">Clear calibration</button>
     <button id="calBackBtn">Back</button>
+  </div>
+
+  <!-- Sound-field only, once calibrated: test panel with the level readout and a
+       Test-level button beside the slider. -->
+  <div id="calTestRow" style="display:none; align-items:center; justify-content:center; gap:1rem; flex-wrap:wrap; margin-top:1rem;">
+    <div class="volume-panel" id="calVolumePanel" style="margin:0;">
+      <label for="outputLevel">Test output level</label><br>
+      <input id="outputLevel" type="range" min="-100" max="0" step="0.1" value="0" style="width:min(340px,80vw);">
+      <div class="level-readout">
+        <strong id="outputLevelLabel">0 dB FS</strong>
+        <span id="modeBadge">Uncalibrated</span>
+      </div>
+    </div>
+    <button id="testCalBtn">Test level</button>
   </div>
 </div>
 
