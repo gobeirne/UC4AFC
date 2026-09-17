@@ -294,10 +294,9 @@ function csStartRun() {
     go();
   }
 
-  // Show the abort [X] on touch devices, mirroring the adaptive flow.
+  // Show the hold-to-abort control (the run's only escape).
   const abortBtn = document.getElementById("abortBtn");
-  const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-  if (abortBtn && config && config.showAbortXOnTouchDevices && isTouch) {
+  if (abortBtn && config && config.showAbortXOnTouchDevices !== false) {
     abortBtn.style.display = "block";
   }
 }

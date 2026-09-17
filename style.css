@@ -109,23 +109,45 @@ button:hover {
   top: 0.5rem;
   right: 0.5rem;
   z-index: 1000;
-  font-size: 1.25rem;
-  padding: 0.25em 0.5em;
-  background: rgba(255, 255, 255, 0.8);
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.85);
   border: 1px solid #aaa;
-  border-radius: 0.25em;
-  color: #666;
-  font-weight: normal;
+  border-radius: 0.35em;
   cursor: pointer;
-  opacity: 0.6;
+  opacity: 0.55;
   transition: opacity 0.3s ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+  user-select: none;
 }
-
-#abortBtn:hover {
-  opacity: 1;
-  color: #900;
-  font-weight: bold;
+#abortBtn:hover { opacity: 0.9; }
+#abortBtn svg {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%) rotate(-90deg);
 }
+#abortBtn .abort-track { fill: none; stroke: #ddd; stroke-width: 3; }
+#abortBtn .abort-progress {
+  fill: none;
+  stroke: #b31b1b;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 100.53;
+  stroke-dashoffset: 100.53;
+}
+#abortBtn .abort-x {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 1.15rem;
+  line-height: 1;
+  color: #666;
+  pointer-events: none;
+}
+#abortBtn.holding { opacity: 1; }
+#abortBtn.holding .abort-x { color: #900; }
 
 
 .footer {

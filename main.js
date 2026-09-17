@@ -19,21 +19,19 @@ function abortPhase() {
 
 // Constant-stimuli run takes precedence: it manages its own state/save.
 if (typeof csRunActive === "function" && csRunActive()) {
-  if (confirm("Abort constant-stimuli run and save progress?")) {
-    stopAudio();
-    csAbort();
-  }
+  stopAudio();
+  csAbort();
   return;
 }
 
-if (phase === "training" && confirm("Abort training?")) {
+if (phase === "training") {
   abortTraining(); //  tells flow.js to stop future audio/images
   stopAudio();
   trialIndex = 0;
   responseLog.length = 0;
   showScreen("thankyou");
   if (abortBtn) abortBtn.style.display = "none";
-} else if (phase === "test" && confirm("Abort test and save progress?")) {
+} else if (phase === "test") {
     stopAudio();
     showScreen("thankyou");
     if (abortBtn) abortBtn.style.display = "none";
@@ -41,9 +39,14 @@ if (phase === "training" && confirm("Abort training?")) {
   }
 }
 
-// Escape key handler
+// Escape key handler (keyboard path keeps a confirm; the on-screen button uses
+// a 3-second hold instead, so a stray tap can't end the session).
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") abortPhase();
+  if (e.key !== "Escape") return;
+  const inRun = (phase === "training" || phase === "test" ||
+    (typeof csRunActive === "function" && csRunActive()));
+  if (!inRun) return;
+  if (confirm("End the current session?")) abortPhase();
 });
 
 // Show loading screen and wait until assetsReady becomes true
@@ -161,13 +164,66 @@ preloadAllAssets().then(() => {
 
 const abortBtn = document.getElementById("abortBtn");
 if (abortBtn) {
-  //  Show the button only if needed
-  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-  const showOnTouch = config.showAbortXOnTouchDevices === true;
-  abortBtn.style.display = (showOnTouch && isTouchDevice) ? "block" : "none";
+  // Visibility is driven per-phase (training + test) elsewhere; default hidden.
+  abortBtn.style.display = "none";
 
-  //  Always attach the click handler
-  abortBtn.addEventListener("click", abortPhase);
+  const ring = document.getElementById("abortProgress");
+  const CIRC = 100.53;                 // 2*pi*16, matches the CSS dasharray
+  const HOLD_MS = 3000;                // hold duration to confirm
+  let rafId = null, holdStart = 0, pointerId = null;
+
+  const setProgress = (frac) => {
+    if (ring) ring.style.strokeDashoffset = String(CIRC * (1 - Math.max(0, Math.min(1, frac))));
+  };
+  const resetRing = () => {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    abortBtn.classList.remove("holding");
+    setProgress(0);
+    pointerId = null;
+  };
+  const tick = () => {
+    const frac = (performance.now() - holdStart) / HOLD_MS;
+    setProgress(frac);
+    if (frac >= 1) {
+      resetRing();
+      abortPhase();          // the completed hold IS the confirmation
+      return;
+    }
+    rafId = requestAnimationFrame(tick);
+  };
+  const startHold = (ev) => {
+    ev.preventDefault();
+    if (rafId) return;       // already holding
+    if (ev.pointerId != null) {
+      pointerId = ev.pointerId;
+      try { abortBtn.setPointerCapture(pointerId); } catch (_) {}
+    }
+    abortBtn.classList.add("holding");
+    holdStart = performance.now();
+    rafId = requestAnimationFrame(tick);
+  };
+  const cancelHold = (ev) => {
+    if (ev) ev.preventDefault();
+    resetRing();
+  };
+
+  // Pointer events cover mouse + touch + pen in one path.
+  if (window.PointerEvent) {
+    abortBtn.addEventListener("pointerdown", startHold);
+    abortBtn.addEventListener("pointerup", cancelHold);
+    abortBtn.addEventListener("pointercancel", cancelHold);
+    abortBtn.addEventListener("pointerleave", cancelHold);
+  } else {
+    // Fallback for older engines.
+    abortBtn.addEventListener("mousedown", startHold);
+    abortBtn.addEventListener("mouseup", cancelHold);
+    abortBtn.addEventListener("mouseleave", cancelHold);
+    abortBtn.addEventListener("touchstart", startHold, { passive: false });
+    abortBtn.addEventListener("touchend", cancelHold);
+    abortBtn.addEventListener("touchcancel", cancelHold);
+  }
+  // A plain click never aborts (guards against assistive double-activations).
+  abortBtn.addEventListener("click", (e) => e.preventDefault());
 }
 
 
@@ -221,8 +277,7 @@ if (breakEveryInput) {
       });
     }
     showInstructions("training", () => {
-      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-      if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
+      if (abortBtn && config.showAbortXOnTouchDevices !== false) {
         abortBtn.style.display = "block";
       }
 
@@ -246,8 +301,7 @@ if (breakEveryInput) {
       });
     }
     showInstructions("test", () => {
-      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-      if (abortBtn && config.showAbortXOnTouchDevices && isTouchDevice) {
+      if (abortBtn && config.showAbortXOnTouchDevices !== false) {
         abortBtn.style.display = "block";
       }
 

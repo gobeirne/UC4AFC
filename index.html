@@ -391,7 +391,6 @@
 </div>
 
 <div id="test" class="screen">
-  <button id="abortBtn" title="Abort test">[X]</button> 
   <audio id="stimulus"></audio>
 <div class="grid-container">
   <div class="grid">
@@ -508,6 +507,16 @@ cap	bat	cat	dog	cap	cap.mp3
 road	rose	sword	shirt	road	road.mp3
 cake	cage	park	soup	cake	cake.mp3
   </script>
+
+<!-- Hold-to-abort overlay: shown during training and test. Press and hold for
+     3 s (a ring fills) to end the session; a stray tap does nothing. -->
+<button id="abortBtn" type="button" title="Hold to end" aria-label="Hold to end session">
+  <svg viewBox="0 0 40 40" width="40" height="40" aria-hidden="true">
+    <circle class="abort-track" cx="20" cy="20" r="16"></circle>
+    <circle id="abortProgress" class="abort-progress" cx="20" cy="20" r="16"></circle>
+  </svg>
+  <span class="abort-x">&times;</span>
+</button>
 
 <script src="main.inline.js"></script>
 

@@ -314,7 +314,7 @@ function vfUpdateReadout() {
   const at = vfAnalyticAtCutoff();
   const slope = vfSlopeDbPerOct();
   el.textContent =
-    `Analytic at ${VF.cutoff} Hz: ${at.toFixed(2)} dB (target −3.01). ` +
+    `Analytic at ${Math.round(VF.cutoff)} Hz: ${at.toFixed(2)} dB (target −3.01). ` +
     (slope != null ? `Rolloff ≈ ${slope.toFixed(1)} dB/oct (10th-order Butterworth ≈ −60).` : "");
 }
 
