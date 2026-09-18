@@ -2608,7 +2608,15 @@ const CS_KEYS = {
 
 // Sensible starting defaults (only used until the operator saves their own).
 const CS_DEFAULTS = {
-  snr: [-15, -12, -9, -6, -3],
+  // SNRs (dB), six points at equal 3 dB spacing — the log-domain analogue of the
+  // LPF grid (SNR is already logarithmic). Anchored on McClelland's 2015 UCAMST
+  // word-specific normalisation in matched steady noise (young normal-hearing,
+  // closed-set, constant noise): word L_mid ≈ −18 to −8 dB, mean ≈ −13.6, slopes
+  // ≈ 14%/dB. This grid brackets that whole range and samples one step beyond each
+  // end (−20 and −5), so extreme words are still measured on both sides, and the
+  // 3 dB step keeps ≥2 observations inside a typical transition for slope
+  // estimation. 396 conditions/participant (66 × 6); ×2 repeats = 792.
+  snr: [-20, -17, -14, -11, -8, -5],
   // LPF cutoffs (Hz), six log-spaced points (~0.58 octave apart) across 200–1500 Hz.
   // Chosen to bracket BOTH the historical closed-set and open-set per-word SRT
   // distributions (only weakly correlated, r≈0.31, so a word's new-foil threshold
