@@ -84,31 +84,15 @@ export function saveResults(optionalNote = "") {
       `# Routing\t${(config && config.routing) || "binaural"}`,
       `# Threshold estimate (${unit})\t${lastEstimate != null ? lastEstimate : "n/a"}`
     );
-    if (mode === "lpf") {
-      // LPF presentation level: dB(A) if calibrated, else a dB FS attenuation.
-      const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
-      const lvl = (adaptiveCfg && isFinite(adaptiveCfg.lpfLevel)) ? adaptiveCfg.lpfLevel : (cal ? 65 : 0);
-      txtLines.push(
-        `# Presentation level\t${cal ? `${lvl} dB(A)` : `${lvl} dB FS attenuation (device volume sets absolute level)`}`
-      );
-    }
     if (mode === "snr") {
-      // Noise presentation level from the dedicated SNR setting: dB(A) if
-      // calibrated, else a dB FS attenuation (device volume sets absolute level).
-      const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
-      const nlv = (adaptiveCfg && isFinite(adaptiveCfg.snrNoiseLevel)) ? adaptiveCfg.snrNoiseLevel : (cal ? 65 : 0);
-      const noiseLevel = cal
-        ? `${nlv} dB(A)`
-        : `${nlv} dB FS attenuation (device volume sets absolute level)`;
-      const cfgc = (typeof config !== "undefined" && config) ? config : {};
+      // In SNR mode the noise sits at the fixed presentation level; document it
+      // (the calibrated dB(A), else "uncalibrated") and the step multiplier.
+      const noiseLevel = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated())
+        ? `${Calibration.state().currentSliderDb} dB(A)`
+        : "uncalibrated (device volume sets level)";
       txtLines.push(
         `# Noise level (fixed)\t${noiseLevel}`,
-        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`,
-        `# Noise file\t${cfgc.snrNoiseFile ?? "noise.mp3"}`,
-        `# Word onset in file (ms)\t${cfgc.snrWordLeadMs ?? cfgc.imageRevealOffsetMs ?? 600}`,
-        `# Noise lead before word (ms)\t${cfgc.snrNoiseLeadMs ?? 600}`,
-        `# Noise trail after word (ms)\t${cfgc.snrNoiseTrailMs ?? 600}`,
-        `# Noise ramp in/out (ms)\t${cfgc.snrNoiseRampMs ?? 100}`
+        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`
       );
     }
   }
@@ -172,29 +156,29 @@ if (saveAgainBtn) {
 }
 
 
-  // Email (subject = filename; body = TXT contents)
+  // Email (subject = filename; body = TXT contents). A mailto: link has a hard
+  // length limit and cannot attach files, so we only offer email when the FULL
+  // results text fits under the limit (typical for a short adaptive run). If it
+  // would overflow, we hide the button rather than send a truncated, useless
+  // body — the file is already saved locally.
   const emailBtn = document.getElementById("emailBtn");
   if (emailBtn) {
     const baseName = `UC4AFC_${participant}_${timeStr}`;
     const subject = `${baseName}.txt`;
-
     const txtContent = txtLines.join("\n");
 
-    // Mailto size is limited — keep conservative
+    // Conservative ceiling for the whole encoded mailto: URL body.
     const MAX_MAILTO_BODY = 1800;
-    let body = txtContent;
-    let truncated = false;
-    if (body.length > MAX_MAILTO_BODY) {
-      truncated = true;
-      body = body.slice(0, MAX_MAILTO_BODY - 120)
-        + `\n\n[...truncated...]\n(Full file saved locally as ${subject}${shouldSaveJson ? " and JSON." : "."})`;
+
+    if (txtContent.length > MAX_MAILTO_BODY) {
+      emailBtn.style.display = "none";
+      emailBtn.onclick = null;
+    } else {
+      emailBtn.style.display = "";
+      const to = (typeof config?.emailTo === "string" && config.emailTo.trim()) ? config.emailTo : "";
+      const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(txtContent)}`;
+      emailBtn.onclick = () => { location.href = mailto; };
+      emailBtn.title = "";
     }
-
-    // Optional default recipient via config.emailTo (add to config.json if you want)
-    const to = (typeof config?.emailTo === "string" && config.emailTo.trim()) ? config.emailTo : "";
-    const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-
-    emailBtn.onclick = () => { location.href = mailto; };
-    if (truncated) emailBtn.title = "Body truncated to fit email link limits";
   }
 }

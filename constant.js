@@ -53,6 +53,7 @@ const CS_DEFAULTS = {
   lpf: [200, 300, 450, 675, 1000, 1500],
   repeats: 2,
   breakEvery: 40,
+  easeIn: 20,
   mode: "snr",
   ear: "binaural"
 };
@@ -65,6 +66,7 @@ const CS = {
   levels: [],           // numeric levels for the run (ascending in tables)
   repeats: 2,
   breakEvery: 40,
+  easeIn: 20,
   queue: [],            // [{ wordIdx, level, rep }] in presentation order
   pos: 0,               // index into queue of the CURRENT (pending) trial
   startedAt: null,
@@ -108,18 +110,19 @@ function csLoadOpts() {
       return {
         repeats: Number.isFinite(Number(o.repeats)) ? Number(o.repeats) : CS_DEFAULTS.repeats,
         breakEvery: Number.isFinite(Number(o.breakEvery)) ? Number(o.breakEvery) : CS_DEFAULTS.breakEvery,
+        easeIn: Number.isFinite(Number(o.easeIn)) ? Number(o.easeIn) : CS_DEFAULTS.easeIn,
         mode: (o.mode === "lpf" || o.mode === "snr") ? o.mode : CS_DEFAULTS.mode,
         ear: (o.ear === "left" || o.ear === "right" || o.ear === "binaural") ? o.ear : CS_DEFAULTS.ear
       };
     }
   } catch (_) {}
-  return { repeats: CS_DEFAULTS.repeats, breakEvery: CS_DEFAULTS.breakEvery, mode: CS_DEFAULTS.mode, ear: CS_DEFAULTS.ear };
+  return { repeats: CS_DEFAULTS.repeats, breakEvery: CS_DEFAULTS.breakEvery, easeIn: CS_DEFAULTS.easeIn, mode: CS_DEFAULTS.mode, ear: CS_DEFAULTS.ear };
 }
 
-function csSaveDefaults(mode, levels, repeats, breakEvery, ear) {
+function csSaveDefaults(mode, levels, repeats, breakEvery, ear, easeIn) {
   try {
     localStorage.setItem(CS_KEYS[mode], JSON.stringify(levels));
-    localStorage.setItem(CS_KEYS.opts, JSON.stringify({ repeats, breakEvery, mode, ear }));
+    localStorage.setItem(CS_KEYS.opts, JSON.stringify({ repeats, breakEvery, easeIn, mode, ear }));
     return true;
   } catch (_) { return false; }
 }
@@ -156,6 +159,8 @@ function csPopulateForm() {
   if (rep) rep.value = opts.repeats;
   const brk = document.getElementById("csBreakEvery");
   if (brk) brk.value = opts.breakEvery;
+  const ease = document.getElementById("csEaseIn");
+  if (ease) ease.value = opts.easeIn;
   CS.ear = opts.ear;
   const earSeg = document.getElementById("csEarSegmented");
   if (earSeg) {
@@ -248,7 +253,8 @@ function setupConstantScreen() {
     if (!levels.length) { csStatus("Enter at least one valid level before saving.", true); return; }
     const reps = Math.max(1, Math.round(Number(document.getElementById("csRepeats").value) || 1));
     const brk = Math.max(0, Math.round(Number(document.getElementById("csBreakEvery").value) || 0));
-    const ok = csSaveDefaults(CS.mode, levels, reps, brk, CS.ear);
+    const ease = Math.max(0, Math.round(Number(document.getElementById("csEaseIn").value) || 0));
+    const ok = csSaveDefaults(CS.mode, levels, reps, brk, CS.ear, ease);
     csStatus(ok ? `Saved as default for ${CS.mode.toUpperCase()} mode.` : "Could not save (storage unavailable).", !ok);
   };
 
@@ -269,11 +275,13 @@ function csStartRun() {
   if (!levels.length) { csStatus("Enter at least one valid level.", true); return; }
   const reps = Math.max(1, Math.round(Number(document.getElementById("csRepeats").value) || 1));
   const brk = Math.max(0, Math.round(Number(document.getElementById("csBreakEvery").value) || 0));
+  const easeIn = Math.max(0, Math.round(Number(document.getElementById("csEaseIn").value) || 0));
 
   // Ascending order is what the tables use; keep a sorted copy for columns.
   CS.levels = levels.slice().sort((a, b) => a - b);
   CS.repeats = reps;
   CS.breakEvery = brk;
+  CS.easeIn = easeIn;
   CS.mode = CS.mode || "snr";
 
   const words = csWordRows();
@@ -291,6 +299,23 @@ function csStartRun() {
     }
     shuffle(block);            // reuse the app's Durstenfeld shuffle
     CS.queue.push(...block);
+  }
+
+  // Ease-in ramp: after shuffling, take the first `easeIn` presentations and
+  // reorder THEM easiest -> hardest, leaving the remainder shuffled. In both
+  // modes a HIGHER value is easier (higher SNR = clearer; higher LPF cutoff =
+  // more speech passband), so easiest->hardest is descending by level. Ties
+  // (same level, different word) keep their shuffled order — a stable sort on a
+  // descending-level key. Clamped to the queue length.
+  const n = Math.min(easeIn, CS.queue.length);
+  if (n > 1) {
+    const head = CS.queue.slice(0, n);
+    // Stable descending sort by level (decorate-sort-undecorate to guarantee
+    // stability across engines).
+    head
+      .map((t, i) => ({ t, i }))
+      .sort((a, b) => (b.t.level - a.t.level) || (a.i - b.i))
+      .forEach((o, k) => { CS.queue[k] = o.t; });
   }
 
   CS.pos = 0;
@@ -331,6 +356,14 @@ function csNextTrial() {
   if (CS.breakEvery > 0 && CS.pos > 0 &&
       (CS.pos % CS.breakEvery === 0) && CS._lastBreakAt !== CS.pos) {
     CS._lastBreakAt = CS.pos;
+    // Progress: presentations done vs. the run total (queue length).
+    const total = CS.queue.length;
+    const done = Math.min(CS.pos, total);
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    const txt = document.getElementById("breakProgressText");
+    const bar = document.getElementById("breakProgressBar");
+    if (txt) txt.textContent = `Done ${done} / ${total}  (${pct}%)`;
+    if (bar) bar.style.width = `${pct}%`;
     showScreen("break");
     const btn = document.getElementById("breakOkBtn");
     if (btn) btn.onclick = () => { showScreen("test"); csNextTrial(); };
@@ -689,14 +722,18 @@ function csSaveResults(note) {
   if (emailBtn) {
     const subject = `${baseName}.txt`;
     const MAX = 1800;
-    let body = txt;
-    if (body.length > MAX) {
-      body = body.slice(0, MAX - 120) +
-        `\n\n[...truncated...]\n(Full file saved locally as ${subject}${shouldSaveJson ? " and JSON." : "."})`;
+    // A constant-stimuli run's full text (three tables + log) essentially always
+    // exceeds the mailto: limit, so hide the button rather than send a truncated
+    // body. The .txt/.json are saved locally for the operator to attach.
+    if (txt.length > MAX) {
+      emailBtn.style.display = "none";
+      emailBtn.onclick = null;
+    } else {
+      emailBtn.style.display = "";
+      const to = (typeof config?.emailTo === "string" && config.emailTo.trim()) ? config.emailTo : "";
+      const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(txt)}`;
+      emailBtn.onclick = () => { location.href = mailto; };
     }
-    const to = (typeof config?.emailTo === "string" && config.emailTo.trim()) ? config.emailTo : "";
-    const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    emailBtn.onclick = () => { location.href = mailto; };
   }
 }
 

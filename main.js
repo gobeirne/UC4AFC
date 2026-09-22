@@ -735,18 +735,18 @@ function applyModeLabels(mode) {
     else if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
     else { sc.min = 80; sc.max = 6000; sc.step = 10; }
   }
-  // SNR noise-level bounds: dB(A) range when calibrated, dB FS attenuation
-  // (<= 0) when not.
+  // Presentation-level fields: set bounds/step for the calibration state, but
+  // NEVER rewrite the user's entered value here (that caused the field to reset
+  // itself, e.g. -20 -> 0). Value defaulting/clamping lives in fillFormFromCfg.
   const nl = document.getElementById("setSnrNoiseLevel");
   if (nl) {
-    if (cal) { nl.min = 40; nl.max = 90; nl.step = 1; if (Number(nl.value) < 0) nl.value = 65; }
-    else { nl.min = -60; nl.max = 0; nl.step = 1; if (Number(nl.value) > 0) nl.value = 0; }
+    if (cal) { nl.min = 40; nl.max = 90; nl.step = 1; }
+    else     { nl.min = -60; nl.max = 0; nl.step = 1; }
   }
-  // LPF presentation-level bounds: dB(A) when calibrated, dB FS attenuation else.
   const ll = document.getElementById("setLpfLevel");
   if (ll) {
-    if (cal) { ll.min = 40; ll.max = 90; ll.step = 1; if (Number(ll.value) < 0) ll.value = 65; }
-    else { ll.min = -60; ll.max = 0; ll.step = 1; if (Number(ll.value) > 0) ll.value = 0; }
+    if (cal) { ll.min = 40; ll.max = 90; ll.step = 1; }
+    else     { ll.min = -60; ll.max = 0; ll.step = 1; }
   }
   // Step inputs: fine in SNR (small dB), medium in quiet, very fine in LPF.
   ["setWorkDown","setWorkUp","setInitDown","setInitUp"].forEach(id => {
@@ -770,8 +770,17 @@ function fillFormFromCfg(cfg) {
   : isQuiet ? (cfg.startValue ?? 65)
   : (cfg.startValue ?? cfg.startCutoffHz ?? 1000));
   set("setSnrStepMult", cfg.stepMult ?? 0.2);
-  set("setSnrNoiseLevel", cfg.snrNoiseLevel);
-  set("setLpfLevel", cfg.lpfLevel);
+  // Presentation-level fields: default per calibration state when unset, and
+  // clamp a value carried from the other calibration state into range.
+  const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+  const levelDefault = cal ? 65 : 0;
+  const clampLevel = (v) => {
+    let n = Number(v);
+    if (!isFinite(n)) n = levelDefault;
+    return cal ? Math.max(40, Math.min(90, n)) : Math.max(-60, Math.min(0, n));
+  };
+  set("setSnrNoiseLevel", clampLevel(cfg.snrNoiseLevel ?? levelDefault));
+  set("setLpfLevel", clampLevel(cfg.lpfLevel ?? levelDefault));
   set("setNTrials", cfg.nTrials ?? 33);
   set("setA", cfg.A ?? 4);
   set("setTarget", ((cfg.target ?? 0.625) * 100).toFixed(1) + "%");

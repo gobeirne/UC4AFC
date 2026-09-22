@@ -1,5 +1,7 @@
 "use strict";
 
+// --- Bundled main.inline.js ---
+
 // --- global.js ---
 // File: global.js
 
@@ -1341,17 +1343,11 @@ const ADAPTIVE_DEFAULTS = {
   A: 4,                       // alternatives (fixed); floor = 1/A = 0.25
   target: 0.625,             // midpointTarget(4) = (A+1)/(2A)
 
-  // Start (single absolute value per mode; no relative-to-threshold path)
-  startValue: PRESETS.lpf.start,     // Hz (LPF) / dB level (quiet) / dB SNR (snr)
+  // Start
+  startMode: "absolute",      // "absolute" | "relative"
+  startValue: PRESETS.lpf.start,     // Hz (LPF) or dB (quiet)
   startCutoffHz: 1000,        // back-compat alias for LPF start (Hz)
-
-  // SNR noise presentation level: dB(A) when calibrated, else a dB FS
-  // attenuation (<= 0). Only consumed in SNR mode.
-  snrNoiseLevel: 65,
-
-  // LPF presentation level: dB(A) when calibrated, else dB FS attenuation.
-  // Only consumed in LPF mode.
-  lpfLevel: 65,
+  startRelOctaves: 0,         // relative start: octaves (LPF) or dB (quiet)
 
   // Trials
   nTrials: 33,
@@ -1441,15 +1437,6 @@ function loadAdaptiveConfig() {
   } catch (_) {}
   // Keep derived values consistent.
   cfg.target = midpointTarget(cfg.A || 4);
-  // --- Migrate stale persisted blobs -----------------------------------------
-  // Older builds saved axisIsLog and a "start mode / relative octaves" pair.
-  // axisIsLog is now derived STRICTLY from mode, so a stale axisIsLog could make
-  // a quiet/snr run get low-pass filtered. Re-derive it and drop the dead
-  // fields so nothing downstream can read them.
-  const mode = cfg.mode || "lpf";
-  cfg.axisIsLog = !(mode === "quiet" || mode === "snr");
-  delete cfg.startMode;
-  delete cfg.startRelOctaves;
   return cfg;
 }
 
@@ -1734,6 +1721,7 @@ function createTrack(cfg) {
     currentX, currentValue, currentCutoffHz, update, estimate,
     unit: cfg.unit, mode: cfg.mode, axisIsLog: cfg.axisIsLog,
     trials: () => xs.length,
+    total: () => cfg.nTrials,
     done: () => xs.length >= cfg.nTrials,
     history,
     reversals: () => (cfg.procedure === "a2" ? (A2.T[0].rev + A2.T[1].rev) : rev)
@@ -1744,20 +1732,17 @@ function createTrack(cfg) {
 // value (Hz for LPF, dB for quiet) into the internal cfg the track consumes.
 // Mode-aware: LPF uses a log10(Hz) axis, quiet uses a linear dB axis.
 function resolveTrackConfig(adaptive, startValue) {
-  // Axis is derived STRICTLY from mode, ignoring any persisted axisIsLog (which
-  // could be stale from an older saved config): quiet (dB level) and snr (dB
-  // SNR) are linear; everything else (LPF) is log10(Hz). This guarantees LPF
-  // filtering can never be applied to a quiet/snr run because of leftover state.
-  const mode = adaptive.mode || "lpf";
-  const linearMode = mode === "quiet" || mode === "snr";
-  const axisIsLog = !linearMode;
-  const isSnr = mode === "snr";
+  // Both quiet (dB level) and snr (dB SNR) are LINEAR-axis modes; only LPF is
+  // log10(Hz). Anything not explicitly linear stays on the log axis (LPF).
+  const linearMode = adaptive.mode === "quiet" || adaptive.mode === "snr";
+  const axisIsLog = adaptive.axisIsLog !== false && !linearMode;
+  const isSnr = adaptive.mode === "snr";
   const toX = axisIsLog ? (v) => Math.log10(v) : (v) => v;
   const defStart = (startValue != null ? startValue : undefined)
     ?? adaptive.startValue
-    ?? (axisIsLog ? (adaptive.startCutoffHz || 1000) : (isSnr ? 2 : 65));
+    ?? (axisIsLog ? (adaptive.startCutoffHz || 1000) : (adaptive.start ?? (isSnr ? 2 : 65)));
   return {
-    mode,
+    mode: adaptive.mode || (axisIsLog ? "lpf" : "quiet"),
     procedure: adaptive.procedure || "wudr",
     A: adaptive.A || 4,
     target: adaptive.target ?? midpointTarget(adaptive.A || 4),
@@ -1916,20 +1901,24 @@ function beginPhase(p) {
       // present (app never visited Setup), resolveTrackConfig's guards apply.
       const adaptive = (config && config.adaptive) ? config.adaptive : {};
       const isQuiet = adaptive.mode === "quiet";
+      const isSnr = adaptive.mode === "snr";
+      const isLinear = isQuiet || isSnr;   // both use a dB axis, not log(Hz)
 
-      // Start value: Hz (LPF) or dB (quiet). Relative start shifts the start by
-      // octaves (LPF) or dB (quiet); with no prior in-session threshold it
-      // resolves against the absolute start for now (documented).
-      let startVal = isQuiet
-        ? (adaptive.startValue ?? adaptive.start ?? 65)
+      // Start value: Hz (LPF) or dB (quiet: level / snr: SNR). Relative start
+      // shifts by octaves (LPF) or dB (linear); with no prior in-session
+      // threshold it resolves against the absolute start for now (documented).
+      let startVal = isLinear
+        ? (adaptive.startValue ?? adaptive.start ?? (isSnr ? 2 : 65))
         : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
       if (adaptive.startMode === "relative" && isFinite(adaptive.startRelOctaves)) {
-        startVal = isQuiet
+        startVal = isLinear
           ? startVal + adaptive.startRelOctaves               // dB shift
           : startVal * Math.pow(2, adaptive.startRelOctaves); // octave shift
       }
 
-      quietStartLevel = isQuiet ? startVal : null;
+      // quietStartLevel doubles as the uncalibrated relative-gain anchor for
+      // BOTH linear modes (quiet's level and snr's noise level).
+      quietStartLevel = isLinear ? startVal : null;
       const trackCfg = resolveTrackConfig(adaptive, startVal);
       track = createTrack(trackCfg);
       currentCutoffHz = track.currentValue();
@@ -1991,6 +1980,19 @@ if (phase === "test") {
   const n = Number(config.breakEvery) || 0; // 0 = disabled
   if (n > 0 && trialIndex > 0 && (trialIndex % n === 0) && lastBreakAt !== trialIndex) {
     lastBreakAt = trialIndex;
+
+    // Progress: responses recorded vs. run total. Adaptive runs total nTrials.
+    const total = (track && typeof track.total === "function" && isFinite(track.total()))
+      ? track.total()
+      : ((config && config.adaptive && isFinite(config.adaptive.nTrials))
+          ? config.adaptive.nTrials
+          : list.length);
+    const done = Math.min(trialIndex, total);
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    const txt = document.getElementById("breakProgressText");
+    const bar = document.getElementById("breakProgressBar");
+    if (txt) txt.textContent = `Done ${done} / ${total}  (${pct}%)`;
+    if (bar) bar.style.width = `${pct}%`;
 
     // Show break screen and wait for the user
     showScreen("break");
@@ -2104,35 +2106,75 @@ if (phase === "test") {
   //  Quiet: no filter; the adaptive VALUE is the presentation LEVEL (dB),
   //         applied as gain (calibrated -> absolute dB(A); uncalibrated ->
   //         relative dB re the start level).
+  //  SNR  : no filter; the adaptive VALUE is the dB SNR. The masking noise
+  //         (calibration file) plays at the FIXED presentation level; the
+  //         signal is offset from the noise by the SNR.
   const adaptive = (config && config.adaptive) ? config.adaptive : {};
   const isQuiet = (phase === "test" && track) ? adaptive.mode === "quiet" : false;
+  const isSnr   = (phase === "test" && track) ? adaptive.mode === "snr"   : false;
   const calibrated = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+  const routing = (config && config.routing) || "binaural";
+
+  // ---- SNR mode: dispatch to the mixed word+noise path and return early ----
+  if (isSnr) {
+    const snrDb = currentCutoffHz;   // mode-neutral value; dB SNR here
+    // Noise sits at the fixed presentation level: the calibration slider's
+    // chosen dB(A) when calibrated, unity when not (device volume sets absolute
+    // output, exactly as an uncalibrated run does elsewhere).
+    const noiseGainDb = calibrated
+      ? Calibration.gainDbForLevel(Calibration.state().currentSliderDb)
+      : 0;
+    const noiseUrl = (config && config.calibFile) ? `sounds/${config.calibFile}` : "sounds/calib.mp3";
+
+    AudioEngine.playStimulusWithNoise(item.correct, `sounds/${item.audioFile}`, {
+      snrDb,
+      noiseGainDb,
+      noiseUrl,
+      routing,
+      onStarted: () => { setTimeout(revealOptions, offset); }
+    }).catch(err => {
+      console.error("SNR audio play failed:", err);
+      if (!nextTrial._erroredOnce) {
+        alert("Audio failed to play. Check the calibration noise file (sounds/calib.mp3) and autoplay settings.");
+        nextTrial._erroredOnce = true;
+      }
+    });
+    return;
+  }
 
   let cutoffHz = null;
   let extraGainDb = 0;
-  const trialRouting = (config && config.routing) || "binaural";
 
   if (phase === "test" && track && isQuiet) {
     // Quiet mode: value is a dB level.
     const level = currentCutoffHz; // (mode-neutral value; dB here)
     if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(level, trialRouting);
+      extraGainDb = Calibration.gainDbForLevel(level);
     } else {
       // Uncalibrated: play relative to the start level (start = unity).
       extraGainDb = level - (quietStartLevel ?? level);
     }
   } else {
-    // LPF mode (or non-adaptive): filter at the cutoff; fixed-level gain.
+    // LPF mode (or non-adaptive): filter at the cutoff; presentation level from
+    // the dedicated LPF level setting. Calibrated -> dB(A) via the curve;
+    // uncalibrated -> dB FS attenuation (<= 0), device volume sets absolute level.
     cutoffHz = (phase === "test" && track) ? currentCutoffHz : null;
+    const lpfLevel = Number(
+      (config && config.adaptive && isFinite(config.adaptive.lpfLevel))
+        ? config.adaptive.lpfLevel
+        : (calibrated ? 65 : 0)
+    );
     if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb, trialRouting);
+      extraGainDb = Calibration.gainDbForLevel(lpfLevel);
+    } else {
+      extraGainDb = Math.min(0, lpfLevel);   // dB FS attenuation, never boost
     }
   }
 
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
     cutoffHz,
     extraGainDb,
-    routing: trialRouting,
+    routing,
     onStarted: () => {
       setTimeout(revealOptions, offset);
     }
@@ -2166,7 +2208,8 @@ function recordResponse(img) {
   // quiet), advance the track, and capture the running threshold estimate.
   if (phase === "test" && track) {
     const adaptive = (config && config.adaptive) ? config.adaptive : {};
-    const unit = track.unit || (adaptive.mode === "quiet" ? "dB" : "Hz");
+    const unit = track.unit
+      || (adaptive.mode === "snr" ? "dB SNR" : adaptive.mode === "quiet" ? "dB" : "Hz");
     const val = (unit === "Hz") ? Math.round(currentCutoffHz) : +currentCutoffHz.toFixed(1);
     entry.value = val;
     entry.unit = unit;
@@ -2627,6 +2670,7 @@ const CS_DEFAULTS = {
   lpf: [200, 300, 450, 675, 1000, 1500],
   repeats: 2,
   breakEvery: 40,
+  easeIn: 20,
   mode: "snr",
   ear: "binaural"
 };
@@ -2639,6 +2683,7 @@ const CS = {
   levels: [],           // numeric levels for the run (ascending in tables)
   repeats: 2,
   breakEvery: 40,
+  easeIn: 20,
   queue: [],            // [{ wordIdx, level, rep }] in presentation order
   pos: 0,               // index into queue of the CURRENT (pending) trial
   startedAt: null,
@@ -2682,18 +2727,19 @@ function csLoadOpts() {
       return {
         repeats: Number.isFinite(Number(o.repeats)) ? Number(o.repeats) : CS_DEFAULTS.repeats,
         breakEvery: Number.isFinite(Number(o.breakEvery)) ? Number(o.breakEvery) : CS_DEFAULTS.breakEvery,
+        easeIn: Number.isFinite(Number(o.easeIn)) ? Number(o.easeIn) : CS_DEFAULTS.easeIn,
         mode: (o.mode === "lpf" || o.mode === "snr") ? o.mode : CS_DEFAULTS.mode,
         ear: (o.ear === "left" || o.ear === "right" || o.ear === "binaural") ? o.ear : CS_DEFAULTS.ear
       };
     }
   } catch (_) {}
-  return { repeats: CS_DEFAULTS.repeats, breakEvery: CS_DEFAULTS.breakEvery, mode: CS_DEFAULTS.mode, ear: CS_DEFAULTS.ear };
+  return { repeats: CS_DEFAULTS.repeats, breakEvery: CS_DEFAULTS.breakEvery, easeIn: CS_DEFAULTS.easeIn, mode: CS_DEFAULTS.mode, ear: CS_DEFAULTS.ear };
 }
 
-function csSaveDefaults(mode, levels, repeats, breakEvery, ear) {
+function csSaveDefaults(mode, levels, repeats, breakEvery, ear, easeIn) {
   try {
     localStorage.setItem(CS_KEYS[mode], JSON.stringify(levels));
-    localStorage.setItem(CS_KEYS.opts, JSON.stringify({ repeats, breakEvery, mode, ear }));
+    localStorage.setItem(CS_KEYS.opts, JSON.stringify({ repeats, breakEvery, easeIn, mode, ear }));
     return true;
   } catch (_) { return false; }
 }
@@ -2730,6 +2776,8 @@ function csPopulateForm() {
   if (rep) rep.value = opts.repeats;
   const brk = document.getElementById("csBreakEvery");
   if (brk) brk.value = opts.breakEvery;
+  const ease = document.getElementById("csEaseIn");
+  if (ease) ease.value = opts.easeIn;
   CS.ear = opts.ear;
   const earSeg = document.getElementById("csEarSegmented");
   if (earSeg) {
@@ -2822,7 +2870,8 @@ function setupConstantScreen() {
     if (!levels.length) { csStatus("Enter at least one valid level before saving.", true); return; }
     const reps = Math.max(1, Math.round(Number(document.getElementById("csRepeats").value) || 1));
     const brk = Math.max(0, Math.round(Number(document.getElementById("csBreakEvery").value) || 0));
-    const ok = csSaveDefaults(CS.mode, levels, reps, brk, CS.ear);
+    const ease = Math.max(0, Math.round(Number(document.getElementById("csEaseIn").value) || 0));
+    const ok = csSaveDefaults(CS.mode, levels, reps, brk, CS.ear, ease);
     csStatus(ok ? `Saved as default for ${CS.mode.toUpperCase()} mode.` : "Could not save (storage unavailable).", !ok);
   };
 
@@ -2843,11 +2892,13 @@ function csStartRun() {
   if (!levels.length) { csStatus("Enter at least one valid level.", true); return; }
   const reps = Math.max(1, Math.round(Number(document.getElementById("csRepeats").value) || 1));
   const brk = Math.max(0, Math.round(Number(document.getElementById("csBreakEvery").value) || 0));
+  const easeIn = Math.max(0, Math.round(Number(document.getElementById("csEaseIn").value) || 0));
 
   // Ascending order is what the tables use; keep a sorted copy for columns.
   CS.levels = levels.slice().sort((a, b) => a - b);
   CS.repeats = reps;
   CS.breakEvery = brk;
+  CS.easeIn = easeIn;
   CS.mode = CS.mode || "snr";
 
   const words = csWordRows();
@@ -2865,6 +2916,23 @@ function csStartRun() {
     }
     shuffle(block);            // reuse the app's Durstenfeld shuffle
     CS.queue.push(...block);
+  }
+
+  // Ease-in ramp: after shuffling, take the first `easeIn` presentations and
+  // reorder THEM easiest -> hardest, leaving the remainder shuffled. In both
+  // modes a HIGHER value is easier (higher SNR = clearer; higher LPF cutoff =
+  // more speech passband), so easiest->hardest is descending by level. Ties
+  // (same level, different word) keep their shuffled order — a stable sort on a
+  // descending-level key. Clamped to the queue length.
+  const n = Math.min(easeIn, CS.queue.length);
+  if (n > 1) {
+    const head = CS.queue.slice(0, n);
+    // Stable descending sort by level (decorate-sort-undecorate to guarantee
+    // stability across engines).
+    head
+      .map((t, i) => ({ t, i }))
+      .sort((a, b) => (b.t.level - a.t.level) || (a.i - b.i))
+      .forEach((o, k) => { CS.queue[k] = o.t; });
   }
 
   CS.pos = 0;
@@ -2905,6 +2973,14 @@ function csNextTrial() {
   if (CS.breakEvery > 0 && CS.pos > 0 &&
       (CS.pos % CS.breakEvery === 0) && CS._lastBreakAt !== CS.pos) {
     CS._lastBreakAt = CS.pos;
+    // Progress: presentations done vs. the run total (queue length).
+    const total = CS.queue.length;
+    const done = Math.min(CS.pos, total);
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    const txt = document.getElementById("breakProgressText");
+    const bar = document.getElementById("breakProgressBar");
+    if (txt) txt.textContent = `Done ${done} / ${total}  (${pct}%)`;
+    if (bar) bar.style.width = `${pct}%`;
     showScreen("break");
     const btn = document.getElementById("breakOkBtn");
     if (btn) btn.onclick = () => { showScreen("test"); csNextTrial(); };
@@ -3263,14 +3339,18 @@ function csSaveResults(note) {
   if (emailBtn) {
     const subject = `${baseName}.txt`;
     const MAX = 1800;
-    let body = txt;
-    if (body.length > MAX) {
-      body = body.slice(0, MAX - 120) +
-        `\n\n[...truncated...]\n(Full file saved locally as ${subject}${shouldSaveJson ? " and JSON." : "."})`;
+    // A constant-stimuli run's full text (three tables + log) essentially always
+    // exceeds the mailto: limit, so hide the button rather than send a truncated
+    // body. The .txt/.json are saved locally for the operator to attach.
+    if (txt.length > MAX) {
+      emailBtn.style.display = "none";
+      emailBtn.onclick = null;
+    } else {
+      emailBtn.style.display = "";
+      const to = (typeof config?.emailTo === "string" && config.emailTo.trim()) ? config.emailTo : "";
+      const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(txt)}`;
+      emailBtn.onclick = () => { location.href = mailto; };
     }
-    const to = (typeof config?.emailTo === "string" && config.emailTo.trim()) ? config.emailTo : "";
-    const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    emailBtn.onclick = () => { location.href = mailto; };
   }
 }
 
@@ -3807,31 +3887,15 @@ function saveResults(optionalNote = "") {
       `# Routing\t${(config && config.routing) || "binaural"}`,
       `# Threshold estimate (${unit})\t${lastEstimate != null ? lastEstimate : "n/a"}`
     );
-    if (mode === "lpf") {
-      // LPF presentation level: dB(A) if calibrated, else a dB FS attenuation.
-      const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
-      const lvl = (adaptiveCfg && isFinite(adaptiveCfg.lpfLevel)) ? adaptiveCfg.lpfLevel : (cal ? 65 : 0);
-      txtLines.push(
-        `# Presentation level\t${cal ? `${lvl} dB(A)` : `${lvl} dB FS attenuation (device volume sets absolute level)`}`
-      );
-    }
     if (mode === "snr") {
-      // Noise presentation level from the dedicated SNR setting: dB(A) if
-      // calibrated, else a dB FS attenuation (device volume sets absolute level).
-      const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
-      const nlv = (adaptiveCfg && isFinite(adaptiveCfg.snrNoiseLevel)) ? adaptiveCfg.snrNoiseLevel : (cal ? 65 : 0);
-      const noiseLevel = cal
-        ? `${nlv} dB(A)`
-        : `${nlv} dB FS attenuation (device volume sets absolute level)`;
-      const cfgc = (typeof config !== "undefined" && config) ? config : {};
+      // In SNR mode the noise sits at the fixed presentation level; document it
+      // (the calibrated dB(A), else "uncalibrated") and the step multiplier.
+      const noiseLevel = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated())
+        ? `${Calibration.state().currentSliderDb} dB(A)`
+        : "uncalibrated (device volume sets level)";
       txtLines.push(
         `# Noise level (fixed)\t${noiseLevel}`,
-        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`,
-        `# Noise file\t${cfgc.snrNoiseFile ?? "noise.mp3"}`,
-        `# Word onset in file (ms)\t${cfgc.snrWordLeadMs ?? cfgc.imageRevealOffsetMs ?? 600}`,
-        `# Noise lead before word (ms)\t${cfgc.snrNoiseLeadMs ?? 600}`,
-        `# Noise trail after word (ms)\t${cfgc.snrNoiseTrailMs ?? 600}`,
-        `# Noise ramp in/out (ms)\t${cfgc.snrNoiseRampMs ?? 100}`
+        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`
       );
     }
   }
@@ -3895,30 +3959,30 @@ if (saveAgainBtn) {
 }
 
 
-  // Email (subject = filename; body = TXT contents)
+  // Email (subject = filename; body = TXT contents). A mailto: link has a hard
+  // length limit and cannot attach files, so we only offer email when the FULL
+  // results text fits under the limit (typical for a short adaptive run). If it
+  // would overflow, we hide the button rather than send a truncated, useless
+  // body — the file is already saved locally.
   const emailBtn = document.getElementById("emailBtn");
   if (emailBtn) {
     const baseName = `UC4AFC_${participant}_${timeStr}`;
     const subject = `${baseName}.txt`;
-
     const txtContent = txtLines.join("\n");
 
-    // Mailto size is limited — keep conservative
+    // Conservative ceiling for the whole encoded mailto: URL body.
     const MAX_MAILTO_BODY = 1800;
-    let body = txtContent;
-    let truncated = false;
-    if (body.length > MAX_MAILTO_BODY) {
-      truncated = true;
-      body = body.slice(0, MAX_MAILTO_BODY - 120)
-        + `\n\n[...truncated...]\n(Full file saved locally as ${subject}${shouldSaveJson ? " and JSON." : "."})`;
+
+    if (txtContent.length > MAX_MAILTO_BODY) {
+      emailBtn.style.display = "none";
+      emailBtn.onclick = null;
+    } else {
+      emailBtn.style.display = "";
+      const to = (typeof config?.emailTo === "string" && config.emailTo.trim()) ? config.emailTo : "";
+      const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(txtContent)}`;
+      emailBtn.onclick = () => { location.href = mailto; };
+      emailBtn.title = "";
     }
-
-    // Optional default recipient via config.emailTo (add to config.json if you want)
-    const to = (typeof config?.emailTo === "string" && config.emailTo.trim()) ? config.emailTo : "";
-    const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-
-    emailBtn.onclick = () => { location.href = mailto; };
-    if (truncated) emailBtn.title = "Body truncated to fit email link limits";
   }
 }
 
@@ -4660,18 +4724,18 @@ function applyModeLabels(mode) {
     else if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
     else { sc.min = 80; sc.max = 6000; sc.step = 10; }
   }
-  // SNR noise-level bounds: dB(A) range when calibrated, dB FS attenuation
-  // (<= 0) when not.
+  // Presentation-level fields: set bounds/step for the calibration state, but
+  // NEVER rewrite the user's entered value here (that caused the field to reset
+  // itself, e.g. -20 -> 0). Value defaulting/clamping lives in fillFormFromCfg.
   const nl = document.getElementById("setSnrNoiseLevel");
   if (nl) {
-    if (cal) { nl.min = 40; nl.max = 90; nl.step = 1; if (Number(nl.value) < 0) nl.value = 65; }
-    else { nl.min = -60; nl.max = 0; nl.step = 1; if (Number(nl.value) > 0) nl.value = 0; }
+    if (cal) { nl.min = 40; nl.max = 90; nl.step = 1; }
+    else     { nl.min = -60; nl.max = 0; nl.step = 1; }
   }
-  // LPF presentation-level bounds: dB(A) when calibrated, dB FS attenuation else.
   const ll = document.getElementById("setLpfLevel");
   if (ll) {
-    if (cal) { ll.min = 40; ll.max = 90; ll.step = 1; if (Number(ll.value) < 0) ll.value = 65; }
-    else { ll.min = -60; ll.max = 0; ll.step = 1; if (Number(ll.value) > 0) ll.value = 0; }
+    if (cal) { ll.min = 40; ll.max = 90; ll.step = 1; }
+    else     { ll.min = -60; ll.max = 0; ll.step = 1; }
   }
   // Step inputs: fine in SNR (small dB), medium in quiet, very fine in LPF.
   ["setWorkDown","setWorkUp","setInitDown","setInitUp"].forEach(id => {
@@ -4695,8 +4759,17 @@ function fillFormFromCfg(cfg) {
   : isQuiet ? (cfg.startValue ?? 65)
   : (cfg.startValue ?? cfg.startCutoffHz ?? 1000));
   set("setSnrStepMult", cfg.stepMult ?? 0.2);
-  set("setSnrNoiseLevel", cfg.snrNoiseLevel);
-  set("setLpfLevel", cfg.lpfLevel);
+  // Presentation-level fields: default per calibration state when unset, and
+  // clamp a value carried from the other calibration state into range.
+  const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+  const levelDefault = cal ? 65 : 0;
+  const clampLevel = (v) => {
+    let n = Number(v);
+    if (!isFinite(n)) n = levelDefault;
+    return cal ? Math.max(40, Math.min(90, n)) : Math.max(-60, Math.min(0, n));
+  };
+  set("setSnrNoiseLevel", clampLevel(cfg.snrNoiseLevel ?? levelDefault));
+  set("setLpfLevel", clampLevel(cfg.lpfLevel ?? levelDefault));
   set("setNTrials", cfg.nTrials ?? 33);
   set("setA", cfg.A ?? 4);
   set("setTarget", ((cfg.target ?? 0.625) * 100).toFixed(1) + "%");

@@ -317,7 +317,11 @@
       <label>Break every (presentations)
         <input id="csBreakEvery" type="number" min="0" step="1" value="40">
       </label>
+      <label>Ease-in ramp (trials)
+        <input id="csEaseIn" type="number" min="0" step="1" value="20">
+      </label>
     </div>
+    <p class="small" id="csEaseInHint" style="margin:0.3rem 0 0;">After shuffling, the first N presentations are reordered easiest&rarr;hardest to ease the participant in, then the rest play shuffled. 0 = fully shuffled.</p>
     <p class="small" id="csSummary" style="margin-bottom:0;"></p>
   </div>
 
@@ -375,6 +379,12 @@
 <div id="break" class="screen" style="display:none;">
   <h2>You're doing a great job!</h2>
   <p>Let's take a break.</p>
+  <div id="breakProgressWrap" style="max-width:28rem; margin:1rem auto;">
+    <div id="breakProgressText" class="small" style="margin-bottom:0.4rem; color:#333;">Done 0 / 0</div>
+    <div style="height:1.1rem; border:1px solid #b31b1b; border-radius:0.6rem; overflow:hidden; background:#f3e6e8;">
+      <div id="breakProgressBar" style="height:100%; width:0%; background:#b31b1b; transition:width 0.3s ease;"></div>
+    </div>
+  </div>
   <button id="breakOkBtn">Ready to keep going?</button>
 </div>
 

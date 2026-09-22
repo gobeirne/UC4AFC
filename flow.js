@@ -63,20 +63,24 @@ export function beginPhase(p) {
       // present (app never visited Setup), resolveTrackConfig's guards apply.
       const adaptive = (config && config.adaptive) ? config.adaptive : {};
       const isQuiet = adaptive.mode === "quiet";
+      const isSnr = adaptive.mode === "snr";
+      const isLinear = isQuiet || isSnr;   // both use a dB axis, not log(Hz)
 
-      // Start value: Hz (LPF) or dB (quiet). Relative start shifts the start by
-      // octaves (LPF) or dB (quiet); with no prior in-session threshold it
-      // resolves against the absolute start for now (documented).
-      let startVal = isQuiet
-        ? (adaptive.startValue ?? adaptive.start ?? 65)
+      // Start value: Hz (LPF) or dB (quiet: level / snr: SNR). Relative start
+      // shifts by octaves (LPF) or dB (linear); with no prior in-session
+      // threshold it resolves against the absolute start for now (documented).
+      let startVal = isLinear
+        ? (adaptive.startValue ?? adaptive.start ?? (isSnr ? 2 : 65))
         : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
       if (adaptive.startMode === "relative" && isFinite(adaptive.startRelOctaves)) {
-        startVal = isQuiet
+        startVal = isLinear
           ? startVal + adaptive.startRelOctaves               // dB shift
           : startVal * Math.pow(2, adaptive.startRelOctaves); // octave shift
       }
 
-      quietStartLevel = isQuiet ? startVal : null;
+      // quietStartLevel doubles as the uncalibrated relative-gain anchor for
+      // BOTH linear modes (quiet's level and snr's noise level).
+      quietStartLevel = isLinear ? startVal : null;
       const trackCfg = resolveTrackConfig(adaptive, startVal);
       track = createTrack(trackCfg);
       currentCutoffHz = track.currentValue();
@@ -138,6 +142,19 @@ if (phase === "test") {
   const n = Number(config.breakEvery) || 0; // 0 = disabled
   if (n > 0 && trialIndex > 0 && (trialIndex % n === 0) && lastBreakAt !== trialIndex) {
     lastBreakAt = trialIndex;
+
+    // Progress: responses recorded vs. run total. Adaptive runs total nTrials.
+    const total = (track && typeof track.total === "function" && isFinite(track.total()))
+      ? track.total()
+      : ((config && config.adaptive && isFinite(config.adaptive.nTrials))
+          ? config.adaptive.nTrials
+          : list.length);
+    const done = Math.min(trialIndex, total);
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    const txt = document.getElementById("breakProgressText");
+    const bar = document.getElementById("breakProgressBar");
+    if (txt) txt.textContent = `Done ${done} / ${total}  (${pct}%)`;
+    if (bar) bar.style.width = `${pct}%`;
 
     // Show break screen and wait for the user
     showScreen("break");
@@ -251,35 +268,75 @@ if (phase === "test") {
   //  Quiet: no filter; the adaptive VALUE is the presentation LEVEL (dB),
   //         applied as gain (calibrated -> absolute dB(A); uncalibrated ->
   //         relative dB re the start level).
+  //  SNR  : no filter; the adaptive VALUE is the dB SNR. The masking noise
+  //         (calibration file) plays at the FIXED presentation level; the
+  //         signal is offset from the noise by the SNR.
   const adaptive = (config && config.adaptive) ? config.adaptive : {};
   const isQuiet = (phase === "test" && track) ? adaptive.mode === "quiet" : false;
+  const isSnr   = (phase === "test" && track) ? adaptive.mode === "snr"   : false;
   const calibrated = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
+  const routing = (config && config.routing) || "binaural";
+
+  // ---- SNR mode: dispatch to the mixed word+noise path and return early ----
+  if (isSnr) {
+    const snrDb = currentCutoffHz;   // mode-neutral value; dB SNR here
+    // Noise sits at the fixed presentation level: the calibration slider's
+    // chosen dB(A) when calibrated, unity when not (device volume sets absolute
+    // output, exactly as an uncalibrated run does elsewhere).
+    const noiseGainDb = calibrated
+      ? Calibration.gainDbForLevel(Calibration.state().currentSliderDb)
+      : 0;
+    const noiseUrl = (config && config.calibFile) ? `sounds/${config.calibFile}` : "sounds/calib.mp3";
+
+    AudioEngine.playStimulusWithNoise(item.correct, `sounds/${item.audioFile}`, {
+      snrDb,
+      noiseGainDb,
+      noiseUrl,
+      routing,
+      onStarted: () => { setTimeout(revealOptions, offset); }
+    }).catch(err => {
+      console.error("SNR audio play failed:", err);
+      if (!nextTrial._erroredOnce) {
+        alert("Audio failed to play. Check the calibration noise file (sounds/calib.mp3) and autoplay settings.");
+        nextTrial._erroredOnce = true;
+      }
+    });
+    return;
+  }
 
   let cutoffHz = null;
   let extraGainDb = 0;
-  const trialRouting = (config && config.routing) || "binaural";
 
   if (phase === "test" && track && isQuiet) {
     // Quiet mode: value is a dB level.
     const level = currentCutoffHz; // (mode-neutral value; dB here)
     if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(level, trialRouting);
+      extraGainDb = Calibration.gainDbForLevel(level);
     } else {
       // Uncalibrated: play relative to the start level (start = unity).
       extraGainDb = level - (quietStartLevel ?? level);
     }
   } else {
-    // LPF mode (or non-adaptive): filter at the cutoff; fixed-level gain.
+    // LPF mode (or non-adaptive): filter at the cutoff; presentation level from
+    // the dedicated LPF level setting. Calibrated -> dB(A) via the curve;
+    // uncalibrated -> dB FS attenuation (<= 0), device volume sets absolute level.
     cutoffHz = (phase === "test" && track) ? currentCutoffHz : null;
+    const lpfLevel = Number(
+      (config && config.adaptive && isFinite(config.adaptive.lpfLevel))
+        ? config.adaptive.lpfLevel
+        : (calibrated ? 65 : 0)
+    );
     if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(Calibration.state().currentSliderDb, trialRouting);
+      extraGainDb = Calibration.gainDbForLevel(lpfLevel);
+    } else {
+      extraGainDb = Math.min(0, lpfLevel);   // dB FS attenuation, never boost
     }
   }
 
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
     cutoffHz,
     extraGainDb,
-    routing: trialRouting,
+    routing,
     onStarted: () => {
       setTimeout(revealOptions, offset);
     }
@@ -313,7 +370,8 @@ export function recordResponse(img) {
   // quiet), advance the track, and capture the running threshold estimate.
   if (phase === "test" && track) {
     const adaptive = (config && config.adaptive) ? config.adaptive : {};
-    const unit = track.unit || (adaptive.mode === "quiet" ? "dB" : "Hz");
+    const unit = track.unit
+      || (adaptive.mode === "snr" ? "dB SNR" : adaptive.mode === "quiet" ? "dB" : "Hz");
     const val = (unit === "Hz") ? Math.round(currentCutoffHz) : +currentCutoffHz.toFixed(1);
     entry.value = val;
     entry.unit = unit;
