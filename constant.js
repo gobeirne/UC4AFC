@@ -51,7 +51,7 @@ const CS_DEFAULTS = {
   // (~0.70 oct) can bracket a steep transition without an observation in it.
   // 396 presentations/participant at 2 repeats.
   lpf: [200, 300, 450, 675, 1000, 1500],
-  repeats: 2,
+  repeats: 1,
   breakEvery: 40,
   easeIn: 20,
   mode: "snr",
@@ -64,7 +64,7 @@ const CS = {
   mode: "snr",          // "snr" | "lpf"
   ear: "binaural",      // "left" | "right" | "binaural" (presentation routing)
   levels: [],           // numeric levels for the run (ascending in tables)
-  repeats: 2,
+  repeats: 1,
   breakEvery: 40,
   easeIn: 20,
   queue: [],            // [{ wordIdx, level, rep }] in presentation order
