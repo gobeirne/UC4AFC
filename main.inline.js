@@ -1608,11 +1608,11 @@ const HEADPHONE_PRESETS = {
       [19000, -10.0819], [19500, -9.15727], [20000, -9.23637], [20500, -9.11921],
       [21000, -9.10579], [21500, -9.29613], [22000, -10.4902]
     ],
-    // From the LabVIEW HATS model: calibration noise Leq 61.39 dB EU + 17.6 dB
-    // soundcard gain = 78.99 dB(A) at full volume (Windows, browser, X-Fi at max;
+    // From the LabVIEW HATS model: calibration noise Leq 59.67 dB EU + 17.6 dB
+    // soundcard gain = 77.3 dB(A) at full volume (Windows, browser, X-Fi at max;
     // enhancements/effects off).
     defaultCal: {
-      level: 78.99,
+      level: 77.3,
       source: "HD280/X-Fi preset (LabVIEW HATS model)"
     }
   },
