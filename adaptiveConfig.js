@@ -24,7 +24,7 @@ const PRESETS = {
     axisIsLog: true,
     unit: "Hz", stepUnit: "decades", slopeUnit: "%/octave",
     start: 1000,
-    xlo: Math.log10(80), xhi: Math.log10(6000),
+    xlo: Math.log10(75), xhi: Math.log10(6000),   // hard floor 75 Hz (matches LabVIEW)
     // WUDR two-phase steps (decades)
     workDown: +Math.log10(1 / 0.95238).toFixed(4),  // 0.0212  (-4.76%)
     workUp:   +Math.log10(1.08333).toFixed(4),       // 0.0348  (+8.33%)
@@ -90,17 +90,9 @@ const ADAPTIVE_DEFAULTS = {
   A: 4,                       // alternatives (fixed); floor = 1/A = 0.25
   target: 0.625,             // midpointTarget(4) = (A+1)/(2A)
 
-  // Start (single absolute value per mode; no relative-to-threshold path)
-  startValue: PRESETS.lpf.start,     // Hz (LPF) / dB level (quiet) / dB SNR (snr)
+  // Start
+  startValue: PRESETS.lpf.start,     // Hz (LPF) or dB (quiet)
   startCutoffHz: 1000,        // back-compat alias for LPF start (Hz)
-
-  // SNR noise presentation level: dB(A) when calibrated, else a dB FS
-  // attenuation (<= 0). Only consumed in SNR mode.
-  snrNoiseLevel: 65,
-
-  // LPF presentation level: dB(A) when calibrated, else dB FS attenuation.
-  // Only consumed in LPF mode.
-  lpfLevel: 65,
 
   // Trials
   nTrials: 33,
@@ -133,7 +125,7 @@ const ADAPTIVE_DEFAULTS = {
 };
 
 // Return a config with the mode-specific fields set to `mode`'s preset,
-// preserving procedure/A/nTrials/startMode and A2 sweet points.
+// preserving procedure/A/nTrials and A2 sweet points.
 function applyModePreset(cfg, mode) {
   const p = PRESETS[mode] || PRESETS.lpf;
   return {
@@ -190,15 +182,14 @@ function loadAdaptiveConfig() {
   } catch (_) {}
   // Keep derived values consistent.
   cfg.target = midpointTarget(cfg.A || 4);
-  // --- Migrate stale persisted blobs -----------------------------------------
-  // Older builds saved axisIsLog and a "start mode / relative octaves" pair.
-  // axisIsLog is now derived STRICTLY from mode, so a stale axisIsLog could make
-  // a quiet/snr run get low-pass filtered. Re-derive it and drop the dead
-  // fields so nothing downstream can read them.
-  const mode = cfg.mode || "lpf";
-  cfg.axisIsLog = !(mode === "quiet" || mode === "snr");
+  // Strip the retired "relative start" fields from configs saved by older
+  // builds; they have no Setup control and used to shift the start silently.
   delete cfg.startMode;
   delete cfg.startRelOctaves;
+  // Axis bounds have no Setup control, so always take them from the mode preset
+  // (a saved copy could be stale — e.g. the old 80 Hz LPF floor, now 75 Hz).
+  const pm = PRESETS[cfg.mode] || PRESETS.lpf;
+  cfg.xlo = pm.xlo; cfg.xhi = pm.xhi;
   return cfg;
 }
 

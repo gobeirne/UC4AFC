@@ -203,7 +203,12 @@ function csStatus(msg, isErr) {
 function setupConstantScreen() {
   // Button on the Setup screen opens the CS screen.
   const openBtn = document.getElementById("openConstBtn");
-  if (openBtn) openBtn.onclick = () => { showScreen("conststim"); csPopulateForm(); };
+  // Normalisation always uses BOTH lists (66 words). A Training/Start run may
+  // have left only List 1 or 2 in memory, so load both explicitly first.
+  if (openBtn) openBtn.onclick = () => {
+    showScreen("conststim");
+    loadList("both").then(() => csPopulateForm());
+  };
 
   const screen = document.getElementById("conststim");
   if (!screen) return; // screen not present in DOM
@@ -425,7 +430,7 @@ function csPlayLpf(item, level, calibrated, routing, offset, revealOptions) {
   );
   const extraGainDb = calibrated
     ? Calibration.gainDbForLevel(lpfLevel, routing)
-    : Math.min(0, lpfLevel);   // dB FS attenuation, never boost
+    : lpfLevel;   // dB re full scale; clipping is warned (engine), not floored
 
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
     cutoffHz: level,
@@ -444,7 +449,7 @@ function csPlaySnr(item, snrDb, calibrated, routing, offset, revealOptions) {
   );
   const noiseGainDb = calibrated
     ? Calibration.gainDbForLevel(noiseLevelSetting, routing)
-    : Math.min(0, noiseLevelSetting);
+    : noiseLevelSetting;
   const noiseUrl = (config && config.snrNoiseFile)
     ? `sounds/${config.snrNoiseFile}` : "sounds/noise.mp3";
 
@@ -610,6 +615,7 @@ function csSaveResults(note) {
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
     lines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
   }
+  if (typeof Headphones !== "undefined") lines.push(`# Headphones\t${Headphones.header()}`);
   if (note) lines.push(`# Note\t${note}`);
 
   const header = ["Word", ...levels].join("\t");

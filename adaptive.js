@@ -276,7 +276,7 @@ function resolveTrackConfig(adaptive, startValue) {
     procedure: adaptive.procedure || "wudr",
     A: adaptive.A || 4,
     target: adaptive.target ?? midpointTarget(adaptive.A || 4),
-    xlo: adaptive.xlo ?? (axisIsLog ? Math.log10(80) : (isSnr ? -20 : 20)),
+    xlo: adaptive.xlo ?? (axisIsLog ? Math.log10(75) : (isSnr ? -20 : 20)),
     xhi: adaptive.xhi ?? (axisIsLog ? Math.log10(6000) : (isSnr ? 10 : 85)),
     axisIsLog,
     unit: adaptive.unit || (axisIsLog ? "Hz" : (isSnr ? "dB SNR" : "dB")),

@@ -33,6 +33,7 @@ let trialIndex = 0;
 let phase = "";
 let participant = "";
 let responseLog = [];
+let listId = "";        // "1" | "2" for Start/Training runs; "both" for normalisation
 
 // --- DOM Elements ---
 const trainingImg = document.getElementById("training-img");
@@ -221,6 +222,158 @@ function estimateTruePeakDB(audioBuffer) {
   return 20 * Math.log10(Math.max(peak, 1e-20));
 }
 
+// ---- Headphone-curve shaping for loudness MEASUREMENT (not playback) --------
+// In-place iterative radix-2 complex FFT (n = power of two). inverse => scaled.
+function fftInPlace(re, im, inverse = false) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = (inverse ? 2 : -2) * Math.PI / len;
+    const wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = a + len / 2;
+        const tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti;
+        re[a] += tr; im[a] += ti;
+        const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+      }
+    }
+  }
+  if (inverse) for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
+}
+
+// Curve [[Hz, dB], ...] -> dB at f: linear interpolation between points, held
+// flat beyond the first/last point.
+function curveDbAt(curve, f) {
+  if (f <= curve[0][0]) return curve[0][1];
+  const last = curve[curve.length - 1];
+  if (f >= last[0]) return last[1];
+  let lo = 0, hi = curve.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (curve[m][0] <= f) lo = m; else hi = m; }
+  const [f0, d0] = curve[lo], [f1, d1] = curve[hi];
+  return d0 + (d1 - d0) * (f - f0) / (f1 - f0);
+}
+
+// Mono (channel-averaged, as the K-weighting stage does) copy of a buffer with
+// its magnitude spectrum multiplied by the curve — zero-phase, via one FFT of
+// the whole signal zero-padded by >=100 ms. Returns an AudioBuffer-like object
+// accepted by kWeightSignal.
+function shapeByCurve(buffer, curve) {
+  const sr = buffer.sampleRate, len = buffer.length, nCh = buffer.numberOfChannels;
+  let n = 1; while (n < len + Math.round(0.1 * sr)) n <<= 1;
+  const re = new Float64Array(n), im = new Float64Array(n);
+  for (let ch = 0; ch < nCh; ch++) {
+    const d = buffer.getChannelData(ch);
+    for (let i = 0; i < len; i++) re[i] += d[i] / nCh;
+  }
+  fftInPlace(re, im);
+  for (let k = 0; k <= n / 2; k++) {
+    const g = Math.pow(10, curveDbAt(curve, k * sr / n) / 20);
+    re[k] *= g; im[k] *= g;
+    if (k > 0 && k < n / 2) { re[n - k] *= g; im[n - k] *= g; }
+  }
+  fftInPlace(re, im, true);
+  const y = re.subarray(0, len);
+  return { sampleRate: sr, numberOfChannels: 1, length: len, getChannelData: () => y };
+}
+
+// Momentary (max 400 ms, 25 ms hop) LUFS only — same definition measureLUFS uses.
+function momentaryLUFSOf(bufferLike) {
+  const kw = kWeightSignal(bufferLike);
+  return Math.max(...blockPowersFromSignal(kw, bufferLike.sampleRate, 0.4, 0.025).map(powerToLUFS));
+}
+
+// ---- Headphone de-emphasis (equalise to a flat response at the ear) ---------
+// A linear-phase FIR whose magnitude is 1/curve (the inverse of the headphone
+// response), designed by frequency sampling on a dense grid (nfft), then
+// windowed (Hann) to `taps`. Applied by LINEAR convolution with the centre tap
+// aligned to t=0 (zero phase, no delay), so there is no wrap-around of filter
+// tails — the problem whole-file FFT filtering has at the file edges.
+// 8193 taps (171 ms @ 48 kHz): HD280 curve × this filter is flat within
+// ±0.24 dB from 30 Hz to 22 kHz; energy beyond ±5 ms of centre is −50 dB.
+const EQ_TAPS = 8193, EQ_NFFT = 65536;
+
+function designEqFir(curve, sr, { taps = EQ_TAPS, nfft = EQ_NFFT, maxBoostDb = null } = {}) {
+  const re = new Float64Array(nfft), im = new Float64Array(nfft);
+  const cap = (maxBoostDb == null) ? Infinity : Math.pow(10, maxBoostDb / 20);
+  for (let k = 0; k <= nfft / 2; k++) {
+    const g = Math.min(cap, Math.pow(10, -curveDbAt(curve, k * sr / nfft) / 20));
+    re[k] = g;
+    if (k > 0 && k < nfft / 2) re[nfft - k] = g;
+  }
+  fftInPlace(re, im, true);                        // real, even impulse response
+  const c = (taps - 1) / 2, h = new Float64Array(taps);
+  for (let m = 0; m < taps; m++) {
+    const n = ((m - c) % nfft + nfft) % nfft;
+    h[m] = re[n] * (0.5 - 0.5 * Math.cos(2 * Math.PI * m / (taps - 1)));   // Hann
+  }
+  return h;
+}
+
+// Linear convolution via FFT, output aligned to the centre tap (zero phase) and
+// the same length as the input.
+function firConvolve(x, h) {
+  const len = x.length, taps = h.length, c = (taps - 1) >> 1;
+  let n = 1; while (n < len + taps - 1) n <<= 1;
+  const xr = new Float64Array(n), xi = new Float64Array(n);
+  const hr = new Float64Array(n), hi = new Float64Array(n);
+  for (let i = 0; i < len; i++) xr[i] = x[i];
+  hr.set(h);
+  fftInPlace(xr, xi); fftInPlace(hr, hi);
+  for (let k = 0; k < n; k++) {
+    const r = xr[k] * hr[k] - xi[k] * hi[k];
+    xi[k] = xr[k] * hi[k] + xi[k] * hr[k];
+    xr[k] = r;
+  }
+  fftInPlace(xr, xi, true);
+  const y = new Float32Array(len);
+  for (let i = 0; i < len; i++) y[i] = xr[i + c];
+  return y;
+}
+
+// A-weighting power (IEC 61672), unnormalised — only ratios are used.
+function aWeightPow(f) {
+  const f2 = f * f;
+  const ra = (148693636 * f2 * f2) /
+    ((f2 + 424.36) * Math.sqrt((f2 + 11599.29) * (f2 + 544496.41)) * (f2 + 148693636));
+  return ra * ra;
+}
+
+// Level scale for the de-emphasis filter h so the calibration noise keeps the
+// SAME A-weighted level at the ear: raw path = curve·noise (what was measured);
+// equalised path = curve·h·noise. Welch power spectrum of the noise (16384-pt
+// Hann, 50% overlap). Returns the linear gain to multiply h by.
+function eqLevelScale(noiseBuf, curve, h) {
+  const sr = noiseBuf.sampleRate, N = 16384, hop = N / 2;
+  const x = noiseBuf.getChannelData(0), S = new Float64Array(N / 2 + 1);
+  const w = new Float64Array(N);
+  for (let i = 0; i < N; i++) w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+  for (let start = 0; start + N <= x.length; start += hop) {
+    const re = new Float64Array(N), im = new Float64Array(N);
+    for (let i = 0; i < N; i++) re[i] = x[start + i] * w[i];
+    fftInPlace(re, im);
+    for (let k = 0; k <= N / 2; k++) S[k] += re[k] * re[k] + im[k] * im[k];
+  }
+  // |H(f)|^2 of the designed filter on the same grid (h is shorter than N).
+  const hr = new Float64Array(N), hi = new Float64Array(N);
+  hr.set(h); fftInPlace(hr, hi);
+  let pRaw = 0, pEq = 0;
+  for (let k = 1; k <= N / 2; k++) {
+    const f = k * sr / N;
+    const cw = Math.pow(10, curveDbAt(curve, f) / 10) * aWeightPow(f) * S[k];
+    pRaw += cw;
+    pEq += cw * (hr[k] * hr[k] + hi[k] * hi[k]);
+  }
+  return Math.sqrt(pRaw / pEq);
+}
+
 function measureLUFS(audioBuffer, padSilence = false) {
   const sr = audioBuffer.sampleRate;
   const kw = kWeightSignal(audioBuffer, padSilence);
@@ -327,6 +480,66 @@ const AudioEngine = (() => {
   // per-(name|cutoff) filtered+matched buffers, so repeated presentations at
   // the same cutoff are free. Keyed as `${name}@${cutoffHz}`.
   const filteredCache = new Map();
+  // Active headphone preset (headphones.js). When it has a curve, the LPF
+  // loudness match is computed on curve-shaped measurement copies.
+  let hpId = "flat", hpCurve = null;
+  const shapedRawLUFS = new Map();   // `${name}|${hpId}|${eq}` -> momentary LUFS of shaped raw word
+  // De-emphasis (equalise the headphones to a flat response at the ear).
+  let deemphOn = false, eqNoiseUrl = "sounds/noise.mp3", eqMaxBoostDb = null;
+  let eq = null;                      // { key, h (level-scaled), scaleDb }
+  let eqPending = null;
+  const eqWordCache = new Map();      // `${name}|${eqKey}` -> equalised unfiltered result
+  const eqNoiseCache = new Map();     // `${url}|${eqKey}` -> equalised noise AudioBuffer
+  function eqActive() { return deemphOn && !!hpCurve; }
+  function eqTag() { return eqActive() ? `eq:${hpId}` : "raw"; }
+  function setHeadphoneCurve(id, curve, { deemph = false, noiseUrl, maxBoostDb = null } = {}) {
+    hpId = id || "flat";
+    hpCurve = (Array.isArray(curve) && curve.length > 1) ? curve : null;
+    deemphOn = !!deemph;
+    if (noiseUrl) eqNoiseUrl = noiseUrl;
+    eqMaxBoostDb = (maxBoostDb == null) ? null : Number(maxBoostDb);
+    eq = null; eqPending = null;
+    if (eqActive()) ensureEq().catch(err => console.warn("[eq] design failed:", err));  // warm up
+  }
+  // Design (once per preset + sample rate) and level-scale the de-emphasis FIR.
+  async function ensureEq() {
+    if (!eqActive()) return null;
+    const sr = context().sampleRate, key = `${hpId}@${sr}`;
+    if (eq && eq.key === key) return eq;
+    if (eqPending && eqPending.key === key) return eqPending.p;
+    const p = (async () => {
+      const h = designEqFir(hpCurve, sr, { maxBoostDb: eqMaxBoostDb });
+      const noise = await ensureCalibNoise(eqNoiseUrl);
+      const g = eqLevelScale(noise.raw, hpCurve, h);
+      for (let i = 0; i < h.length; i++) h[i] *= g;
+      eq = { key, h, scaleDb: DB(g) };
+      console.log(`[eq] ${hpId}: de-emphasis ready (${h.length} taps), level scale ${DB(g).toFixed(2)} dB`);
+      return eq;
+    })();
+    eqPending = { key, p };
+    return p;
+  }
+  function eqBuffer(buffer, h) {
+    const c = context();
+    const out = c.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
+    for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+      out.getChannelData(ch).set(firConvolve(buffer.getChannelData(ch), h));
+    }
+    return out;
+  }
+  // Noise for playback (SNR masker): equalised when de-emphasis is on.
+  async function noiseForPlayback(url) {
+    const noise = await ensureCalibNoise(url);
+    if (!eqActive()) return noise.raw;
+    const e = await ensureEq();
+    const k = `${url}|${e.key}`;
+    if (!eqNoiseCache.has(k)) eqNoiseCache.set(k, eqBuffer(noise.raw, e.h));
+    return eqNoiseCache.get(k);
+  }
+  function eqInfo() {
+    return { active: eqActive(), preset: hpId, scaleDb: eq ? eq.scaleDb : null,
+             taps: eq ? eq.h.length : null, maxBoostDb: eqMaxBoostDb };
+  }
 
   // Optional pre-measured momentary LUFS per word name, loaded from a repo file
   // (see loadLUFSTable). When present, decode() uses this instead of measuring
@@ -446,23 +659,51 @@ const AudioEngine = (() => {
     const entry = cache.get(name);
     if (!entry) throw new Error(`prepare() called before decode() for ${name}`);
 
+    // De-emphasis (if on) comes AFTER low-pass filtering and BEFORE the loudness
+    // match, so filtered words are matched on what actually reaches the ear.
+    const e = eqActive() ? await ensureEq() : null;
+
     if (cutoffHz == null) {
-      return {
-        buffer: entry.raw,
-        preLUFS: entry.momentary,
-        postLUFS: entry.momentary,
-        matchGainDb: 0,
-        truePeakDB: estimateTruePeakDB(entry.raw)
-      };
+      if (!e) {
+        return {
+          buffer: entry.raw,
+          preLUFS: entry.momentary,
+          postLUFS: entry.momentary,
+          matchGainDb: 0,
+          truePeakDB: estimateTruePeakDB(entry.raw)
+        };
+      }
+      const wk = `${name}|${e.key}`;
+      if (!eqWordCache.has(wk)) {
+        const buf = eqBuffer(entry.raw, e.h);
+        eqWordCache.set(wk, { buffer: buf, preLUFS: null, postLUFS: null,
+                              matchGainDb: 0, truePeakDB: estimateTruePeakDB(buf) });
+      }
+      return eqWordCache.get(wk);
     }
 
-    const key = `${name}@${Math.round(cutoffHz)}`;
+    const key = `${name}@${Math.round(cutoffHz)}@${hpId}@${eqTag()}`;
     if (filteredCache.has(key)) return filteredCache.get(key);
 
     const c = context();
-    const filtered = await renderButterworthLowpass(c, entry.raw, cutoffHz);
-    const postLUFS = measureLUFS(filtered).momentary;
-    const preLUFS = entry.momentary;
+    let filtered = await renderButterworthLowpass(c, entry.raw, cutoffHz);
+    if (e) filtered = eqBuffer(filtered, e.h);
+    // Loudness match: bring the filtered word back to the unfiltered word's
+    // momentary LUFS. With a headphone curve, both are measured on copies shaped
+    // by the curve, i.e. as they arrive at the ear through those headphones.
+    let preLUFS, postLUFS;
+    if (hpCurve) {
+      const rk = `${name}|${hpId}|${eqTag()}`;
+      if (!shapedRawLUFS.has(rk)) {
+        const ref = e ? (await prepare(name, null)).buffer : entry.raw;   // equalised if on
+        shapedRawLUFS.set(rk, momentaryLUFSOf(shapeByCurve(ref, hpCurve)));
+      }
+      preLUFS = shapedRawLUFS.get(rk);
+      postLUFS = momentaryLUFSOf(shapeByCurve(filtered, hpCurve));
+    } else {
+      preLUFS = entry.momentary;
+      postLUFS = measureLUFS(filtered).momentary;
+    }
     const matchGainDb = preLUFS - postLUFS;           // >0: LPF lost energy
     const matchLin = LIN(matchGainDb);
 
@@ -570,9 +811,26 @@ const AudioEngine = (() => {
 
   // Convenience: decode-if-needed, prepare at cutoff, play. Mirrors what
   // flow.js needs per trial.
+  // Output gain (calibration slider) in dB, applied after every stimulus.
+  function masterDb() {
+    return masterGain ? DB(masterGain.gain.value) : 0;
+  }
+
   async function playStimulus(name, url, { cutoffHz = null, extraGainDb = 0, onStarted = null, routing = "binaural" } = {}) {
     if (!cache.has(name)) await decode(name, url);
     const prepared = await prepare(name, cutoffHz);
+
+    // Per-presentation level diagnostic. The peak that reaches the output is
+    // the played buffer's true peak (already post-filter and post loudness
+    // make-up) plus the presentation gain and the master gain. Clipping is
+    // only when THAT exceeds 0 dB FS — a positive gain on a quiet file is fine.
+    const peakOut = prepared.truePeakDB + extraGainDb + masterDb();
+    const tag = `[stim] ${name} · cutoff ${cutoffHz == null ? "none" : Math.round(cutoffHz) + " Hz"}` +
+      ` · make-up ${prepared.matchGainDb.toFixed(1)} dB · gain ${extraGainDb.toFixed(1)} dB` +
+      ` · output peak ${peakOut.toFixed(1)} dBFS`;
+    if (peakOut > 0) console.warn(`${tag}  <-- CLIPS by ${peakOut.toFixed(1)} dB`);
+    else console.log(tag);
+
     await playBuffer(prepared.buffer, { extraGainDb, onStarted, routing });
     return prepared;
   }
@@ -621,8 +879,7 @@ const AudioEngine = (() => {
     if (!cache.has(name)) await decode(name, url);
     const prepared = await prepare(name, null);      // SNR mode never filters
     const wordBuf = prepared.buffer;
-    const noise = await ensureCalibNoise(noiseUrl);
-    const noiseBuf = noise.raw;
+    const noiseBuf = await noiseForPlayback(noiseUrl);   // equalised if de-emphasis is on
 
     // --- Levels: NO measurement, NO per-file re-matching. --------------------
     // The files are already pinned at source: every word is -22.5 LUFS and the
@@ -638,6 +895,19 @@ const AudioEngine = (() => {
     // coherent sum below full scale. Overridable via config.snrHeadroomDb.
     const noiLin = LIN(noiseGainDb + headroomDb);
     const sigLin = LIN(noiseGainDb + snrDb + headroomDb);
+
+    // Per-presentation level diagnostic (conservative): worst case is the two
+    // true peaks adding coherently. Warn only; the sound plays unchanged.
+    {
+      const m = LIN(masterDb());
+      const sum = (LIN(estimateTruePeakDB(wordBuf)) * sigLin +
+                   LIN(estimateTruePeakDB(noiseBuf)) * noiLin) * m;
+      const sumDb = DB(sum);
+      const tag = `[snr] ${name} · SNR ${snrDb.toFixed(1)} dB · noise gain ${noiseGainDb.toFixed(1)} dB` +
+        ` · worst-case output peak ${sumDb.toFixed(1)} dBFS`;
+      if (sum > 1) console.warn(`${tag}  <-- may CLIP by up to ${sumDb.toFixed(1)} dB`);
+      else console.log(tag);
+    }
 
     // --- Timing: place the word, then wrap the noise segment around it --------
     const now = c.currentTime;
@@ -856,6 +1126,8 @@ const AudioEngine = (() => {
     startCalibrationTone, stopCalibrationTone, setCalibrationEar, setCalibrationGainDb, isCalibrationTonePlaying, ensureCalibNoise,
     // audio-graph diagnostics
     rateMismatch,
+    // headphone preset (LPF loudness match on curve-shaped copies)
+    setHeadphoneCurve, eqInfo,
     // caches (exposed for diagnostics / teardown)
     _cache: cache, _filteredCache: filteredCache,
     // utils
@@ -891,16 +1163,17 @@ if (typeof window !== "undefined") window.AudioEngine = AudioEngine;
 // calibration independent of the presentation-level gain above.
 // -----------------------------------------------------------------------------
 
-const CAL_KEY = "uc4afc_calibration";
+// Storage is per headphone/soundcard preset (headphones.js): key
+// "uc4afc_calibration:<presetId>". setProfile() switches the slot.
+const CAL_KEY_BASE = "uc4afc_calibration";
+let CAL_KEY = CAL_KEY_BASE;
 
-// The recordings carry ~96 dB of dynamic range (16-bit). Attenuating past this
-// only digs into quantisation noise, so 96 dB is where the useful range ends.
-// This is a property of the recordings, not a clinical limit; adjust if the
-// source bit depth changes. (Ported from UC_CVCV.)
-const MAX_ATTENUATION_DB = 96;
-// dB(A) below this aren't sound pressure levels — a physical sanity floor that
-// stops the range going negative when the reference is under 96 dB(A).
-const ABSOLUTE_FLOOR_DBA = 0;
+// (A former 96 dB maximum-attenuation bound on the test slider was removed:
+// playback is floating point, so attenuating a recording scales its own noise
+// floor with it. At extreme attenuation only the output DAC's bit depth matters.)
+// Lowest level offered on the calibration screen's test slider. Levels below
+// 0 dB(A) are legitimate (below 20 µPa); -10 dB(A) is a practical bottom.
+const ABSOLUTE_FLOOR_DBA = -10;
 // Consider a restored calibration stale past this many days (Finding 6).
 const CAL_STALE_DAYS = 30;
 
@@ -914,6 +1187,7 @@ function snap5(v) {
 const cal = {
   method: null,          // "audiometer" | "soundfield" (see CAL_METHODS)
   measuredDbA: null,     // representative reference (max of dials) for bounds/displays
+  source: null,          // where a sound-field level came from, if not a meter (e.g. a preset)
   dial: { left: null, right: null }, // per-ear audiometer dial settings (dB(A))
   timestamp: null,
   isCalibrated: false,
@@ -1013,8 +1287,7 @@ function levelBounds(ear) {
   const reference = referenceDbA(ear);
   if (reference === null) return null;
   const max = Math.floor(reference / 5) * 5;
-  const attenuationFloor = reference - MAX_ATTENUATION_DB;
-  const min = Math.ceil(Math.max(ABSOLUTE_FLOOR_DBA, attenuationFloor) / 5) * 5;
+  const min = Math.ceil(ABSOLUTE_FLOOR_DBA / 5) * 5;
   return { reference, min, max, usable: min <= max, span: max - min };
 }
 
@@ -1034,9 +1307,10 @@ function clampLevel(value, ear) {
 // yields no usable range (below the physical floor — i.e. not a real dB(A) SPL)
 // is refused and calibration stays off, rather than handing back a slider whose
 // floor is negative.
-function applyCalibrationLevel(level, timestamp = new Date().toISOString(), method) {
+function applyCalibrationLevel(level, timestamp = new Date().toISOString(), method, source = null) {
   const reference = Number(level);
   if (!Number.isFinite(reference)) return false;
+  cal.source = source || null;
 
   cal.method = method || calMethod();
   cal.measuredDbA = reference;
@@ -1075,6 +1349,7 @@ function applyCalibrationDials(left, right, timestamp = new Date().toISOString()
   const representative = Math.max(...vals);
 
   cal.method = method || "audiometer";
+  cal.source = null;
   cal.dial = {
     left:  isNum(left)  ? Number(left)  : null,
     right: isNum(right) ? Number(right) : null
@@ -1096,30 +1371,27 @@ function applyCalibrationDials(left, right, timestamp = new Date().toISOString()
   persist();
   return true;
 }
-// level is CLAMPED to the calibrated bounds first (Finding 5) so a stray value
-// can never reach the gain maths, and the result is capped at unity — nothing
-// can play louder than the reference without clipping. A cap that fires is
-// logged, because it means a level reached here without being clamped upstream.
+// Stimulus gain for a requested level: EXACTLY  level − reference  (dB), with
+// no rounding and no clamping. (It used to snap the level to the calibration
+// slider's 5 dB grid and cap at the highest grid step below the reference, which
+// silently moved off-grid levels — 62 -> 60 — quantised calibrated quiet-mode
+// tracking to 5 dB, and made levels between the top grid step and the reference
+// unreachable.) A level above the reference means gain > 0 dB; whether that
+// actually clips depends on the stimulus peak, and the audio engine warns per
+// presentation when it does. The calibration screen's slider keeps its own
+// 5 dB grid (clampLevel / levelBounds) — that is UI only.
 function gainForLevel(levelDbA, ear) {
-  const reference = referenceDbA(ear);
-  if (cal.isCalibrated && reference !== null) {
-    const target = clampLevel(levelDbA, ear);
-    const attenuation = Number(reference) - Number(target);
-    let g = Math.pow(10, -attenuation / 20);
-    if (g > 1.0) { console.warn(`[cal] gain ${g.toFixed(3)} > 1 capped at unity`); g = 1.0; }
-    return g;
-  }
-  return 1.0; // uncalibrated: unity
+  return Math.pow(10, gainDbForLevel(levelDbA, ear) / 20);
 }
 
-// dB form of the same, convenient for the engine's extraGainDb parameter.
-// Also clamped and capped at 0 dB (unity). Optional `ear` selects the per-channel
-// dial (audiometer); omit or "binaural" for the shared/representative reference.
+// dB form, used by the engine's extraGainDb parameter. Optional `ear` selects the
+// per-channel dial (audiometer); omit or "binaural" for the shared reference.
+// Uncalibrated: 0 dB (unity).
 function gainDbForLevel(levelDbA, ear) {
   const reference = referenceDbA(ear);
-  if (cal.isCalibrated && reference !== null) {
-    const target = clampLevel(levelDbA, ear);
-    return Math.min(0, Number(target) - Number(reference));
+  const level = Number(levelDbA);
+  if (cal.isCalibrated && reference !== null && Number.isFinite(level)) {
+    return level - Number(reference);
   }
   return 0;
 }
@@ -1136,6 +1408,7 @@ function isCalibrated() { return cal.isCalibrated; }
 function measuredDbA() { return cal.measuredDbA; }
 
 function clearCalibration() {
+  cal.source = null;
   cal.method = null;
   cal.measuredDbA = null;
   cal.dial = { left: null, right: null };
@@ -1147,6 +1420,30 @@ function clearCalibration() {
   try { localStorage.removeItem(CAL_KEY); } catch (_) {}
 }
 
+// Switch to a preset's storage slot. In-memory calibration is reset (the caller
+// restores the slot with loadStored/confirmStored). A calibration saved before
+// presets existed is moved, once, into the first preset activated.
+function setProfile(id) {
+  const key = `${CAL_KEY_BASE}:${id}`;
+  try {
+    const legacy = localStorage.getItem(CAL_KEY_BASE);
+    if (legacy) {
+      if (!localStorage.getItem(key)) localStorage.setItem(key, legacy);
+      localStorage.removeItem(CAL_KEY_BASE);
+    }
+  } catch (_) {}
+  CAL_KEY = key;
+  cal.method = null;
+  cal.measuredDbA = null;
+  cal.source = null;
+  cal.dial = { left: null, right: null };
+  cal.timestamp = null;
+  cal.isCalibrated = false;
+  cal.sliderMinDb = -100;
+  cal.sliderMaxDb = 0;
+  cal.currentSliderDb = 0;
+}
+
 function persist() {
   try {
     if (cal.method === "audiometer") {
@@ -1155,7 +1452,8 @@ function persist() {
       }));
     } else {
       localStorage.setItem(CAL_KEY, JSON.stringify({
-        level: cal.measuredDbA, timestamp: cal.timestamp, method: cal.method
+        level: cal.measuredDbA, timestamp: cal.timestamp, method: cal.method,
+        source: cal.source || undefined
       }));
     }
   } catch (_) {}
@@ -1193,7 +1491,8 @@ function readStored() {
     // Sound-field single-level record: { level, method, timestamp }.
     const level = Number(data.level);
     if (data.level == null || !isFinite(level)) return null;
-    return { level, timestamp: data.timestamp || null, method: data.method || null, ageDays, stale };
+    return { level, timestamp: data.timestamp || null, method: data.method || null,
+             source: data.source || null, ageDays, stale };
   } catch (_) {
     return null;
   }
@@ -1212,7 +1511,8 @@ function confirmStored(rec) {
       rec.timestamp || undefined, rec.method || "audiometer");
   }
   if (!isFinite(Number(rec.level))) return false;
-  return applyCalibrationLevel(Number(rec.level), rec.timestamp || undefined, rec.method || undefined);
+  return applyCalibrationLevel(Number(rec.level), rec.timestamp || undefined, rec.method || undefined,
+    rec.source || null);
 }
 
 // Back-compat shim: some callers may still call loadStored(). It now only READS
@@ -1232,7 +1532,7 @@ function calibrationHeader() {
       : `L ${fmt(l)} / R ${fmt(r)} dB(A)`;
     return `${dials} — audiometer (aux input)`;
   }
-  return `${cal.measuredDbA} dB(A) — sound field (level meter)`;
+  return `${cal.measuredDbA} dB(A) — sound field (${cal.source || "level meter"})`;
 }
 
 if (typeof window !== "undefined") {
@@ -1243,11 +1543,166 @@ if (typeof window !== "undefined") {
     loadStored, readStored, confirmStored, calibrationHeader,
     levelBounds, clampLevel,
     calMethod, calMethodInfo, isPerChannel, setMethod,
-    moreLevelAdvice, lessLevelAdvice, CAL_METHODS
+    moreLevelAdvice, lessLevelAdvice, CAL_METHODS, setProfile
   };
 }
 
 
+
+
+// --- headphones.js ---
+// File: headphones.js
+// -----------------------------------------------------------------------------
+// Headphone + soundcard presets.
+//
+// A preset is a specific transducer chain. Each one has:
+//   * its OWN stored calibration (the sound-field noise calibration level, in
+//     dB(A) at full device volume) — so calibrating one chain never overwrites
+//     another. Selecting a preset switches calibration.js to that preset's
+//     storage slot.
+//   * an optional built-in calibration (`defaultCal`) used when nothing has been
+//     measured/entered for that preset yet.
+//   * an optional frequency-response `curve` [[Hz, dB], ...]. It is used ONLY to
+//     loudness-match low-pass-filtered words: the LUFS match is computed on
+//     copies shaped by this curve (measurement copies — the played sound is not
+//     shaped). Absolute offset of the curve cancels; only its shape matters.
+//     Unfiltered words, quiet mode and SNR need no curve — the calibration noise
+//     is spectrum-matched to the speech, so its dB(A) reading already includes
+//     the headphones' response.
+// -----------------------------------------------------------------------------
+
+const HP_KEY = "uc4afc_headphones";
+const HP_DEEMPH_KEY = "uc4afc_hp_deemph";   // "1" = equalise to flat (de-emphasis)
+
+const HEADPHONE_PRESETS = {
+  flat: {
+    label: "Other / no headphone correction (flat)",
+    curve: null,
+    defaultCal: null
+  },
+
+  hd280_xfi: {
+    label: "Sennheiser HD280 Pro + Sound Blaster X-Fi",
+    // Raw HATS response (dB), HD280 Pro + X-Fi, as used in the LabVIEW chain.
+    curve: [
+      [0, 12.48784], [50, 12.48784], [100, 4.75783], [150, 4.196114],
+      [200, 0.259988], [250, 0.387803], [300, 0.767491], [350, 0.903058],
+      [400, 0.887052], [450, 0.854083], [500, 0.661139], [550, 0.578238],
+      [600, 0.383544], [650, 0.060629], [700, -0.10318], [750, -0.01785],
+      [800, 0.008676], [850, -0.13003], [900, -0.43919], [950, -0.52313],
+      [1000, -0.28539], [1100, 0.443688], [1200, 0.729564], [1300, 0.259018],
+      [1400, -0.37757], [1500, -0.8873], [1600, -0.7755], [1700, -0.84623],
+      [1800, -0.70259], [1900, -0.24701], [2000, 0.118596], [2250, 0.867295],
+      [2500, 1.553311], [2750, -0.03347], [3000, -4.59946], [3250, -7.9489],
+      [3500, -5.18471], [3750, -2.50899], [4000, -1.82328], [4250, -0.42877],
+      [4500, 0.173617], [4750, 0.48311], [5000, 1.399076], [5250, 4.120973],
+      [5500, 5.748327], [5750, 5.780714], [6000, 5.817753], [6250, 6.559097],
+      [6500, 6.804424], [6750, 6.153435], [7000, 5.80585], [7250, 6.261406],
+      [7500, 7.619856], [7750, 9.180964], [8000, 9.444511], [8250, 9.510284],
+      [8500, 9.278084], [8750, 8.847723], [9000, 8.119021], [9250, 7.291807],
+      [9500, 6.465921], [9750, 5.841209], [10000, 5.217527], [10500, 4.672712],
+      [11000, 3.33047], [11500, 0.889905], [12000, 0.750223], [12500, -1.18928],
+      [13000, -2.12922], [13500, -0.77013], [14000, -0.11249], [14500, -1.15671],
+      [15000, -2.10313], [15500, -2.95206], [16000, -3.10376], [16500, -2.55843],
+      [17000, -3.31627], [17500, -5.67743], [18000, -7.34202], [18500, -9.11014],
+      [19000, -10.0819], [19500, -9.15727], [20000, -9.23637], [20500, -9.11921],
+      [21000, -9.10579], [21500, -9.29613], [22000, -10.4902]
+    ],
+    // From the LabVIEW HATS model: calibration noise Leq 61.39 dB EU + 17.6 dB
+    // soundcard gain = 78.99 dB(A) at full volume (Windows, browser, X-Fi at max;
+    // enhancements/effects off).
+    defaultCal: {
+      level: 78.99,
+      source: "HD280/X-Fi preset (LabVIEW HATS model)"
+    }
+  },
+
+  sony_zx110_ugreen: {
+    label: "Sony MDR-ZX110 + UGreen AV161",
+    curve: null,        // TODO: fill from GRAS measurement
+    defaultCal: null    // TODO: enter GRAS noise-calibration level
+  }
+};
+
+function hpCurrentId() {
+  try {
+    const id = localStorage.getItem(HP_KEY);
+    if (id && HEADPHONE_PRESETS[id]) return id;
+  } catch (_) {}
+  return "flat";
+}
+
+function hpPreset(id = hpCurrentId()) {
+  return HEADPHONE_PRESETS[id] || HEADPHONE_PRESETS.flat;
+}
+
+// Activate a preset: remember it, switch calibration storage to its slot
+// (restoring what was stored there, or its built-in value), and give the audio
+// engine its curve. Returns { id, restored, fromPreset }.
+function hpActivate(id) {
+  if (!HEADPHONE_PRESETS[id]) id = "flat";
+  try { localStorage.setItem(HP_KEY, id); } catch (_) {}
+  const p = HEADPHONE_PRESETS[id];
+
+  let restored = null, fromPreset = false;
+  if (typeof Calibration !== "undefined" && Calibration.setProfile) {
+    Calibration.setProfile(id);                 // clears in-memory cal, switches slot
+    restored = Calibration.loadStored();
+    if (restored) {
+      if (restored.method && Calibration.setMethod) Calibration.setMethod(restored.method);
+      Calibration.confirmStored(restored);
+    } else if (p.defaultCal) {
+      Calibration.setMethod("soundfield");
+      Calibration.applyCalibrationLevel(p.defaultCal.level, new Date().toISOString(),
+        "soundfield", p.defaultCal.source);
+      fromPreset = true;
+    }
+  }
+  hpPushToEngine(id);
+  return { id, restored, fromPreset };
+}
+
+// De-emphasis: equalise the selected headphones to a flat response at the ear
+// (played sound filtered by 1/curve; level-scaled so the calibration noise keeps
+// its calibrated dB(A)). Only possible for a preset with a curve.
+function hpDeemphOn() {
+  try { return localStorage.getItem(HP_DEEMPH_KEY) === "1"; } catch (_) { return false; }
+}
+function hpSetDeemph(on) {
+  try { localStorage.setItem(HP_DEEMPH_KEY, on ? "1" : "0"); } catch (_) {}
+  hpPushToEngine(hpCurrentId());
+}
+function hpPushToEngine(id) {
+  const p = hpPreset(id);
+  if (typeof AudioEngine !== "undefined" && AudioEngine.setHeadphoneCurve) {
+    const noiseUrl = (typeof config !== "undefined" && config && config.calibNoiseFile)
+      ? `sounds/${config.calibNoiseFile}` : "sounds/noise.mp3";
+    AudioEngine.setHeadphoneCurve(id, p.curve, {
+      deemph: hpDeemphOn() && !!p.curve, noiseUrl, maxBoostDb: p.maxBoostDb ?? null
+    });
+  }
+}
+
+// One line for results headers.
+function hpHeader() {
+  const id = hpCurrentId(), p = hpPreset(id);
+  let eqTxt = "";
+  if (p.curve) {
+    const info = (typeof AudioEngine !== "undefined" && AudioEngine.eqInfo) ? AudioEngine.eqInfo() : null;
+    eqTxt = hpDeemphOn()
+      ? `; equalised to flat (de-emphasis${info && info.scaleDb != null ? `, level scale ${info.scaleDb.toFixed(2)} dB` : ""})`
+      : "; not equalised";
+  }
+  return `${p.label}${(p.curve || id === "flat") ? "" : " (no frequency-response curve yet)"}${eqTxt}`;
+}
+
+if (typeof window !== "undefined") {
+  window.Headphones = {
+    PRESETS: HEADPHONE_PRESETS,
+    currentId: hpCurrentId, preset: hpPreset, activate: hpActivate, header: hpHeader,
+    deemphOn: hpDeemphOn, setDeemph: hpSetDeemph
+  };
+}
 
 
 // --- adaptiveConfig.js ---
@@ -1277,7 +1732,7 @@ const PRESETS = {
     axisIsLog: true,
     unit: "Hz", stepUnit: "decades", slopeUnit: "%/octave",
     start: 1000,
-    xlo: Math.log10(80), xhi: Math.log10(6000),
+    xlo: Math.log10(75), xhi: Math.log10(6000),   // hard floor 75 Hz (matches LabVIEW)
     // WUDR two-phase steps (decades)
     workDown: +Math.log10(1 / 0.95238).toFixed(4),  // 0.0212  (-4.76%)
     workUp:   +Math.log10(1.08333).toFixed(4),       // 0.0348  (+8.33%)
@@ -1344,10 +1799,8 @@ const ADAPTIVE_DEFAULTS = {
   target: 0.625,             // midpointTarget(4) = (A+1)/(2A)
 
   // Start
-  startMode: "absolute",      // "absolute" | "relative"
   startValue: PRESETS.lpf.start,     // Hz (LPF) or dB (quiet)
   startCutoffHz: 1000,        // back-compat alias for LPF start (Hz)
-  startRelOctaves: 0,         // relative start: octaves (LPF) or dB (quiet)
 
   // Trials
   nTrials: 33,
@@ -1380,7 +1833,7 @@ const ADAPTIVE_DEFAULTS = {
 };
 
 // Return a config with the mode-specific fields set to `mode`'s preset,
-// preserving procedure/A/nTrials/startMode and A2 sweet points.
+// preserving procedure/A/nTrials and A2 sweet points.
 function applyModePreset(cfg, mode) {
   const p = PRESETS[mode] || PRESETS.lpf;
   return {
@@ -1437,6 +1890,14 @@ function loadAdaptiveConfig() {
   } catch (_) {}
   // Keep derived values consistent.
   cfg.target = midpointTarget(cfg.A || 4);
+  // Strip the retired "relative start" fields from configs saved by older
+  // builds; they have no Setup control and used to shift the start silently.
+  delete cfg.startMode;
+  delete cfg.startRelOctaves;
+  // Axis bounds have no Setup control, so always take them from the mode preset
+  // (a saved copy could be stale — e.g. the old 80 Hz LPF floor, now 75 Hz).
+  const pm = PRESETS[cfg.mode] || PRESETS.lpf;
+  cfg.xlo = pm.xlo; cfg.xhi = pm.xhi;
   return cfg;
 }
 
@@ -1746,7 +2207,7 @@ function resolveTrackConfig(adaptive, startValue) {
     procedure: adaptive.procedure || "wudr",
     A: adaptive.A || 4,
     target: adaptive.target ?? midpointTarget(adaptive.A || 4),
-    xlo: adaptive.xlo ?? (axisIsLog ? Math.log10(80) : (isSnr ? -20 : 20)),
+    xlo: adaptive.xlo ?? (axisIsLog ? Math.log10(75) : (isSnr ? -20 : 20)),
     xhi: adaptive.xhi ?? (axisIsLog ? Math.log10(6000) : (isSnr ? 10 : 85)),
     axisIsLog,
     unit: adaptive.unit || (axisIsLog ? "Hz" : (isSnr ? "dB SNR" : "dB")),
@@ -1886,7 +2347,12 @@ function beginPhase(p) {
   participant = document.getElementById("name").value || "anon";
   testStartedAt = new Date();
 
-  loadList().then(() => {
+  // Which word list (1 or 2) this Training/Start run uses, from the start screen.
+  const sel = document.getElementById("listSelect");
+  listId = (sel && (sel.value === "1" || sel.value === "2")) ? sel.value : "1";
+  try { localStorage.setItem("uc4afc_list", listId); } catch (_) {}
+
+  loadList(listId).then(() => {
     shuffle(list);
     trialIndex = 0;
     responseLog.length = 0;
@@ -1904,17 +2370,13 @@ function beginPhase(p) {
       const isSnr = adaptive.mode === "snr";
       const isLinear = isQuiet || isSnr;   // both use a dB axis, not log(Hz)
 
-      // Start value: Hz (LPF) or dB (quiet: level / snr: SNR). Relative start
-      // shifts by octaves (LPF) or dB (linear); with no prior in-session
-      // threshold it resolves against the absolute start for now (documented).
-      let startVal = isLinear
+      // Start value in the mode's own unit: Hz (LPF), dB level (quiet), dB SNR.
+      // Exactly the Setup value — no hidden "relative" shift (that old feature
+      // has no Setup control, so a stale saved value could silently move the
+      // start, e.g. 1000 Hz -> 250 Hz while Setup still showed 1000).
+      const startVal = isLinear
         ? (adaptive.startValue ?? adaptive.start ?? (isSnr ? 2 : 65))
         : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
-      if (adaptive.startMode === "relative" && isFinite(adaptive.startRelOctaves)) {
-        startVal = isLinear
-          ? startVal + adaptive.startRelOctaves               // dB shift
-          : startVal * Math.pow(2, adaptive.startRelOctaves); // octave shift
-      }
 
       // quietStartLevel doubles as the uncalibrated relative-gain anchor for
       // BOTH linear modes (quiet's level and snr's noise level).
@@ -2039,6 +2501,10 @@ if (phase === "test") {
   // Refresh the pending adaptive value from the track for this trial.
   if (phase === "test" && track) {
     currentCutoffHz = track.currentValue();
+    const m = (config && config.adaptive && config.adaptive.mode) || "lpf";
+    const u = m === "snr" ? "dB SNR" : m === "quiet" ? "dB" : "Hz";
+    console.log(`[trial ${trialIndex + 1}] list ${listId} · ${m} value = ` +
+      `${u === "Hz" ? Math.round(currentCutoffHz) : currentCutoffHz.toFixed(1)} ${u}`);
   }
   const shuffled = [...item.images];
   shuffle(shuffled);
@@ -2118,24 +2584,45 @@ if (phase === "test") {
   // ---- SNR mode: dispatch to the mixed word+noise path and return early ----
   if (isSnr) {
     const snrDb = currentCutoffHz;   // mode-neutral value; dB SNR here
-    // Noise sits at the fixed presentation level: the calibration slider's
-    // chosen dB(A) when calibrated, unity when not (device volume sets absolute
-    // output, exactly as an uncalibrated run does elsewhere).
+    // Same presentation as normalisation (constant.js csPlaySnr): the masker is
+    // the SNR noise file (noise.mp3) at the Setup SNR noise level, and the word
+    // sits snrDb above/below it. Previously this used config.calibFile, which is
+    // the 1 kHz CALIBRATION TONE, and the calibration slider level.
+    const noiseLevelSetting = Number(
+      (config && config.adaptive && isFinite(config.adaptive.snrNoiseLevel))
+        ? config.adaptive.snrNoiseLevel
+        : (calibrated ? 65 : 0)
+    );
     const noiseGainDb = calibrated
-      ? Calibration.gainDbForLevel(Calibration.state().currentSliderDb)
-      : 0;
-    const noiseUrl = (config && config.calibFile) ? `sounds/${config.calibFile}` : "sounds/calib.mp3";
+      ? Calibration.gainDbForLevel(noiseLevelSetting, routing)
+      : noiseLevelSetting;             // dB re full scale; clipping is warned, not floored
+    const noiseUrl = (config && config.snrNoiseFile)
+      ? `sounds/${config.snrNoiseFile}` : "sounds/noise.mp3";
 
-    AudioEngine.playStimulusWithNoise(item.correct, `sounds/${item.audioFile}`, {
+    const msToSec = (v, dflt) => {
+      const n = Number(v);
+      return isFinite(n) && n >= 0 ? n / 1000 : dflt;
+    };
+    const snrOpts = {
       snrDb,
       noiseGainDb,
       noiseUrl,
       routing,
+      noiseLeadSec:  msToSec(config && config.snrNoiseLeadMs, 0.6),
+      noiseTrailSec: msToSec(config && config.snrNoiseTrailMs, 0.6),
+      rampSec:       msToSec(config && config.snrNoiseRampMs, 0.1),
+      wordLeadSec:   msToSec(config && config.snrWordLeadMs,
+                             msToSec(config && config.imageRevealOffsetMs, 0.6)),
       onStarted: () => { setTimeout(revealOptions, offset); }
-    }).catch(err => {
+    };
+    if (config && isFinite(Number(config.snrHeadroomDb))) {
+      snrOpts.headroomDb = Number(config.snrHeadroomDb);
+    }
+
+    AudioEngine.playStimulusWithNoise(item.correct, `sounds/${item.audioFile}`, snrOpts).catch(err => {
       console.error("SNR audio play failed:", err);
       if (!nextTrial._erroredOnce) {
-        alert("Audio failed to play. Check the calibration noise file (sounds/calib.mp3) and autoplay settings.");
+        alert(`Audio failed to play. Check the noise file (${noiseUrl}) and autoplay settings.`);
         nextTrial._erroredOnce = true;
       }
     });
@@ -2149,7 +2636,7 @@ if (phase === "test") {
     // Quiet mode: value is a dB level.
     const level = currentCutoffHz; // (mode-neutral value; dB here)
     if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(level);
+      extraGainDb = Calibration.gainDbForLevel(level, routing);
     } else {
       // Uncalibrated: play relative to the start level (start = unity).
       extraGainDb = level - (quietStartLevel ?? level);
@@ -2165,9 +2652,9 @@ if (phase === "test") {
         : (calibrated ? 65 : 0)
     );
     if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(lpfLevel);
+      extraGainDb = Calibration.gainDbForLevel(lpfLevel, routing);
     } else {
-      extraGainDb = Math.min(0, lpfLevel);   // dB FS attenuation, never boost
+      extraGainDb = lpfLevel;   // dB re full scale; clipping is warned (engine), not floored
     }
   }
 
@@ -2259,7 +2746,15 @@ function abortTraining() {
 
 // --- list.js ---
 // File: list.js (non-module)
-async function loadList() {
+//
+// loadList(which): which = "1" | "2" | "both" (default "both").
+//   "1"/"2" -> UC4AFC_list01.txt / UC4AFC_list02.txt (33 words each).
+//   "both"  -> list 1 + list 2 concatenated (66 words). Built from the two
+//              list files rather than the old combined UC4AFC_lists.txt, which
+//              was missing "chin" (65 rows).
+// Offline (file://) uses the two inline <script type="text/plain"> blocks
+// #list-fallback-1 and #list-fallback-2 in index.html.
+async function loadList(which = "both") {
   function parseLines(text, sourceLabel) {
     const lines = text.trim().split(/\r?\n/);
     const rows = lines.map((line, i) => {
@@ -2279,28 +2774,37 @@ async function loadList() {
     return rows;
   }
 
+  const ids = (which === "1" || which === "2") ? [which] : ["1", "2"];
+  const rows = [];
+
   if (location.protocol === "file:") {
-    const fallback = document.getElementById("list-fallback");
-    if (!fallback) {
-      alert("Local fallback list not found in page.");
-      throw new Error("Missing <script id='list-fallback'> element");
+    for (const id of ids) {
+      const el = document.getElementById(`list-fallback-${id}`);
+      if (!el) {
+        alert(`Local fallback list ${id} not found in page.`);
+        throw new Error(`Missing <script id='list-fallback-${id}'> element`);
+      }
+      rows.push(...parseLines(el.textContent || "", `inline fallback list ${id}`));
     }
-    const raw = fallback.textContent || "";
-    const rows = parseLines(raw, "inline fallback");
-    list.length = 0;
-    list.push(...rows);
-    console.warn("Loaded inline fallback list (file://)");
+    console.warn(`Loaded inline fallback list(s) ${ids.join("+")} (file://)`);
   } else {
     try {
-      const txt = await fetch("UC4AFC_lists.txt").then(r => r.text());
-      const rows = parseLines(txt, "UC4AFC_lists.txt");
-      list.length = 0;
-      list.push(...rows);
-      console.log("[ok] Loaded list from UC4AFC_lists.txt");
+      for (const id of ids) {
+        const file = `UC4AFC_list0${id}.txt`;
+        const res = await fetch(file);
+        if (!res.ok) throw new Error(`${file}: HTTP ${res.status}`);
+        rows.push(...parseLines(await res.text(), file));
+      }
+      console.log(`[ok] Loaded list(s) ${ids.join("+")}: ${rows.length} words`);
     } catch (err) {
-      console.error("Failed to load UC4AFC_lists.txt:", err);
+      console.error("Failed to load stimulus list:", err);
       alert("Failed to load stimulus list.");
     }
+  }
+
+  if (rows.length) {
+    list.length = 0;
+    list.push(...rows);
   }
 
   // [ok] All assets are preloaded via preloadAllAssets() in main.js
@@ -2820,7 +3324,12 @@ function csStatus(msg, isErr) {
 function setupConstantScreen() {
   // Button on the Setup screen opens the CS screen.
   const openBtn = document.getElementById("openConstBtn");
-  if (openBtn) openBtn.onclick = () => { showScreen("conststim"); csPopulateForm(); };
+  // Normalisation always uses BOTH lists (66 words). A Training/Start run may
+  // have left only List 1 or 2 in memory, so load both explicitly first.
+  if (openBtn) openBtn.onclick = () => {
+    showScreen("conststim");
+    loadList("both").then(() => csPopulateForm());
+  };
 
   const screen = document.getElementById("conststim");
   if (!screen) return; // screen not present in DOM
@@ -3042,7 +3551,7 @@ function csPlayLpf(item, level, calibrated, routing, offset, revealOptions) {
   );
   const extraGainDb = calibrated
     ? Calibration.gainDbForLevel(lpfLevel, routing)
-    : Math.min(0, lpfLevel);   // dB FS attenuation, never boost
+    : lpfLevel;   // dB re full scale; clipping is warned (engine), not floored
 
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
     cutoffHz: level,
@@ -3061,7 +3570,7 @@ function csPlaySnr(item, snrDb, calibrated, routing, offset, revealOptions) {
   );
   const noiseGainDb = calibrated
     ? Calibration.gainDbForLevel(noiseLevelSetting, routing)
-    : Math.min(0, noiseLevelSetting);
+    : noiseLevelSetting;
   const noiseUrl = (config && config.snrNoiseFile)
     ? `sounds/${config.snrNoiseFile}` : "sounds/noise.mp3";
 
@@ -3227,6 +3736,7 @@ function csSaveResults(note) {
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
     lines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
   }
+  if (typeof Headphones !== "undefined") lines.push(`# Headphones\t${Headphones.header()}`);
   if (note) lines.push(`# Note\t${note}`);
 
   const header = ["Word", ...levels].join("\t");
@@ -3826,6 +4336,7 @@ function saveResults(optionalNote = "") {
 
   const jsonData = {
     participant,
+    list: listId || null,
     startedAt: testStartedAt?.toISOString() || null,
     timestamp: now.toISOString(),
     data: responseLog.slice(),
@@ -3867,6 +4378,7 @@ function saveResults(optionalNote = "") {
   // --- Build .txt output
   const txtLines = [
     `# Participant\t${participant}`,
+    `# List\t${listId ? "List " + listId : "n/a"}`,
     `# test started at ${startTimeFormatted}`
   ];
 
@@ -3902,6 +4414,7 @@ function saveResults(optionalNote = "") {
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
     txtLines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
   }
+  if (typeof Headphones !== "undefined") txtLines.push(`# Headphones\t${Headphones.header()}`);
 
   txtLines.push("");
   if (isAdaptive) {
@@ -4125,7 +4638,14 @@ window.onload = async () => {
       setArrowList(Array.isArray(config.arrowList) ? config.arrowList : []);
     }
   }
-  await loadList();
+  await loadList("both");
+
+  // Restore the last word list chosen on the start screen (defaults to List 1).
+  try {
+    const saved = localStorage.getItem("uc4afc_list");
+    const sel = document.getElementById("listSelect");
+    if (sel && (saved === "1" || saved === "2")) sel.value = saved;
+  } catch (_) {}
 
   // Load the optional pre-measured stimulus LUFS table. If present, filtering
   // restores each word to its pre-measured original loudness (no live measure);
@@ -4211,6 +4731,15 @@ if (abortBtn) {
     abortBtn.addEventListener("touchend", cancelHold);
     abortBtn.addEventListener("touchcancel", cancelHold);
   }
+  // iOS Safari: preventDefault on pointerdown does NOT stop its long-press text
+  // selection / callout, and when that kicks in it fires pointercancel, which
+  // cancelled the hold. A non-passive touchstart that preventDefault()s is what
+  // suppresses it. The hold itself is still driven by the pointer events above.
+  const block = (e) => { e.preventDefault(); };
+  abortBtn.addEventListener("touchstart", block, { passive: false });
+  abortBtn.addEventListener("contextmenu", block);
+  abortBtn.addEventListener("selectstart", block);
+
   // A plain click never aborts (guards against assistive double-activations).
   abortBtn.addEventListener("click", (e) => e.preventDefault());
 }
@@ -4494,6 +5023,39 @@ function setupCalibrationScreen() {
   let playing = false;
   let testOn = false;
 
+  // Headphone/soundcard preset: each has its own calibration slot and (optional)
+  // frequency-response curve for LPF loudness matching. Activate the saved one
+  // before restoring calibration, so the restore reads that preset's slot.
+  const hpSel = document.getElementById("calHeadphoneSelect");
+  const hpHint = () => {
+    const el = document.getElementById("calHeadphoneHint");
+    if (!el || typeof Headphones === "undefined") return;
+    const p = Headphones.preset();
+    const dm = document.getElementById("calDeemph");
+    if (dm) { dm.disabled = !p.curve; dm.checked = !!p.curve && Headphones.deemphOn(); }
+    el.textContent = (p.curve
+      ? (Headphones.deemphOn()
+          ? "Equalised: stimuli are filtered by the inverse headphone response, so they reach the ear with a flat response. Calibrate as usual — the calibration noise always plays un-equalised, and the level is kept."
+          : "Frequency-response curve loaded: low-pass words are loudness-matched as heard through these headphones.")
+      : "No frequency-response curve: low-pass words are loudness-matched digitally (flat); equalisation unavailable.") +
+      " Calibration is stored separately for each preset.";
+  };
+  if (typeof Headphones !== "undefined") {
+    if (hpSel) {
+      hpSel.innerHTML = "";
+      for (const [id, p] of Object.entries(Headphones.PRESETS)) {
+        const o = document.createElement("option");
+        o.value = id; o.textContent = p.label;
+        hpSel.appendChild(o);
+      }
+      hpSel.value = Headphones.currentId();
+    }
+    Headphones.activate(Headphones.currentId());
+    hpHint();
+    const dm = document.getElementById("calDeemph");
+    if (dm) dm.onchange = () => { Headphones.setDeemph(dm.checked); hpHint(); };
+  }
+
   // Offer any stored calibration on load, and initialise the slider.
   if (typeof Calibration !== "undefined") {
     const restored = Calibration.loadStored();
@@ -4516,6 +5078,27 @@ function setupCalibrationScreen() {
   }
   setupCalibrationSlider();
   renderCalMethodUI();
+
+  // Preset change: stop any signal, switch to that preset's calibration slot
+  // (or its built-in value) and curve, and refresh the screen.
+  if (hpSel && typeof Headphones !== "undefined") hpSel.onchange = () => {
+    if (playing) { AudioEngine.stopCalibrationTone(); playing = false; }
+    toggleBtn.classList.remove("active");
+    const act = Headphones.activate(hpSel.value);
+    if (methodSel && Calibration.calMethod) methodSel.value = Calibration.calMethod();
+    setupCalibrationSlider();
+    renderCalMethodUI();
+    hpHint();
+    const el = document.getElementById("calStatus");
+    if (el) {
+      if (Calibration.isCalibrated()) {
+        el.textContent = `Calibrated: ${Calibration.calibrationHeader()}. Device volume must be at maximum.` +
+          (act.fromPreset ? " (Built-in preset value — replace it by measuring and entering a level.)" : "");
+      } else {
+        el.textContent = "Not calibrated for this preset yet: play the calibration noise, measure the dB(A), and enter it.";
+      }
+    }
+  };
 
   // Method change: re-render the method-dependent UI and reset the signal.
   if (methodSel) methodSel.onchange = () => {
@@ -4722,20 +5305,18 @@ function applyModeLabels(mode) {
   if (sc) {
     if (isSnr) { sc.min = -20; sc.max = 10; sc.step = 1; }
     else if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
-    else { sc.min = 80; sc.max = 6000; sc.step = 10; }
+    else { sc.min = 75; sc.max = 6000; sc.step = 10; }
   }
-  // Presentation-level fields: set bounds/step for the calibration state, but
-  // NEVER rewrite the user's entered value here (that caused the field to reset
-  // itself, e.g. -20 -> 0). Value defaulting/clamping lives in fillFormFromCfg.
+  // Presentation-level fields: no min/max (nothing is clamped; genuine output
+  // clipping is warned per presentation in the console). NEVER rewrite the
+  // user's entered value here (that caused -20 -> 0). Defaults: fillFormFromCfg.
   const nl = document.getElementById("setSnrNoiseLevel");
   if (nl) {
-    if (cal) { nl.min = 40; nl.max = 90; nl.step = 1; }
-    else     { nl.min = -60; nl.max = 0; nl.step = 1; }
+    nl.removeAttribute("min"); nl.removeAttribute("max"); nl.step = 1;
   }
   const ll = document.getElementById("setLpfLevel");
   if (ll) {
-    if (cal) { ll.min = 40; ll.max = 90; ll.step = 1; }
-    else     { ll.min = -60; ll.max = 0; ll.step = 1; }
+    ll.removeAttribute("min"); ll.removeAttribute("max"); ll.step = 1;
   }
   // Step inputs: fine in SNR (small dB), medium in quiet, very fine in LPF.
   ["setWorkDown","setWorkUp","setInitDown","setInitUp"].forEach(id => {
@@ -4763,10 +5344,11 @@ function fillFormFromCfg(cfg) {
   // clamp a value carried from the other calibration state into range.
   const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
   const levelDefault = cal ? 65 : 0;
+  // Default only when nothing is saved; an existing value is shown as-is
+  // (no range clamping — genuine clipping is warned per presentation instead).
   const clampLevel = (v) => {
-    let n = Number(v);
-    if (!isFinite(n)) n = levelDefault;
-    return cal ? Math.max(40, Math.min(90, n)) : Math.max(-60, Math.min(0, n));
+    const n = Number(v);
+    return isFinite(n) ? n : levelDefault;
   };
   set("setSnrNoiseLevel", clampLevel(cfg.snrNoiseLevel ?? levelDefault));
   set("setLpfLevel", clampLevel(cfg.lpfLevel ?? levelDefault));
@@ -4846,7 +5428,7 @@ function readSetupForm() {
     startValue: startVal,
     startCutoffHz: isLinear ? undefined : startVal,  // LPF alias only
     nTrials: Math.max(1, Math.min(66, Math.round(num("setNTrials", 33)))),
-    xlo: isSnr ? -20 : isQuiet ? 20 : Math.log10(80),
+    xlo: isSnr ? -20 : isQuiet ? 20 : Math.log10(75),
     xhi: isSnr ? 10 : isQuiet ? 85 : Math.log10(6000),
     workDown: snrSteps ? snrSteps.workDown : num("setWorkDown", isQuiet ? 0.6 : 0.0212),
     workUp:   snrSteps ? snrSteps.workUp   : num("setWorkUp",   isQuiet ? 1.0 : 0.0348),

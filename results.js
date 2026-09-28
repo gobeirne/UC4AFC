@@ -1,5 +1,5 @@
 // File: results.js
-import { responseLog, participant, config, testStartedAt } from "./global.js";
+import { responseLog, participant, config, testStartedAt, listId } from "./global.js";
 import { showScreen } from "./ui.js";
 
 export function saveResults(optionalNote = "") {
@@ -23,6 +23,7 @@ export function saveResults(optionalNote = "") {
 
   const jsonData = {
     participant,
+    list: listId || null,
     startedAt: testStartedAt?.toISOString() || null,
     timestamp: now.toISOString(),
     data: responseLog.slice(),
@@ -64,6 +65,7 @@ export function saveResults(optionalNote = "") {
   // --- Build .txt output
   const txtLines = [
     `# Participant\t${participant}`,
+    `# List\t${listId ? "List " + listId : "n/a"}`,
     `# test started at ${startTimeFormatted}`
   ];
 
@@ -99,6 +101,7 @@ export function saveResults(optionalNote = "") {
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
     txtLines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
   }
+  if (typeof Headphones !== "undefined") txtLines.push(`# Headphones\t${Headphones.header()}`);
 
   txtLines.push("");
   if (isAdaptive) {

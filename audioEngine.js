@@ -121,6 +121,158 @@ function estimateTruePeakDB(audioBuffer) {
   return 20 * Math.log10(Math.max(peak, 1e-20));
 }
 
+// ---- Headphone-curve shaping for loudness MEASUREMENT (not playback) --------
+// In-place iterative radix-2 complex FFT (n = power of two). inverse => scaled.
+function fftInPlace(re, im, inverse = false) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = (inverse ? 2 : -2) * Math.PI / len;
+    const wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = a + len / 2;
+        const tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti;
+        re[a] += tr; im[a] += ti;
+        const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+      }
+    }
+  }
+  if (inverse) for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
+}
+
+// Curve [[Hz, dB], ...] -> dB at f: linear interpolation between points, held
+// flat beyond the first/last point.
+function curveDbAt(curve, f) {
+  if (f <= curve[0][0]) return curve[0][1];
+  const last = curve[curve.length - 1];
+  if (f >= last[0]) return last[1];
+  let lo = 0, hi = curve.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (curve[m][0] <= f) lo = m; else hi = m; }
+  const [f0, d0] = curve[lo], [f1, d1] = curve[hi];
+  return d0 + (d1 - d0) * (f - f0) / (f1 - f0);
+}
+
+// Mono (channel-averaged, as the K-weighting stage does) copy of a buffer with
+// its magnitude spectrum multiplied by the curve — zero-phase, via one FFT of
+// the whole signal zero-padded by >=100 ms. Returns an AudioBuffer-like object
+// accepted by kWeightSignal.
+function shapeByCurve(buffer, curve) {
+  const sr = buffer.sampleRate, len = buffer.length, nCh = buffer.numberOfChannels;
+  let n = 1; while (n < len + Math.round(0.1 * sr)) n <<= 1;
+  const re = new Float64Array(n), im = new Float64Array(n);
+  for (let ch = 0; ch < nCh; ch++) {
+    const d = buffer.getChannelData(ch);
+    for (let i = 0; i < len; i++) re[i] += d[i] / nCh;
+  }
+  fftInPlace(re, im);
+  for (let k = 0; k <= n / 2; k++) {
+    const g = Math.pow(10, curveDbAt(curve, k * sr / n) / 20);
+    re[k] *= g; im[k] *= g;
+    if (k > 0 && k < n / 2) { re[n - k] *= g; im[n - k] *= g; }
+  }
+  fftInPlace(re, im, true);
+  const y = re.subarray(0, len);
+  return { sampleRate: sr, numberOfChannels: 1, length: len, getChannelData: () => y };
+}
+
+// Momentary (max 400 ms, 25 ms hop) LUFS only — same definition measureLUFS uses.
+function momentaryLUFSOf(bufferLike) {
+  const kw = kWeightSignal(bufferLike);
+  return Math.max(...blockPowersFromSignal(kw, bufferLike.sampleRate, 0.4, 0.025).map(powerToLUFS));
+}
+
+// ---- Headphone de-emphasis (equalise to a flat response at the ear) ---------
+// A linear-phase FIR whose magnitude is 1/curve (the inverse of the headphone
+// response), designed by frequency sampling on a dense grid (nfft), then
+// windowed (Hann) to `taps`. Applied by LINEAR convolution with the centre tap
+// aligned to t=0 (zero phase, no delay), so there is no wrap-around of filter
+// tails — the problem whole-file FFT filtering has at the file edges.
+// 8193 taps (171 ms @ 48 kHz): HD280 curve × this filter is flat within
+// ±0.24 dB from 30 Hz to 22 kHz; energy beyond ±5 ms of centre is −50 dB.
+const EQ_TAPS = 8193, EQ_NFFT = 65536;
+
+function designEqFir(curve, sr, { taps = EQ_TAPS, nfft = EQ_NFFT, maxBoostDb = null } = {}) {
+  const re = new Float64Array(nfft), im = new Float64Array(nfft);
+  const cap = (maxBoostDb == null) ? Infinity : Math.pow(10, maxBoostDb / 20);
+  for (let k = 0; k <= nfft / 2; k++) {
+    const g = Math.min(cap, Math.pow(10, -curveDbAt(curve, k * sr / nfft) / 20));
+    re[k] = g;
+    if (k > 0 && k < nfft / 2) re[nfft - k] = g;
+  }
+  fftInPlace(re, im, true);                        // real, even impulse response
+  const c = (taps - 1) / 2, h = new Float64Array(taps);
+  for (let m = 0; m < taps; m++) {
+    const n = ((m - c) % nfft + nfft) % nfft;
+    h[m] = re[n] * (0.5 - 0.5 * Math.cos(2 * Math.PI * m / (taps - 1)));   // Hann
+  }
+  return h;
+}
+
+// Linear convolution via FFT, output aligned to the centre tap (zero phase) and
+// the same length as the input.
+function firConvolve(x, h) {
+  const len = x.length, taps = h.length, c = (taps - 1) >> 1;
+  let n = 1; while (n < len + taps - 1) n <<= 1;
+  const xr = new Float64Array(n), xi = new Float64Array(n);
+  const hr = new Float64Array(n), hi = new Float64Array(n);
+  for (let i = 0; i < len; i++) xr[i] = x[i];
+  hr.set(h);
+  fftInPlace(xr, xi); fftInPlace(hr, hi);
+  for (let k = 0; k < n; k++) {
+    const r = xr[k] * hr[k] - xi[k] * hi[k];
+    xi[k] = xr[k] * hi[k] + xi[k] * hr[k];
+    xr[k] = r;
+  }
+  fftInPlace(xr, xi, true);
+  const y = new Float32Array(len);
+  for (let i = 0; i < len; i++) y[i] = xr[i + c];
+  return y;
+}
+
+// A-weighting power (IEC 61672), unnormalised — only ratios are used.
+function aWeightPow(f) {
+  const f2 = f * f;
+  const ra = (148693636 * f2 * f2) /
+    ((f2 + 424.36) * Math.sqrt((f2 + 11599.29) * (f2 + 544496.41)) * (f2 + 148693636));
+  return ra * ra;
+}
+
+// Level scale for the de-emphasis filter h so the calibration noise keeps the
+// SAME A-weighted level at the ear: raw path = curve·noise (what was measured);
+// equalised path = curve·h·noise. Welch power spectrum of the noise (16384-pt
+// Hann, 50% overlap). Returns the linear gain to multiply h by.
+function eqLevelScale(noiseBuf, curve, h) {
+  const sr = noiseBuf.sampleRate, N = 16384, hop = N / 2;
+  const x = noiseBuf.getChannelData(0), S = new Float64Array(N / 2 + 1);
+  const w = new Float64Array(N);
+  for (let i = 0; i < N; i++) w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+  for (let start = 0; start + N <= x.length; start += hop) {
+    const re = new Float64Array(N), im = new Float64Array(N);
+    for (let i = 0; i < N; i++) re[i] = x[start + i] * w[i];
+    fftInPlace(re, im);
+    for (let k = 0; k <= N / 2; k++) S[k] += re[k] * re[k] + im[k] * im[k];
+  }
+  // |H(f)|^2 of the designed filter on the same grid (h is shorter than N).
+  const hr = new Float64Array(N), hi = new Float64Array(N);
+  hr.set(h); fftInPlace(hr, hi);
+  let pRaw = 0, pEq = 0;
+  for (let k = 1; k <= N / 2; k++) {
+    const f = k * sr / N;
+    const cw = Math.pow(10, curveDbAt(curve, f) / 10) * aWeightPow(f) * S[k];
+    pRaw += cw;
+    pEq += cw * (hr[k] * hr[k] + hi[k] * hi[k]);
+  }
+  return Math.sqrt(pRaw / pEq);
+}
+
 function measureLUFS(audioBuffer, padSilence = false) {
   const sr = audioBuffer.sampleRate;
   const kw = kWeightSignal(audioBuffer, padSilence);
@@ -227,6 +379,66 @@ const AudioEngine = (() => {
   // per-(name|cutoff) filtered+matched buffers, so repeated presentations at
   // the same cutoff are free. Keyed as `${name}@${cutoffHz}`.
   const filteredCache = new Map();
+  // Active headphone preset (headphones.js). When it has a curve, the LPF
+  // loudness match is computed on curve-shaped measurement copies.
+  let hpId = "flat", hpCurve = null;
+  const shapedRawLUFS = new Map();   // `${name}|${hpId}|${eq}` -> momentary LUFS of shaped raw word
+  // De-emphasis (equalise the headphones to a flat response at the ear).
+  let deemphOn = false, eqNoiseUrl = "sounds/noise.mp3", eqMaxBoostDb = null;
+  let eq = null;                      // { key, h (level-scaled), scaleDb }
+  let eqPending = null;
+  const eqWordCache = new Map();      // `${name}|${eqKey}` -> equalised unfiltered result
+  const eqNoiseCache = new Map();     // `${url}|${eqKey}` -> equalised noise AudioBuffer
+  function eqActive() { return deemphOn && !!hpCurve; }
+  function eqTag() { return eqActive() ? `eq:${hpId}` : "raw"; }
+  function setHeadphoneCurve(id, curve, { deemph = false, noiseUrl, maxBoostDb = null } = {}) {
+    hpId = id || "flat";
+    hpCurve = (Array.isArray(curve) && curve.length > 1) ? curve : null;
+    deemphOn = !!deemph;
+    if (noiseUrl) eqNoiseUrl = noiseUrl;
+    eqMaxBoostDb = (maxBoostDb == null) ? null : Number(maxBoostDb);
+    eq = null; eqPending = null;
+    if (eqActive()) ensureEq().catch(err => console.warn("[eq] design failed:", err));  // warm up
+  }
+  // Design (once per preset + sample rate) and level-scale the de-emphasis FIR.
+  async function ensureEq() {
+    if (!eqActive()) return null;
+    const sr = context().sampleRate, key = `${hpId}@${sr}`;
+    if (eq && eq.key === key) return eq;
+    if (eqPending && eqPending.key === key) return eqPending.p;
+    const p = (async () => {
+      const h = designEqFir(hpCurve, sr, { maxBoostDb: eqMaxBoostDb });
+      const noise = await ensureCalibNoise(eqNoiseUrl);
+      const g = eqLevelScale(noise.raw, hpCurve, h);
+      for (let i = 0; i < h.length; i++) h[i] *= g;
+      eq = { key, h, scaleDb: DB(g) };
+      console.log(`[eq] ${hpId}: de-emphasis ready (${h.length} taps), level scale ${DB(g).toFixed(2)} dB`);
+      return eq;
+    })();
+    eqPending = { key, p };
+    return p;
+  }
+  function eqBuffer(buffer, h) {
+    const c = context();
+    const out = c.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
+    for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+      out.getChannelData(ch).set(firConvolve(buffer.getChannelData(ch), h));
+    }
+    return out;
+  }
+  // Noise for playback (SNR masker): equalised when de-emphasis is on.
+  async function noiseForPlayback(url) {
+    const noise = await ensureCalibNoise(url);
+    if (!eqActive()) return noise.raw;
+    const e = await ensureEq();
+    const k = `${url}|${e.key}`;
+    if (!eqNoiseCache.has(k)) eqNoiseCache.set(k, eqBuffer(noise.raw, e.h));
+    return eqNoiseCache.get(k);
+  }
+  function eqInfo() {
+    return { active: eqActive(), preset: hpId, scaleDb: eq ? eq.scaleDb : null,
+             taps: eq ? eq.h.length : null, maxBoostDb: eqMaxBoostDb };
+  }
 
   // Optional pre-measured momentary LUFS per word name, loaded from a repo file
   // (see loadLUFSTable). When present, decode() uses this instead of measuring
@@ -346,23 +558,51 @@ const AudioEngine = (() => {
     const entry = cache.get(name);
     if (!entry) throw new Error(`prepare() called before decode() for ${name}`);
 
+    // De-emphasis (if on) comes AFTER low-pass filtering and BEFORE the loudness
+    // match, so filtered words are matched on what actually reaches the ear.
+    const e = eqActive() ? await ensureEq() : null;
+
     if (cutoffHz == null) {
-      return {
-        buffer: entry.raw,
-        preLUFS: entry.momentary,
-        postLUFS: entry.momentary,
-        matchGainDb: 0,
-        truePeakDB: estimateTruePeakDB(entry.raw)
-      };
+      if (!e) {
+        return {
+          buffer: entry.raw,
+          preLUFS: entry.momentary,
+          postLUFS: entry.momentary,
+          matchGainDb: 0,
+          truePeakDB: estimateTruePeakDB(entry.raw)
+        };
+      }
+      const wk = `${name}|${e.key}`;
+      if (!eqWordCache.has(wk)) {
+        const buf = eqBuffer(entry.raw, e.h);
+        eqWordCache.set(wk, { buffer: buf, preLUFS: null, postLUFS: null,
+                              matchGainDb: 0, truePeakDB: estimateTruePeakDB(buf) });
+      }
+      return eqWordCache.get(wk);
     }
 
-    const key = `${name}@${Math.round(cutoffHz)}`;
+    const key = `${name}@${Math.round(cutoffHz)}@${hpId}@${eqTag()}`;
     if (filteredCache.has(key)) return filteredCache.get(key);
 
     const c = context();
-    const filtered = await renderButterworthLowpass(c, entry.raw, cutoffHz);
-    const postLUFS = measureLUFS(filtered).momentary;
-    const preLUFS = entry.momentary;
+    let filtered = await renderButterworthLowpass(c, entry.raw, cutoffHz);
+    if (e) filtered = eqBuffer(filtered, e.h);
+    // Loudness match: bring the filtered word back to the unfiltered word's
+    // momentary LUFS. With a headphone curve, both are measured on copies shaped
+    // by the curve, i.e. as they arrive at the ear through those headphones.
+    let preLUFS, postLUFS;
+    if (hpCurve) {
+      const rk = `${name}|${hpId}|${eqTag()}`;
+      if (!shapedRawLUFS.has(rk)) {
+        const ref = e ? (await prepare(name, null)).buffer : entry.raw;   // equalised if on
+        shapedRawLUFS.set(rk, momentaryLUFSOf(shapeByCurve(ref, hpCurve)));
+      }
+      preLUFS = shapedRawLUFS.get(rk);
+      postLUFS = momentaryLUFSOf(shapeByCurve(filtered, hpCurve));
+    } else {
+      preLUFS = entry.momentary;
+      postLUFS = measureLUFS(filtered).momentary;
+    }
     const matchGainDb = preLUFS - postLUFS;           // >0: LPF lost energy
     const matchLin = LIN(matchGainDb);
 
@@ -470,9 +710,26 @@ const AudioEngine = (() => {
 
   // Convenience: decode-if-needed, prepare at cutoff, play. Mirrors what
   // flow.js needs per trial.
+  // Output gain (calibration slider) in dB, applied after every stimulus.
+  function masterDb() {
+    return masterGain ? DB(masterGain.gain.value) : 0;
+  }
+
   async function playStimulus(name, url, { cutoffHz = null, extraGainDb = 0, onStarted = null, routing = "binaural" } = {}) {
     if (!cache.has(name)) await decode(name, url);
     const prepared = await prepare(name, cutoffHz);
+
+    // Per-presentation level diagnostic. The peak that reaches the output is
+    // the played buffer's true peak (already post-filter and post loudness
+    // make-up) plus the presentation gain and the master gain. Clipping is
+    // only when THAT exceeds 0 dB FS — a positive gain on a quiet file is fine.
+    const peakOut = prepared.truePeakDB + extraGainDb + masterDb();
+    const tag = `[stim] ${name} · cutoff ${cutoffHz == null ? "none" : Math.round(cutoffHz) + " Hz"}` +
+      ` · make-up ${prepared.matchGainDb.toFixed(1)} dB · gain ${extraGainDb.toFixed(1)} dB` +
+      ` · output peak ${peakOut.toFixed(1)} dBFS`;
+    if (peakOut > 0) console.warn(`${tag}  <-- CLIPS by ${peakOut.toFixed(1)} dB`);
+    else console.log(tag);
+
     await playBuffer(prepared.buffer, { extraGainDb, onStarted, routing });
     return prepared;
   }
@@ -521,8 +778,7 @@ const AudioEngine = (() => {
     if (!cache.has(name)) await decode(name, url);
     const prepared = await prepare(name, null);      // SNR mode never filters
     const wordBuf = prepared.buffer;
-    const noise = await ensureCalibNoise(noiseUrl);
-    const noiseBuf = noise.raw;
+    const noiseBuf = await noiseForPlayback(noiseUrl);   // equalised if de-emphasis is on
 
     // --- Levels: NO measurement, NO per-file re-matching. --------------------
     // The files are already pinned at source: every word is -22.5 LUFS and the
@@ -538,6 +794,19 @@ const AudioEngine = (() => {
     // coherent sum below full scale. Overridable via config.snrHeadroomDb.
     const noiLin = LIN(noiseGainDb + headroomDb);
     const sigLin = LIN(noiseGainDb + snrDb + headroomDb);
+
+    // Per-presentation level diagnostic (conservative): worst case is the two
+    // true peaks adding coherently. Warn only; the sound plays unchanged.
+    {
+      const m = LIN(masterDb());
+      const sum = (LIN(estimateTruePeakDB(wordBuf)) * sigLin +
+                   LIN(estimateTruePeakDB(noiseBuf)) * noiLin) * m;
+      const sumDb = DB(sum);
+      const tag = `[snr] ${name} · SNR ${snrDb.toFixed(1)} dB · noise gain ${noiseGainDb.toFixed(1)} dB` +
+        ` · worst-case output peak ${sumDb.toFixed(1)} dBFS`;
+      if (sum > 1) console.warn(`${tag}  <-- may CLIP by up to ${sumDb.toFixed(1)} dB`);
+      else console.log(tag);
+    }
 
     // --- Timing: place the word, then wrap the noise segment around it --------
     const now = c.currentTime;
@@ -756,6 +1025,8 @@ const AudioEngine = (() => {
     startCalibrationTone, stopCalibrationTone, setCalibrationEar, setCalibrationGainDb, isCalibrationTonePlaying, ensureCalibNoise,
     // audio-graph diagnostics
     rateMismatch,
+    // headphone preset (LPF loudness match on curve-shaped copies)
+    setHeadphoneCurve, eqInfo,
     // caches (exposed for diagnostics / teardown)
     _cache: cache, _filteredCache: filteredCache,
     // utils

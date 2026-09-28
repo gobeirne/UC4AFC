@@ -21,16 +21,17 @@
 // calibration independent of the presentation-level gain above.
 // -----------------------------------------------------------------------------
 
-const CAL_KEY = "uc4afc_calibration";
+// Storage is per headphone/soundcard preset (headphones.js): key
+// "uc4afc_calibration:<presetId>". setProfile() switches the slot.
+const CAL_KEY_BASE = "uc4afc_calibration";
+let CAL_KEY = CAL_KEY_BASE;
 
-// The recordings carry ~96 dB of dynamic range (16-bit). Attenuating past this
-// only digs into quantisation noise, so 96 dB is where the useful range ends.
-// This is a property of the recordings, not a clinical limit; adjust if the
-// source bit depth changes. (Ported from UC_CVCV.)
-const MAX_ATTENUATION_DB = 96;
-// dB(A) below this aren't sound pressure levels — a physical sanity floor that
-// stops the range going negative when the reference is under 96 dB(A).
-const ABSOLUTE_FLOOR_DBA = 0;
+// (A former 96 dB maximum-attenuation bound on the test slider was removed:
+// playback is floating point, so attenuating a recording scales its own noise
+// floor with it. At extreme attenuation only the output DAC's bit depth matters.)
+// Lowest level offered on the calibration screen's test slider. Levels below
+// 0 dB(A) are legitimate (below 20 µPa); -10 dB(A) is a practical bottom.
+const ABSOLUTE_FLOOR_DBA = -10;
 // Consider a restored calibration stale past this many days (Finding 6).
 const CAL_STALE_DAYS = 30;
 
@@ -44,6 +45,7 @@ function snap5(v) {
 const cal = {
   method: null,          // "audiometer" | "soundfield" (see CAL_METHODS)
   measuredDbA: null,     // representative reference (max of dials) for bounds/displays
+  source: null,          // where a sound-field level came from, if not a meter (e.g. a preset)
   dial: { left: null, right: null }, // per-ear audiometer dial settings (dB(A))
   timestamp: null,
   isCalibrated: false,
@@ -143,8 +145,7 @@ function levelBounds(ear) {
   const reference = referenceDbA(ear);
   if (reference === null) return null;
   const max = Math.floor(reference / 5) * 5;
-  const attenuationFloor = reference - MAX_ATTENUATION_DB;
-  const min = Math.ceil(Math.max(ABSOLUTE_FLOOR_DBA, attenuationFloor) / 5) * 5;
+  const min = Math.ceil(ABSOLUTE_FLOOR_DBA / 5) * 5;
   return { reference, min, max, usable: min <= max, span: max - min };
 }
 
@@ -164,9 +165,10 @@ function clampLevel(value, ear) {
 // yields no usable range (below the physical floor — i.e. not a real dB(A) SPL)
 // is refused and calibration stays off, rather than handing back a slider whose
 // floor is negative.
-function applyCalibrationLevel(level, timestamp = new Date().toISOString(), method) {
+function applyCalibrationLevel(level, timestamp = new Date().toISOString(), method, source = null) {
   const reference = Number(level);
   if (!Number.isFinite(reference)) return false;
+  cal.source = source || null;
 
   cal.method = method || calMethod();
   cal.measuredDbA = reference;
@@ -205,6 +207,7 @@ function applyCalibrationDials(left, right, timestamp = new Date().toISOString()
   const representative = Math.max(...vals);
 
   cal.method = method || "audiometer";
+  cal.source = null;
   cal.dial = {
     left:  isNum(left)  ? Number(left)  : null,
     right: isNum(right) ? Number(right) : null
@@ -226,30 +229,27 @@ function applyCalibrationDials(left, right, timestamp = new Date().toISOString()
   persist();
   return true;
 }
-// level is CLAMPED to the calibrated bounds first (Finding 5) so a stray value
-// can never reach the gain maths, and the result is capped at unity — nothing
-// can play louder than the reference without clipping. A cap that fires is
-// logged, because it means a level reached here without being clamped upstream.
+// Stimulus gain for a requested level: EXACTLY  level − reference  (dB), with
+// no rounding and no clamping. (It used to snap the level to the calibration
+// slider's 5 dB grid and cap at the highest grid step below the reference, which
+// silently moved off-grid levels — 62 -> 60 — quantised calibrated quiet-mode
+// tracking to 5 dB, and made levels between the top grid step and the reference
+// unreachable.) A level above the reference means gain > 0 dB; whether that
+// actually clips depends on the stimulus peak, and the audio engine warns per
+// presentation when it does. The calibration screen's slider keeps its own
+// 5 dB grid (clampLevel / levelBounds) — that is UI only.
 function gainForLevel(levelDbA, ear) {
-  const reference = referenceDbA(ear);
-  if (cal.isCalibrated && reference !== null) {
-    const target = clampLevel(levelDbA, ear);
-    const attenuation = Number(reference) - Number(target);
-    let g = Math.pow(10, -attenuation / 20);
-    if (g > 1.0) { console.warn(`[cal] gain ${g.toFixed(3)} > 1 capped at unity`); g = 1.0; }
-    return g;
-  }
-  return 1.0; // uncalibrated: unity
+  return Math.pow(10, gainDbForLevel(levelDbA, ear) / 20);
 }
 
-// dB form of the same, convenient for the engine's extraGainDb parameter.
-// Also clamped and capped at 0 dB (unity). Optional `ear` selects the per-channel
-// dial (audiometer); omit or "binaural" for the shared/representative reference.
+// dB form, used by the engine's extraGainDb parameter. Optional `ear` selects the
+// per-channel dial (audiometer); omit or "binaural" for the shared reference.
+// Uncalibrated: 0 dB (unity).
 function gainDbForLevel(levelDbA, ear) {
   const reference = referenceDbA(ear);
-  if (cal.isCalibrated && reference !== null) {
-    const target = clampLevel(levelDbA, ear);
-    return Math.min(0, Number(target) - Number(reference));
+  const level = Number(levelDbA);
+  if (cal.isCalibrated && reference !== null && Number.isFinite(level)) {
+    return level - Number(reference);
   }
   return 0;
 }
@@ -266,6 +266,7 @@ function isCalibrated() { return cal.isCalibrated; }
 function measuredDbA() { return cal.measuredDbA; }
 
 function clearCalibration() {
+  cal.source = null;
   cal.method = null;
   cal.measuredDbA = null;
   cal.dial = { left: null, right: null };
@@ -277,6 +278,30 @@ function clearCalibration() {
   try { localStorage.removeItem(CAL_KEY); } catch (_) {}
 }
 
+// Switch to a preset's storage slot. In-memory calibration is reset (the caller
+// restores the slot with loadStored/confirmStored). A calibration saved before
+// presets existed is moved, once, into the first preset activated.
+function setProfile(id) {
+  const key = `${CAL_KEY_BASE}:${id}`;
+  try {
+    const legacy = localStorage.getItem(CAL_KEY_BASE);
+    if (legacy) {
+      if (!localStorage.getItem(key)) localStorage.setItem(key, legacy);
+      localStorage.removeItem(CAL_KEY_BASE);
+    }
+  } catch (_) {}
+  CAL_KEY = key;
+  cal.method = null;
+  cal.measuredDbA = null;
+  cal.source = null;
+  cal.dial = { left: null, right: null };
+  cal.timestamp = null;
+  cal.isCalibrated = false;
+  cal.sliderMinDb = -100;
+  cal.sliderMaxDb = 0;
+  cal.currentSliderDb = 0;
+}
+
 function persist() {
   try {
     if (cal.method === "audiometer") {
@@ -285,7 +310,8 @@ function persist() {
       }));
     } else {
       localStorage.setItem(CAL_KEY, JSON.stringify({
-        level: cal.measuredDbA, timestamp: cal.timestamp, method: cal.method
+        level: cal.measuredDbA, timestamp: cal.timestamp, method: cal.method,
+        source: cal.source || undefined
       }));
     }
   } catch (_) {}
@@ -323,7 +349,8 @@ function readStored() {
     // Sound-field single-level record: { level, method, timestamp }.
     const level = Number(data.level);
     if (data.level == null || !isFinite(level)) return null;
-    return { level, timestamp: data.timestamp || null, method: data.method || null, ageDays, stale };
+    return { level, timestamp: data.timestamp || null, method: data.method || null,
+             source: data.source || null, ageDays, stale };
   } catch (_) {
     return null;
   }
@@ -342,7 +369,8 @@ function confirmStored(rec) {
       rec.timestamp || undefined, rec.method || "audiometer");
   }
   if (!isFinite(Number(rec.level))) return false;
-  return applyCalibrationLevel(Number(rec.level), rec.timestamp || undefined, rec.method || undefined);
+  return applyCalibrationLevel(Number(rec.level), rec.timestamp || undefined, rec.method || undefined,
+    rec.source || null);
 }
 
 // Back-compat shim: some callers may still call loadStored(). It now only READS
@@ -362,7 +390,7 @@ function calibrationHeader() {
       : `L ${fmt(l)} / R ${fmt(r)} dB(A)`;
     return `${dials} — audiometer (aux input)`;
   }
-  return `${cal.measuredDbA} dB(A) — sound field (level meter)`;
+  return `${cal.measuredDbA} dB(A) — sound field (${cal.source || "level meter"})`;
 }
 
 if (typeof window !== "undefined") {
@@ -373,7 +401,7 @@ if (typeof window !== "undefined") {
     loadStored, readStored, confirmStored, calibrationHeader,
     levelBounds, clampLevel,
     calMethod, calMethodInfo, isPerChannel, setMethod,
-    moreLevelAdvice, lessLevelAdvice, CAL_METHODS
+    moreLevelAdvice, lessLevelAdvice, CAL_METHODS, setProfile
   };
 }
 

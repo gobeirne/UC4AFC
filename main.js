@@ -136,7 +136,14 @@ window.onload = async () => {
       setArrowList(Array.isArray(config.arrowList) ? config.arrowList : []);
     }
   }
-  await loadList();
+  await loadList("both");
+
+  // Restore the last word list chosen on the start screen (defaults to List 1).
+  try {
+    const saved = localStorage.getItem("uc4afc_list");
+    const sel = document.getElementById("listSelect");
+    if (sel && (saved === "1" || saved === "2")) sel.value = saved;
+  } catch (_) {}
 
   // Load the optional pre-measured stimulus LUFS table. If present, filtering
   // restores each word to its pre-measured original loudness (no live measure);
@@ -222,6 +229,15 @@ if (abortBtn) {
     abortBtn.addEventListener("touchend", cancelHold);
     abortBtn.addEventListener("touchcancel", cancelHold);
   }
+  // iOS Safari: preventDefault on pointerdown does NOT stop its long-press text
+  // selection / callout, and when that kicks in it fires pointercancel, which
+  // cancelled the hold. A non-passive touchstart that preventDefault()s is what
+  // suppresses it. The hold itself is still driven by the pointer events above.
+  const block = (e) => { e.preventDefault(); };
+  abortBtn.addEventListener("touchstart", block, { passive: false });
+  abortBtn.addEventListener("contextmenu", block);
+  abortBtn.addEventListener("selectstart", block);
+
   // A plain click never aborts (guards against assistive double-activations).
   abortBtn.addEventListener("click", (e) => e.preventDefault());
 }
@@ -505,6 +521,39 @@ function setupCalibrationScreen() {
   let playing = false;
   let testOn = false;
 
+  // Headphone/soundcard preset: each has its own calibration slot and (optional)
+  // frequency-response curve for LPF loudness matching. Activate the saved one
+  // before restoring calibration, so the restore reads that preset's slot.
+  const hpSel = document.getElementById("calHeadphoneSelect");
+  const hpHint = () => {
+    const el = document.getElementById("calHeadphoneHint");
+    if (!el || typeof Headphones === "undefined") return;
+    const p = Headphones.preset();
+    const dm = document.getElementById("calDeemph");
+    if (dm) { dm.disabled = !p.curve; dm.checked = !!p.curve && Headphones.deemphOn(); }
+    el.textContent = (p.curve
+      ? (Headphones.deemphOn()
+          ? "Equalised: stimuli are filtered by the inverse headphone response, so they reach the ear with a flat response. Calibrate as usual — the calibration noise always plays un-equalised, and the level is kept."
+          : "Frequency-response curve loaded: low-pass words are loudness-matched as heard through these headphones.")
+      : "No frequency-response curve: low-pass words are loudness-matched digitally (flat); equalisation unavailable.") +
+      " Calibration is stored separately for each preset.";
+  };
+  if (typeof Headphones !== "undefined") {
+    if (hpSel) {
+      hpSel.innerHTML = "";
+      for (const [id, p] of Object.entries(Headphones.PRESETS)) {
+        const o = document.createElement("option");
+        o.value = id; o.textContent = p.label;
+        hpSel.appendChild(o);
+      }
+      hpSel.value = Headphones.currentId();
+    }
+    Headphones.activate(Headphones.currentId());
+    hpHint();
+    const dm = document.getElementById("calDeemph");
+    if (dm) dm.onchange = () => { Headphones.setDeemph(dm.checked); hpHint(); };
+  }
+
   // Offer any stored calibration on load, and initialise the slider.
   if (typeof Calibration !== "undefined") {
     const restored = Calibration.loadStored();
@@ -527,6 +576,27 @@ function setupCalibrationScreen() {
   }
   setupCalibrationSlider();
   renderCalMethodUI();
+
+  // Preset change: stop any signal, switch to that preset's calibration slot
+  // (or its built-in value) and curve, and refresh the screen.
+  if (hpSel && typeof Headphones !== "undefined") hpSel.onchange = () => {
+    if (playing) { AudioEngine.stopCalibrationTone(); playing = false; }
+    toggleBtn.classList.remove("active");
+    const act = Headphones.activate(hpSel.value);
+    if (methodSel && Calibration.calMethod) methodSel.value = Calibration.calMethod();
+    setupCalibrationSlider();
+    renderCalMethodUI();
+    hpHint();
+    const el = document.getElementById("calStatus");
+    if (el) {
+      if (Calibration.isCalibrated()) {
+        el.textContent = `Calibrated: ${Calibration.calibrationHeader()}. Device volume must be at maximum.` +
+          (act.fromPreset ? " (Built-in preset value — replace it by measuring and entering a level.)" : "");
+      } else {
+        el.textContent = "Not calibrated for this preset yet: play the calibration noise, measure the dB(A), and enter it.";
+      }
+    }
+  };
 
   // Method change: re-render the method-dependent UI and reset the signal.
   if (methodSel) methodSel.onchange = () => {
@@ -733,20 +803,18 @@ function applyModeLabels(mode) {
   if (sc) {
     if (isSnr) { sc.min = -20; sc.max = 10; sc.step = 1; }
     else if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
-    else { sc.min = 80; sc.max = 6000; sc.step = 10; }
+    else { sc.min = 75; sc.max = 6000; sc.step = 10; }
   }
-  // Presentation-level fields: set bounds/step for the calibration state, but
-  // NEVER rewrite the user's entered value here (that caused the field to reset
-  // itself, e.g. -20 -> 0). Value defaulting/clamping lives in fillFormFromCfg.
+  // Presentation-level fields: no min/max (nothing is clamped; genuine output
+  // clipping is warned per presentation in the console). NEVER rewrite the
+  // user's entered value here (that caused -20 -> 0). Defaults: fillFormFromCfg.
   const nl = document.getElementById("setSnrNoiseLevel");
   if (nl) {
-    if (cal) { nl.min = 40; nl.max = 90; nl.step = 1; }
-    else     { nl.min = -60; nl.max = 0; nl.step = 1; }
+    nl.removeAttribute("min"); nl.removeAttribute("max"); nl.step = 1;
   }
   const ll = document.getElementById("setLpfLevel");
   if (ll) {
-    if (cal) { ll.min = 40; ll.max = 90; ll.step = 1; }
-    else     { ll.min = -60; ll.max = 0; ll.step = 1; }
+    ll.removeAttribute("min"); ll.removeAttribute("max"); ll.step = 1;
   }
   // Step inputs: fine in SNR (small dB), medium in quiet, very fine in LPF.
   ["setWorkDown","setWorkUp","setInitDown","setInitUp"].forEach(id => {
@@ -774,10 +842,11 @@ function fillFormFromCfg(cfg) {
   // clamp a value carried from the other calibration state into range.
   const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
   const levelDefault = cal ? 65 : 0;
+  // Default only when nothing is saved; an existing value is shown as-is
+  // (no range clamping — genuine clipping is warned per presentation instead).
   const clampLevel = (v) => {
-    let n = Number(v);
-    if (!isFinite(n)) n = levelDefault;
-    return cal ? Math.max(40, Math.min(90, n)) : Math.max(-60, Math.min(0, n));
+    const n = Number(v);
+    return isFinite(n) ? n : levelDefault;
   };
   set("setSnrNoiseLevel", clampLevel(cfg.snrNoiseLevel ?? levelDefault));
   set("setLpfLevel", clampLevel(cfg.lpfLevel ?? levelDefault));
@@ -857,7 +926,7 @@ function readSetupForm() {
     startValue: startVal,
     startCutoffHz: isLinear ? undefined : startVal,  // LPF alias only
     nTrials: Math.max(1, Math.min(66, Math.round(num("setNTrials", 33)))),
-    xlo: isSnr ? -20 : isQuiet ? 20 : Math.log10(80),
+    xlo: isSnr ? -20 : isQuiet ? 20 : Math.log10(75),
     xhi: isSnr ? 10 : isQuiet ? 85 : Math.log10(6000),
     workDown: snrSteps ? snrSteps.workDown : num("setWorkDown", isQuiet ? 0.6 : 0.0212),
     workUp:   snrSteps ? snrSteps.workUp   : num("setWorkUp",   isQuiet ? 1.0 : 0.0348),
