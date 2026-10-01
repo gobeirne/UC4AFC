@@ -145,16 +145,6 @@ window.onload = async () => {
     if (sel && (saved === "1" || saved === "2")) sel.value = saved;
   } catch (_) {}
 
-  // Load the optional pre-measured stimulus LUFS table. If present, filtering
-  // restores each word to its pre-measured original loudness (no live measure);
-  // if absent, decode() measures live. Non-fatal either way.
-  if (typeof AudioEngine !== "undefined" && AudioEngine.loadLUFSTable) {
-    const file = (config && config.lufsTable) ? config.lufsTable : "stimulus_lufs.txt";
-    AudioEngine.loadLUFSTable(file).then(n => {
-      if (n > 0) console.log(`Loaded ${n} pre-measured LUFS values from ${file}.`);
-    });
-  }
-
   showScreen("intro");
   adjustImageSize();
   window.addEventListener("resize", adjustImageSize);
@@ -801,9 +791,8 @@ function applyModeLabels(mode) {
   // Start input bounds/step per mode.
   const sc = document.getElementById("setStartCutoff");
   if (sc) {
-    if (isSnr) { sc.min = -20; sc.max = 10; sc.step = 1; }
-    else if (isQuiet) { sc.min = 20; sc.max = 85; sc.step = 1; }
-    else { sc.min = 75; sc.max = 6000; sc.step = 10; }
+    if (isSnr || isQuiet) { sc.removeAttribute("min"); sc.removeAttribute("max"); sc.step = 1; }
+    else { sc.min = 75; sc.max = 20000; sc.step = 10; }
   }
   // Presentation-level fields: no min/max (nothing is clamped; genuine output
   // clipping is warned per presentation in the console). NEVER rewrite the
@@ -926,8 +915,8 @@ function readSetupForm() {
     startValue: startVal,
     startCutoffHz: isLinear ? undefined : startVal,  // LPF alias only
     nTrials: Math.max(1, Math.min(66, Math.round(num("setNTrials", 33)))),
-    xlo: isSnr ? -20 : isQuiet ? 20 : Math.log10(75),
-    xhi: isSnr ? 10 : isQuiet ? 85 : Math.log10(6000),
+    xlo: (isSnr || isQuiet) ? null : Math.log10(75),     // quiet/SNR: unbounded
+    xhi: (isSnr || isQuiet) ? null : Math.log10(20000),
     workDown: snrSteps ? snrSteps.workDown : num("setWorkDown", isQuiet ? 0.6 : 0.0212),
     workUp:   snrSteps ? snrSteps.workUp   : num("setWorkUp",   isQuiet ? 1.0 : 0.0348),
     initDown: snrSteps ? snrSteps.initDown : num("setInitDown", isQuiet ? 3.0 : 0.0511),

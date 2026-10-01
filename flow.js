@@ -11,7 +11,8 @@ import {
   trainingImg,
   startTime,
   testStartedAt,
-  arrowSet
+  arrowSet,
+  listId
 } from "./global.js";
 
 import { showScreen, setImage } from "./ui.js";
@@ -48,7 +49,12 @@ export function beginPhase(p) {
   participant = document.getElementById("name").value || "anon";
   testStartedAt = new Date();
 
-  loadList().then(() => {
+  // Which word list (1 or 2) this Training/Start run uses, from the start screen.
+  const sel = document.getElementById("listSelect");
+  listId = (sel && (sel.value === "1" || sel.value === "2")) ? sel.value : "1";
+  try { localStorage.setItem("uc4afc_list", listId); } catch (_) {}
+
+  loadList(listId).then(() => {
     shuffle(list);
     trialIndex = 0;
     responseLog.length = 0;
@@ -66,17 +72,13 @@ export function beginPhase(p) {
       const isSnr = adaptive.mode === "snr";
       const isLinear = isQuiet || isSnr;   // both use a dB axis, not log(Hz)
 
-      // Start value: Hz (LPF) or dB (quiet: level / snr: SNR). Relative start
-      // shifts by octaves (LPF) or dB (linear); with no prior in-session
-      // threshold it resolves against the absolute start for now (documented).
-      let startVal = isLinear
+      // Start value in the mode's own unit: Hz (LPF), dB level (quiet), dB SNR.
+      // Exactly the Setup value — no hidden "relative" shift (that old feature
+      // has no Setup control, so a stale saved value could silently move the
+      // start, e.g. 1000 Hz -> 250 Hz while Setup still showed 1000).
+      const startVal = isLinear
         ? (adaptive.startValue ?? adaptive.start ?? (isSnr ? 2 : 65))
         : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
-      if (adaptive.startMode === "relative" && isFinite(adaptive.startRelOctaves)) {
-        startVal = isLinear
-          ? startVal + adaptive.startRelOctaves               // dB shift
-          : startVal * Math.pow(2, adaptive.startRelOctaves); // octave shift
-      }
 
       // quietStartLevel doubles as the uncalibrated relative-gain anchor for
       // BOTH linear modes (quiet's level and snr's noise level).
@@ -140,7 +142,9 @@ export function nextTrial() {
 	// Pause for a rest every N trials before starting the next one
 if (phase === "test") {
   const n = Number(config.breakEvery) || 0; // 0 = disabled
-  if (n > 0 && trialIndex > 0 && (trialIndex % n === 0) && lastBreakAt !== trialIndex) {
+  // No break once the run is complete (e.g. 33 trials with breaks every 33).
+  const finished = track ? track.done() : (trialIndex >= list.length);
+  if (n > 0 && !finished && trialIndex > 0 && (trialIndex % n === 0) && lastBreakAt !== trialIndex) {
     lastBreakAt = trialIndex;
 
     // Progress: responses recorded vs. run total. Adaptive runs total nTrials.
@@ -201,6 +205,10 @@ if (phase === "test") {
   // Refresh the pending adaptive value from the track for this trial.
   if (phase === "test" && track) {
     currentCutoffHz = track.currentValue();
+    const m = (config && config.adaptive && config.adaptive.mode) || "lpf";
+    const u = m === "snr" ? "dB SNR" : m === "quiet" ? "dB" : "Hz";
+    console.log(`[trial ${trialIndex + 1}] list ${listId} · ${m} value = ` +
+      `${u === "Hz" ? Math.round(currentCutoffHz) : currentCutoffHz.toFixed(1)} ${u}`);
   }
   const shuffled = [...item.images];
   shuffle(shuffled);
@@ -280,24 +288,45 @@ if (phase === "test") {
   // ---- SNR mode: dispatch to the mixed word+noise path and return early ----
   if (isSnr) {
     const snrDb = currentCutoffHz;   // mode-neutral value; dB SNR here
-    // Noise sits at the fixed presentation level: the calibration slider's
-    // chosen dB(A) when calibrated, unity when not (device volume sets absolute
-    // output, exactly as an uncalibrated run does elsewhere).
+    // Same presentation as normalisation (constant.js csPlaySnr): the masker is
+    // the SNR noise file (noise.mp3) at the Setup SNR noise level, and the word
+    // sits snrDb above/below it. Previously this used config.calibFile, which is
+    // the 1 kHz CALIBRATION TONE, and the calibration slider level.
+    const noiseLevelSetting = Number(
+      (config && config.adaptive && isFinite(config.adaptive.snrNoiseLevel))
+        ? config.adaptive.snrNoiseLevel
+        : (calibrated ? 65 : 0)
+    );
     const noiseGainDb = calibrated
-      ? Calibration.gainDbForLevel(Calibration.state().currentSliderDb)
-      : 0;
-    const noiseUrl = (config && config.calibFile) ? `sounds/${config.calibFile}` : "sounds/calib.mp3";
+      ? Calibration.gainDbForLevel(noiseLevelSetting, routing)
+      : noiseLevelSetting;             // dB re full scale; clipping is warned, not floored
+    const noiseUrl = (config && config.snrNoiseFile)
+      ? `sounds/${config.snrNoiseFile}` : "sounds/noise.mp3";
 
-    AudioEngine.playStimulusWithNoise(item.correct, `sounds/${item.audioFile}`, {
+    const msToSec = (v, dflt) => {
+      const n = Number(v);
+      return isFinite(n) && n >= 0 ? n / 1000 : dflt;
+    };
+    const snrOpts = {
       snrDb,
       noiseGainDb,
       noiseUrl,
       routing,
+      noiseLeadSec:  msToSec(config && config.snrNoiseLeadMs, 0.6),
+      noiseTrailSec: msToSec(config && config.snrNoiseTrailMs, 0.6),
+      rampSec:       msToSec(config && config.snrNoiseRampMs, 0.1),
+      wordLeadSec:   msToSec(config && config.snrWordLeadMs,
+                             msToSec(config && config.imageRevealOffsetMs, 0.6)),
       onStarted: () => { setTimeout(revealOptions, offset); }
-    }).catch(err => {
+    };
+    if (config && isFinite(Number(config.snrHeadroomDb))) {
+      snrOpts.headroomDb = Number(config.snrHeadroomDb);
+    }
+
+    AudioEngine.playStimulusWithNoise(item.correct, `sounds/${item.audioFile}`, snrOpts).catch(err => {
       console.error("SNR audio play failed:", err);
       if (!nextTrial._erroredOnce) {
-        alert("Audio failed to play. Check the calibration noise file (sounds/calib.mp3) and autoplay settings.");
+        alert(`Audio failed to play. Check the noise file (${noiseUrl}) and autoplay settings.`);
         nextTrial._erroredOnce = true;
       }
     });
@@ -311,7 +340,7 @@ if (phase === "test") {
     // Quiet mode: value is a dB level.
     const level = currentCutoffHz; // (mode-neutral value; dB here)
     if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(level);
+      extraGainDb = Calibration.gainDbForLevel(level, routing);
     } else {
       // Uncalibrated: play relative to the start level (start = unity).
       extraGainDb = level - (quietStartLevel ?? level);
@@ -327,9 +356,9 @@ if (phase === "test") {
         : (calibrated ? 65 : 0)
     );
     if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(lpfLevel);
+      extraGainDb = Calibration.gainDbForLevel(lpfLevel, routing);
     } else {
-      extraGainDb = Math.min(0, lpfLevel);   // dB FS attenuation, never boost
+      extraGainDb = lpfLevel;   // dB re full scale; clipping is warned (engine), not floored
     }
   }
 

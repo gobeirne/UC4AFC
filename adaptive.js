@@ -276,8 +276,11 @@ function resolveTrackConfig(adaptive, startValue) {
     procedure: adaptive.procedure || "wudr",
     A: adaptive.A || 4,
     target: adaptive.target ?? midpointTarget(adaptive.A || 4),
-    xlo: adaptive.xlo ?? (axisIsLog ? Math.log10(75) : (isSnr ? -20 : 20)),
-    xhi: adaptive.xhi ?? (axisIsLog ? Math.log10(6000) : (isSnr ? 10 : 85)),
+    // LPF keeps its 75 Hz floor and 20 kHz ceiling (the filter can't be designed
+    // at/above Nyquist). Quiet (dB level) and SNR (dB SNR) are unbounded — no
+    // floor or ceiling on the track or on the threshold estimate.
+    xlo: axisIsLog ? (adaptive.xlo ?? Math.log10(75)) : -Infinity,
+    xhi: axisIsLog ? (adaptive.xhi ?? Math.log10(20000)) : Infinity,
     axisIsLog,
     unit: adaptive.unit || (axisIsLog ? "Hz" : (isSnr ? "dB SNR" : "dB")),
     harder: -1,

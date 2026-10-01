@@ -24,7 +24,7 @@ const PRESETS = {
     axisIsLog: true,
     unit: "Hz", stepUnit: "decades", slopeUnit: "%/octave",
     start: 1000,
-    xlo: Math.log10(75), xhi: Math.log10(6000),   // hard floor 75 Hz (matches LabVIEW)
+    xlo: Math.log10(75), xhi: Math.log10(20000),  // floor 75 Hz (matches LabVIEW); ceiling 20 kHz (wide open)
     // WUDR two-phase steps (decades)
     workDown: +Math.log10(1 / 0.95238).toFixed(4),  // 0.0212  (-4.76%)
     workUp:   +Math.log10(1.08333).toFixed(4),       // 0.0348  (+8.33%)
@@ -39,7 +39,7 @@ const PRESETS = {
     axisIsLog: false,
     unit: "dB", stepUnit: "dB", slopeUnit: "%/dB",
     start: 65,
-    xlo: 20, xhi: 85,
+    xlo: null, xhi: null,   // unbounded: the track goes wherever the listener takes it
     // WUDR two-phase steps (dB): working 0.6 down / 1.0 up; initial 3 / 5
     workDown: 0.6, workUp: 1.0,
     initDown: 3.0, initUp: 5.0,
@@ -65,7 +65,7 @@ const PRESETS = {
     axisIsLog: false,
     unit: "dB SNR", stepUnit: "dB", slopeUnit: "%/dB",
     start: 2,                                         // +2 dB SNR
-    xlo: -20, xhi: 10,
+    xlo: null, xhi: null,   // unbounded
     // Base = quiet dB steps; stepMult (0.2) applied -> stored values below.
     stepMult: 0.2,
     workDown: +(0.6 * 0.2).toFixed(4),  // 0.12

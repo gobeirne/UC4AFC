@@ -358,7 +358,7 @@ function csNextTrial() {
   if (!CS.active) return;
 
   // Break handling (this mode's own count).
-  if (CS.breakEvery > 0 && CS.pos > 0 &&
+  if (CS.breakEvery > 0 && CS.pos > 0 && CS.pos < CS.queue.length &&   // no break at the very end
       (CS.pos % CS.breakEvery === 0) && CS._lastBreakAt !== CS.pos) {
     CS._lastBreakAt = CS.pos;
     // Progress: presentations done vs. the run total (queue length).
