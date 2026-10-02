@@ -35,7 +35,7 @@ if (phase === "training") {
     stopAudio();
     showScreen("thankyou");
     if (abortBtn) abortBtn.style.display = "none";
-    saveResults("test aborted at " + new Date().toLocaleString());
+    saveResults("test aborted at " + new Date().toLocaleString(), "aborted");
   }
 }
 
@@ -328,6 +328,7 @@ if (breakEveryInput) {
   };
   setupCalibrationScreen();
   setupLevelControls();      // after the preset (and its calibration) is active
+  if (typeof ResultsStore !== "undefined") ResultsStore.setupScreen();   // also marks interrupted runs
 
   // Setup screen (adaptive controls)
   const setupBtn = document.getElementById("setupBtn");

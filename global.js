@@ -28,6 +28,8 @@ export let trialIndex = 0;
 export let phase = "";
 export let participant = "";
 export let responseLog = [];
+export let runId = null;       // in-app Results store id of the current test run (null in training)
+export let listId = "";        // "1" | "2" for Start/Training runs; "both" for normalisation
 
 // --- DOM Elements ---
 export const trainingImg = document.getElementById("training-img");

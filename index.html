@@ -42,6 +42,7 @@
   <button id="startBtn">Start</button><br />
   <button id="setupBtn">Setup</button>
   <button id="calibrateBtn">Calibration</button>
+  <button id="resultsBtn">Results</button>
 <label>
   <br>Take a break every
   <input id="breakEvery" type="number" min="0" value="32" style="width:4em;">
@@ -50,6 +51,17 @@
  <!-- <p class="footer">
     &copy; 2025 G.O'B.
   </p>-->
+</div>
+
+<div id="resultsScreen" class="screen" style="max-width:42rem;margin:0 auto;">
+  <h2>Results</h2>
+  <p class="small" id="resultsInfo" style="margin-top:0;"></p>
+  <div>
+    <button id="resultsZipBtn" type="button">Download all (.zip)</button>
+    <button id="resultsBackBtn" type="button">Back</button>
+  </div>
+  <div id="resultsList"></div>
+  <button id="resultsDeleteAllBtn" type="button" style="background:#777;margin-top:1rem;">Delete all…</button>
 </div>
 
 <div id="instructions" class="screen">

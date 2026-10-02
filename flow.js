@@ -12,12 +12,13 @@ import {
   startTime,
   testStartedAt,
   arrowSet,
-  listId
+  listId,
+  runId
 } from "./global.js";
 
 import { showScreen, setImage } from "./ui.js";
 import { loadList } from "./list.js";
-import { saveResults } from "./results.js";
+import { saveResults, autosaveAdaptive } from "./results.js";
 import { AudioEngine } from "./audioEngine.js";
 import { createTrack, resolveTrackConfig } from "./adaptive.js";
 
@@ -59,6 +60,8 @@ export function beginPhase(p) {
   awaitingResponse = false;
   participant = document.getElementById("name").value || "anon";
   testStartedAt = new Date();
+  // Each test run gets an id in the in-app Results store (training isn't stored).
+  runId = (p === "test" && typeof ResultsStore !== "undefined") ? ResultsStore.newId() : null;
 
   // Which word list (1 or 2) this Training/Start run uses, from the start screen.
   const sel = document.getElementById("listSelect");
@@ -189,12 +192,12 @@ if (phase === "test") {
   // responses. Training (or a non-adaptive run) ends at the end of the list.
   if (phase === "test" && track) {
     if (track.done()) {
-      saveResults();
+      saveResults("", "complete");
       return;
     }
   } else if (trialIndex >= list.length) {
     if (phase === "test") {
-      saveResults();
+      saveResults("", "complete");
     } else {
       showScreen("thankyou");
       const abortBtn = document.getElementById("abortBtn");
@@ -411,6 +414,8 @@ export function recordResponse(img) {
   }
 
   responseLog.push(entry);
+  // Keep everything so far on the device after every response.
+  if (phase === "test") autosaveAdaptive();
 
   optImgs.forEach(image => {
     image.style.opacity = image === img ? "1.0" : "0.4";

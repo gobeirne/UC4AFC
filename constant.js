@@ -323,6 +323,11 @@ function csStartRun() {
       .forEach((o, k) => { CS.queue[k] = o.t; });
   }
 
+  // Participant from the front page (normalisation previously never read it).
+  const nameEl = document.getElementById("name");
+  participant = (nameEl && nameEl.value.trim()) || "anon";
+  CS.runId = (typeof ResultsStore !== "undefined") ? ResultsStore.newId() : null;
+
   CS.pos = 0;
   CS.awaiting = false;
   CS._lastBreakAt = -1;
@@ -334,11 +339,15 @@ function csStartRun() {
   // Unlock audio within this user gesture (iOS/Safari).
   if (typeof AudioEngine !== "undefined" && AudioEngine.resume) AudioEngine.resume().catch(() => {});
 
-  // Ready step: show the test instructions and wait for the participant to
-  // press OK, so the operator can hand the device over before anything plays.
-  // Back cancels the run and returns to the normalisation screen.
+  csReadyThenRun(false);
+}
+
+// Ready step: show the test instructions and wait for the participant to press
+// OK, so the operator can hand the device over before anything plays. Back
+// cancels and returns to the normalisation screen (a resumed run stays saved).
+function csReadyThenRun(isResume) {
   const go = () => {
-    CS.startedAt = new Date();                 // the run starts when they press OK
+    if (!isResume) CS.startedAt = new Date();   // the run starts when they press OK
     const abortBtn = document.getElementById("abortBtn");
     if (abortBtn && config && config.showAbortXOnTouchDevices !== false) {
       abortBtn.style.display = "block";       // the run's only escape
@@ -350,7 +359,7 @@ function csStartRun() {
       run();
     }
   };
-  showInstructions("test", go, () => { CS.active = false; showScreen("conststim"); });
+  showInstructions("test", go, () => { CS.active = false; showScreen(isResume ? "resultsScreen" : "conststim"); });
 }
 
 // Word lookup: find the list item whose `correct` matches (for images/audio).
@@ -386,6 +395,7 @@ function csNextTrial() {
   if (CS.pos >= CS.queue.length) { csFinish(); return; }
 
   const trial = CS.queue[CS.pos];
+  CS.nextPos = CS.pos;      // this trial is now the first unanswered one
   const item = csItemForWord(trial.word);
   if (!item) {
     console.warn("[CS] No stimulus item for word", trial.word, "- skipping");
@@ -507,6 +517,8 @@ function csRecordResponse(img) {
     rep: trial.rep,
     timeMs
   });
+  CS.nextPos = CS.pos + 1;  // first unanswered trial
+  csAutosave(CS.nextPos);   // everything so far, kept on the device
 
   // Visual feedback then advance (same cadence as the adaptive flow).
   optImgs.forEach(image => { image.style.opacity = image === img ? "1.0" : "0.4"; });
@@ -553,7 +565,7 @@ function csEndCommon() {
 
 function csFinish() {
   csEndCommon();
-  csSaveResults();
+  csSaveResults(undefined, "complete");
 }
 
 // Abort mid-run: save what we have, tagged as aborted.
@@ -561,14 +573,14 @@ function csAbort() {
   if (!CS.active) return false;
   if (typeof AudioEngine !== "undefined") AudioEngine.stop();
   csEndCommon();
-  csSaveResults(`run aborted at ${new Date().toLocaleString()}`);
+  csSaveResults(`run aborted at ${new Date().toLocaleString()}`, "aborted");
   return true;
 }
 
 // ---------------------------------------------------------------------------
 // Results — three tables + chronological log, in one .txt (+ companion .json)
 // ---------------------------------------------------------------------------
-function csSaveResults(note) {
+function csBuildResults(note) {
   const now = new Date();
   const timeStr = now.toISOString().replace(/[:.]/g, "-");
   const who = (typeof participant === "string" && participant) ? participant : "anon";
@@ -655,18 +667,10 @@ function csSaveResults(note) {
   }
 
   const txt = lines.join("\n");
-
-  // --- Save .txt
   const baseName = `UC4AFC_CS_${modeUp}_${who}_${timeStr}`;
-  const a1 = document.createElement("a");
-  a1.href = URL.createObjectURL(new Blob([txt], { type: "text/tab-separated-values" }));
-  a1.download = `${baseName}.txt`;
-  a1.click();
-
-  // --- Save companion .json (raw log + the three tables as arrays)
   const shouldSaveJson =
     (config && typeof config.saveJson !== "undefined") ? config.saveJson : true;
-  if (shouldSaveJson) {
+  {
     const tableToObj = (map, asProportion) => {
       const rows = {};
       for (const w of words) {
@@ -701,6 +705,108 @@ function csSaveResults(note) {
       log: CS.logRows.slice(),
       note: note || undefined
     };
+    const correctN = CS.logRows.filter(r => r.isCorrect).length;
+    return { baseName, txt, jsonData, shouldSaveJson, who,
+             summary: CS.logRows.length ? `${correctN}/${CS.logRows.length} correct` : "" };
+  }
+}
+
+// Store in the in-app Results store. status: "active" (autosave), "complete",
+// "aborted", or null to keep the stored status. `resumePos` (autosave only) is
+// the queue position to continue from.
+function csStore(r, status, resumePos) {
+  if (typeof ResultsStore === "undefined" || !CS.runId) return;
+  const rec = {
+    id: CS.runId, kind: "normalisation", mode: CS.mode, participant: r.who, listId: "both",
+    startedAt: CS.startedAt ? CS.startedAt.toISOString() : null,
+    done: CS.logRows.length, total: CS.queue.length, summary: r.summary,
+    baseName: r.baseName, txt: r.txt,
+    json: r.shouldSaveJson ? JSON.stringify(r.jsonData, null, 2) : null,
+    ...(status ? { status } : {})
+  };
+  if (resumePos != null) {
+    rec.resume = {
+      queue: CS.queue, pos: resumePos, logRows: CS.logRows,
+      presented: [...CS.presented], correct: [...CS.correct],
+      levels: CS.levels, repeats: CS.repeats, breakEvery: CS.breakEvery, easeIn: CS.easeIn,
+      mode: CS.mode, ear: CS.ear, startedAt: rec.startedAt, participant: r.who,
+      level: (typeof Calibration !== "undefined" && Calibration.presentationLevel) ? Calibration.presentationLevel() : null,
+      calibrated: (typeof Calibration !== "undefined" && Calibration.isCalibrated) ? Calibration.isCalibrated() : false,
+      calibration: (typeof Calibration !== "undefined" && Calibration.calibrationHeader) ? Calibration.calibrationHeader() : "",
+      headphones: (typeof Headphones !== "undefined") ? Headphones.currentId() : null
+    };
+  }
+  ResultsStore.save(rec);
+}
+
+// Resume an interrupted or aborted run (from the Results screen) exactly where
+// it stopped: same queue order, position, responses and settings.
+async function csResume(rec) {
+  const R = rec && rec.resume;
+  if (!R || !Array.isArray(R.queue)) {
+    alert("This run can't be resumed: it has no saved run state.");
+    return false;
+  }
+  if (R.pos >= R.queue.length) { alert("This run has no presentations left."); return false; }
+
+  // The rest of the run must be presented the same way as the first part.
+  const calNow = Calibration.isCalibrated();
+  const diffs = [];
+  if (R.headphones && typeof Headphones !== "undefined" && R.headphones !== Headphones.currentId()) {
+    const was = (Headphones.PRESETS[R.headphones] || {}).label || R.headphones;
+    diffs.push(`headphones were "${was}", now "${Headphones.preset().label}"`);
+  }
+  if (R.calibration && R.calibration !== Calibration.calibrationHeader()) {
+    diffs.push(`calibration was ${R.calibration}; now ${calNow ? Calibration.calibrationHeader() : "uncalibrated"}`);
+  }
+  if (diffs.length && !confirm("This run was started with different settings:\n\n• " +
+      diffs.join("\n• ") + "\n\nResume anyway?")) return false;
+  // Same presentation level as before (only meaningful in the same calibration state).
+  if (R.level != null && R.calibrated === calNow) Calibration.setPresentationLevel(R.level);
+
+  await loadList("both");
+  CS.queue = R.queue;
+  CS.pos = R.pos;
+  CS.nextPos = R.pos;
+  CS.logRows = R.logRows || [];
+  CS.presented = new Map(R.presented || []);
+  CS.correct = new Map(R.correct || []);
+  CS.levels = R.levels;
+  CS.repeats = R.repeats;
+  CS.breakEvery = R.breakEvery;
+  CS.easeIn = R.easeIn;
+  CS.mode = R.mode;
+  CS.ear = R.ear;
+  CS.startedAt = R.startedAt ? new Date(R.startedAt) : new Date();
+  CS.runId = rec.id;
+  CS.awaiting = false;
+  CS._lastBreakAt = R.pos;          // don't open with a break screen
+  CS.active = true;
+  participant = R.participant || rec.participant || "anon";
+  if (typeof AudioEngine !== "undefined" && AudioEngine.resume) AudioEngine.resume().catch(() => {});
+  csReadyThenRun(true);
+  return true;
+}
+
+function csAutosave(resumePos) {
+  csStore(csBuildResults(`in progress (autosaved after ${CS.logRows.length} of ${CS.queue.length} presentations)`),
+          "active", resumePos);
+}
+
+function csSaveResults(note, status = null) {
+  const r = csBuildResults(note);
+  const { baseName, txt, jsonData, shouldSaveJson } = r;
+  // An aborted run keeps its resume point: the first trial not yet answered.
+  csStore(r, status, status === "aborted" ? (CS.nextPos ?? CS.pos) : null);
+
+  // --- Save .txt
+  const a1 = document.createElement("a");
+  a1.href = URL.createObjectURL(new Blob([txt], { type: "text/tab-separated-values" }));
+  a1.download = `${baseName}.txt`;
+  a1.click();
+
+  // --- Save companion .json (raw log + the three tables as arrays)
+  if (shouldSaveJson) {
     const a2 = document.createElement("a");
     a2.href = URL.createObjectURL(new Blob([JSON.stringify(jsonData, null, 2)], { type: "application/json" }));
     a2.download = `${baseName}.json`;
@@ -710,7 +816,7 @@ function csSaveResults(note) {
   // --- End screen (reuse the thankyou screen)
   showScreen("thankyou");
   const info = document.getElementById("fileinfo");
-  if (info) info.textContent = `Saved: ${baseName}.${shouldSaveJson ? "{txt,json}" : "txt"}`;
+  if (info) info.textContent = `Saved: ${baseName}.${shouldSaveJson ? "{txt,json}" : "txt"} (also kept in Results)`;
   const saveAgainBtn = document.getElementById("saveAgainBtn");
   if (saveAgainBtn) saveAgainBtn.onclick = () => csSaveResults("manual re-save at " + new Date().toLocaleString());
 
@@ -743,4 +849,4 @@ if (typeof window !== "undefined") {
   };
 }
 
-export { setupConstantScreen, csStartRun, csAbort, csRunActive, csPopulateForm };
+export { setupConstantScreen, csStartRun, csAbort, csRunActive, csPopulateForm, csResume };

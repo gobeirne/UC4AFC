@@ -1,8 +1,8 @@
 // File: results.js
-import { responseLog, participant, config, testStartedAt, listId } from "./global.js";
+import { responseLog, participant, config, testStartedAt, listId, runId } from "./global.js";
 import { showScreen } from "./ui.js";
 
-export function saveResults(optionalNote = "") {
+export function buildAdaptiveResults(optionalNote = "") {
   const now = new Date();
   const timeStr = now.toISOString().replace(/[:.]/g, "-");
 
@@ -124,22 +124,53 @@ export function saveResults(optionalNote = "") {
     txtLines.push(`# ${optionalNote}`);
   }
 
+  const shouldSaveJson =
+    config && typeof config.saveJson !== "undefined" ? config.saveJson : true;
+  const baseName = `UC4AFC_${participant}_${timeStr}`;
+  return { baseName, txt: txtLines.join("\n"), jsonData, shouldSaveJson,
+           mode, unit, lastEstimate, isAdaptive };
+}
+
+// Store this run in the in-app Results store (IndexedDB). `status`: "active"
+// (autosave mid-run), "complete", "aborted", or null to keep the stored status.
+function storeAdaptive(r, status) {
+  if (typeof ResultsStore === "undefined" || !runId) return;
+  const total = (config && config.adaptive && config.adaptive.nTrials) || null;
+  ResultsStore.save({
+    id: runId, kind: "adaptive", mode: r.mode, participant, listId: listId || null,
+    startedAt: testStartedAt ? testStartedAt.toISOString() : null,
+    done: responseLog.length, total,
+    summary: r.lastEstimate != null ? `threshold ${r.lastEstimate} ${r.unit}` : "",
+    baseName: r.baseName, txt: r.txt,
+    json: r.shouldSaveJson ? JSON.stringify(r.jsonData, null, 2) : null,
+    ...(status ? { status } : {})
+  });
+}
+
+// Called after every response: everything so far is kept on the device, so a
+// closed app or crash loses nothing (it shows as "interrupted" in Results).
+export function autosaveAdaptive() {
+  storeAdaptive(buildAdaptiveResults(`in progress (autosaved after trial ${responseLog.length})`), "active");
+}
+
+export function saveResults(optionalNote = "", status = null) {
+  const r = buildAdaptiveResults(optionalNote);
+  const { baseName, shouldSaveJson, jsonData } = r;
+  storeAdaptive(r, status);
+
   // --- Save TXT
-  const txtBlob = new Blob([txtLines.join("\n")], { type: "text/tab-separated-values" });
+  const txtBlob = new Blob([r.txt], { type: "text/tab-separated-values" });
   const a1 = document.createElement("a");
   a1.href = URL.createObjectURL(txtBlob);
-  a1.download = `UC4AFC_${participant}_${timeStr}.txt`;
+  a1.download = `${baseName}.txt`;
   a1.click();
 
   // --- Save JSON if enabled
-  const shouldSaveJson =
-    config && typeof config.saveJson !== "undefined" ? config.saveJson : true;
-
   if (shouldSaveJson) {
     const jsonBlob = new Blob([JSON.stringify(jsonData, null, 2)], { type: "application/json" });
     const a2 = document.createElement("a");
     a2.href = URL.createObjectURL(jsonBlob);
-    a2.download = `UC4AFC_${participant}_${timeStr}.json`;
+    a2.download = `${baseName}.json`;
     a2.click();
   } else {
     console.warn("[stop] Skipping JSON download due to config.saveJson = false");
@@ -148,7 +179,7 @@ export function saveResults(optionalNote = "") {
  // --- Show end screen
 showScreen("thankyou");
 document.getElementById("fileinfo").textContent =
-  `Saved: UC4AFC_${participant}_${timeStr}.${shouldSaveJson ? "{txt,json}" : "txt"}`;
+  `Saved: ${baseName}.${shouldSaveJson ? "{txt,json}" : "txt"} (also kept in Results)`;
 
 // Enable Save Again button
 const saveAgainBtn = document.getElementById("saveAgainBtn");
@@ -164,9 +195,8 @@ if (saveAgainBtn) {
   // body — the file is already saved locally.
   const emailBtn = document.getElementById("emailBtn");
   if (emailBtn) {
-    const baseName = `UC4AFC_${participant}_${timeStr}`;
     const subject = `${baseName}.txt`;
-    const txtContent = txtLines.join("\n");
+    const txtContent = r.txt;
 
     // Conservative ceiling for the whole encoded mailto: URL body.
     const MAX_MAILTO_BODY = 1800;

@@ -33,6 +33,7 @@ let trialIndex = 0;
 let phase = "";
 let participant = "";
 let responseLog = [];
+let runId = null;       // in-app Results store id of the current test run (null in training)
 let listId = "";        // "1" | "2" for Start/Training runs; "both" for normalisation
 
 // --- DOM Elements ---
@@ -2437,6 +2438,8 @@ function beginPhase(p) {
   awaitingResponse = false;
   participant = document.getElementById("name").value || "anon";
   testStartedAt = new Date();
+  // Each test run gets an id in the in-app Results store (training isn't stored).
+  runId = (p === "test" && typeof ResultsStore !== "undefined") ? ResultsStore.newId() : null;
 
   // Which word list (1 or 2) this Training/Start run uses, from the start screen.
   const sel = document.getElementById("listSelect");
@@ -2567,12 +2570,12 @@ if (phase === "test") {
   // responses. Training (or a non-adaptive run) ends at the end of the list.
   if (phase === "test" && track) {
     if (track.done()) {
-      saveResults();
+      saveResults("", "complete");
       return;
     }
   } else if (trialIndex >= list.length) {
     if (phase === "test") {
-      saveResults();
+      saveResults("", "complete");
     } else {
       showScreen("thankyou");
       const abortBtn = document.getElementById("abortBtn");
@@ -2789,6 +2792,8 @@ function recordResponse(img) {
   }
 
   responseLog.push(entry);
+  // Keep everything so far on the device after every response.
+  if (phase === "test") autosaveAdaptive();
 
   optImgs.forEach(image => {
     image.style.opacity = image === img ? "1.0" : "0.4";
@@ -3520,6 +3525,11 @@ function csStartRun() {
       .forEach((o, k) => { CS.queue[k] = o.t; });
   }
 
+  // Participant from the front page (normalisation previously never read it).
+  const nameEl = document.getElementById("name");
+  participant = (nameEl && nameEl.value.trim()) || "anon";
+  CS.runId = (typeof ResultsStore !== "undefined") ? ResultsStore.newId() : null;
+
   CS.pos = 0;
   CS.awaiting = false;
   CS._lastBreakAt = -1;
@@ -3531,11 +3541,15 @@ function csStartRun() {
   // Unlock audio within this user gesture (iOS/Safari).
   if (typeof AudioEngine !== "undefined" && AudioEngine.resume) AudioEngine.resume().catch(() => {});
 
-  // Ready step: show the test instructions and wait for the participant to
-  // press OK, so the operator can hand the device over before anything plays.
-  // Back cancels the run and returns to the normalisation screen.
+  csReadyThenRun(false);
+}
+
+// Ready step: show the test instructions and wait for the participant to press
+// OK, so the operator can hand the device over before anything plays. Back
+// cancels and returns to the normalisation screen (a resumed run stays saved).
+function csReadyThenRun(isResume) {
   const go = () => {
-    CS.startedAt = new Date();                 // the run starts when they press OK
+    if (!isResume) CS.startedAt = new Date();   // the run starts when they press OK
     const abortBtn = document.getElementById("abortBtn");
     if (abortBtn && config && config.showAbortXOnTouchDevices !== false) {
       abortBtn.style.display = "block";       // the run's only escape
@@ -3547,7 +3561,7 @@ function csStartRun() {
       run();
     }
   };
-  showInstructions("test", go, () => { CS.active = false; showScreen("conststim"); });
+  showInstructions("test", go, () => { CS.active = false; showScreen(isResume ? "resultsScreen" : "conststim"); });
 }
 
 // Word lookup: find the list item whose `correct` matches (for images/audio).
@@ -3583,6 +3597,7 @@ function csNextTrial() {
   if (CS.pos >= CS.queue.length) { csFinish(); return; }
 
   const trial = CS.queue[CS.pos];
+  CS.nextPos = CS.pos;      // this trial is now the first unanswered one
   const item = csItemForWord(trial.word);
   if (!item) {
     console.warn("[CS] No stimulus item for word", trial.word, "- skipping");
@@ -3704,6 +3719,8 @@ function csRecordResponse(img) {
     rep: trial.rep,
     timeMs
   });
+  CS.nextPos = CS.pos + 1;  // first unanswered trial
+  csAutosave(CS.nextPos);   // everything so far, kept on the device
 
   // Visual feedback then advance (same cadence as the adaptive flow).
   optImgs.forEach(image => { image.style.opacity = image === img ? "1.0" : "0.4"; });
@@ -3750,7 +3767,7 @@ function csEndCommon() {
 
 function csFinish() {
   csEndCommon();
-  csSaveResults();
+  csSaveResults(undefined, "complete");
 }
 
 // Abort mid-run: save what we have, tagged as aborted.
@@ -3758,14 +3775,14 @@ function csAbort() {
   if (!CS.active) return false;
   if (typeof AudioEngine !== "undefined") AudioEngine.stop();
   csEndCommon();
-  csSaveResults(`run aborted at ${new Date().toLocaleString()}`);
+  csSaveResults(`run aborted at ${new Date().toLocaleString()}`, "aborted");
   return true;
 }
 
 // ---------------------------------------------------------------------------
 // Results — three tables + chronological log, in one .txt (+ companion .json)
 // ---------------------------------------------------------------------------
-function csSaveResults(note) {
+function csBuildResults(note) {
   const now = new Date();
   const timeStr = now.toISOString().replace(/[:.]/g, "-");
   const who = (typeof participant === "string" && participant) ? participant : "anon";
@@ -3852,18 +3869,10 @@ function csSaveResults(note) {
   }
 
   const txt = lines.join("\n");
-
-  // --- Save .txt
   const baseName = `UC4AFC_CS_${modeUp}_${who}_${timeStr}`;
-  const a1 = document.createElement("a");
-  a1.href = URL.createObjectURL(new Blob([txt], { type: "text/tab-separated-values" }));
-  a1.download = `${baseName}.txt`;
-  a1.click();
-
-  // --- Save companion .json (raw log + the three tables as arrays)
   const shouldSaveJson =
     (config && typeof config.saveJson !== "undefined") ? config.saveJson : true;
-  if (shouldSaveJson) {
+  {
     const tableToObj = (map, asProportion) => {
       const rows = {};
       for (const w of words) {
@@ -3898,6 +3907,108 @@ function csSaveResults(note) {
       log: CS.logRows.slice(),
       note: note || undefined
     };
+    const correctN = CS.logRows.filter(r => r.isCorrect).length;
+    return { baseName, txt, jsonData, shouldSaveJson, who,
+             summary: CS.logRows.length ? `${correctN}/${CS.logRows.length} correct` : "" };
+  }
+}
+
+// Store in the in-app Results store. status: "active" (autosave), "complete",
+// "aborted", or null to keep the stored status. `resumePos` (autosave only) is
+// the queue position to continue from.
+function csStore(r, status, resumePos) {
+  if (typeof ResultsStore === "undefined" || !CS.runId) return;
+  const rec = {
+    id: CS.runId, kind: "normalisation", mode: CS.mode, participant: r.who, listId: "both",
+    startedAt: CS.startedAt ? CS.startedAt.toISOString() : null,
+    done: CS.logRows.length, total: CS.queue.length, summary: r.summary,
+    baseName: r.baseName, txt: r.txt,
+    json: r.shouldSaveJson ? JSON.stringify(r.jsonData, null, 2) : null,
+    ...(status ? { status } : {})
+  };
+  if (resumePos != null) {
+    rec.resume = {
+      queue: CS.queue, pos: resumePos, logRows: CS.logRows,
+      presented: [...CS.presented], correct: [...CS.correct],
+      levels: CS.levels, repeats: CS.repeats, breakEvery: CS.breakEvery, easeIn: CS.easeIn,
+      mode: CS.mode, ear: CS.ear, startedAt: rec.startedAt, participant: r.who,
+      level: (typeof Calibration !== "undefined" && Calibration.presentationLevel) ? Calibration.presentationLevel() : null,
+      calibrated: (typeof Calibration !== "undefined" && Calibration.isCalibrated) ? Calibration.isCalibrated() : false,
+      calibration: (typeof Calibration !== "undefined" && Calibration.calibrationHeader) ? Calibration.calibrationHeader() : "",
+      headphones: (typeof Headphones !== "undefined") ? Headphones.currentId() : null
+    };
+  }
+  ResultsStore.save(rec);
+}
+
+// Resume an interrupted or aborted run (from the Results screen) exactly where
+// it stopped: same queue order, position, responses and settings.
+async function csResume(rec) {
+  const R = rec && rec.resume;
+  if (!R || !Array.isArray(R.queue)) {
+    alert("This run can't be resumed: it has no saved run state.");
+    return false;
+  }
+  if (R.pos >= R.queue.length) { alert("This run has no presentations left."); return false; }
+
+  // The rest of the run must be presented the same way as the first part.
+  const calNow = Calibration.isCalibrated();
+  const diffs = [];
+  if (R.headphones && typeof Headphones !== "undefined" && R.headphones !== Headphones.currentId()) {
+    const was = (Headphones.PRESETS[R.headphones] || {}).label || R.headphones;
+    diffs.push(`headphones were "${was}", now "${Headphones.preset().label}"`);
+  }
+  if (R.calibration && R.calibration !== Calibration.calibrationHeader()) {
+    diffs.push(`calibration was ${R.calibration}; now ${calNow ? Calibration.calibrationHeader() : "uncalibrated"}`);
+  }
+  if (diffs.length && !confirm("This run was started with different settings:\n\n• " +
+      diffs.join("\n• ") + "\n\nResume anyway?")) return false;
+  // Same presentation level as before (only meaningful in the same calibration state).
+  if (R.level != null && R.calibrated === calNow) Calibration.setPresentationLevel(R.level);
+
+  await loadList("both");
+  CS.queue = R.queue;
+  CS.pos = R.pos;
+  CS.nextPos = R.pos;
+  CS.logRows = R.logRows || [];
+  CS.presented = new Map(R.presented || []);
+  CS.correct = new Map(R.correct || []);
+  CS.levels = R.levels;
+  CS.repeats = R.repeats;
+  CS.breakEvery = R.breakEvery;
+  CS.easeIn = R.easeIn;
+  CS.mode = R.mode;
+  CS.ear = R.ear;
+  CS.startedAt = R.startedAt ? new Date(R.startedAt) : new Date();
+  CS.runId = rec.id;
+  CS.awaiting = false;
+  CS._lastBreakAt = R.pos;          // don't open with a break screen
+  CS.active = true;
+  participant = R.participant || rec.participant || "anon";
+  if (typeof AudioEngine !== "undefined" && AudioEngine.resume) AudioEngine.resume().catch(() => {});
+  csReadyThenRun(true);
+  return true;
+}
+
+function csAutosave(resumePos) {
+  csStore(csBuildResults(`in progress (autosaved after ${CS.logRows.length} of ${CS.queue.length} presentations)`),
+          "active", resumePos);
+}
+
+function csSaveResults(note, status = null) {
+  const r = csBuildResults(note);
+  const { baseName, txt, jsonData, shouldSaveJson } = r;
+  // An aborted run keeps its resume point: the first trial not yet answered.
+  csStore(r, status, status === "aborted" ? (CS.nextPos ?? CS.pos) : null);
+
+  // --- Save .txt
+  const a1 = document.createElement("a");
+  a1.href = URL.createObjectURL(new Blob([txt], { type: "text/tab-separated-values" }));
+  a1.download = `${baseName}.txt`;
+  a1.click();
+
+  // --- Save companion .json (raw log + the three tables as arrays)
+  if (shouldSaveJson) {
     const a2 = document.createElement("a");
     a2.href = URL.createObjectURL(new Blob([JSON.stringify(jsonData, null, 2)], { type: "application/json" }));
     a2.download = `${baseName}.json`;
@@ -3907,7 +4018,7 @@ function csSaveResults(note) {
   // --- End screen (reuse the thankyou screen)
   showScreen("thankyou");
   const info = document.getElementById("fileinfo");
-  if (info) info.textContent = `Saved: ${baseName}.${shouldSaveJson ? "{txt,json}" : "txt"}`;
+  if (info) info.textContent = `Saved: ${baseName}.${shouldSaveJson ? "{txt,json}" : "txt"} (also kept in Results)`;
   const saveAgainBtn = document.getElementById("saveAgainBtn");
   if (saveAgainBtn) saveAgainBtn.onclick = () => csSaveResults("manual re-save at " + new Date().toLocaleString());
 
@@ -4381,7 +4492,7 @@ if (typeof window !== "undefined") {
 // --- results.js ---
 // File: results.js
 
-function saveResults(optionalNote = "") {
+function buildAdaptiveResults(optionalNote = "") {
   const now = new Date();
   const timeStr = now.toISOString().replace(/[:.]/g, "-");
 
@@ -4503,22 +4614,53 @@ function saveResults(optionalNote = "") {
     txtLines.push(`# ${optionalNote}`);
   }
 
+  const shouldSaveJson =
+    config && typeof config.saveJson !== "undefined" ? config.saveJson : true;
+  const baseName = `UC4AFC_${participant}_${timeStr}`;
+  return { baseName, txt: txtLines.join("\n"), jsonData, shouldSaveJson,
+           mode, unit, lastEstimate, isAdaptive };
+}
+
+// Store this run in the in-app Results store (IndexedDB). `status`: "active"
+// (autosave mid-run), "complete", "aborted", or null to keep the stored status.
+function storeAdaptive(r, status) {
+  if (typeof ResultsStore === "undefined" || !runId) return;
+  const total = (config && config.adaptive && config.adaptive.nTrials) || null;
+  ResultsStore.save({
+    id: runId, kind: "adaptive", mode: r.mode, participant, listId: listId || null,
+    startedAt: testStartedAt ? testStartedAt.toISOString() : null,
+    done: responseLog.length, total,
+    summary: r.lastEstimate != null ? `threshold ${r.lastEstimate} ${r.unit}` : "",
+    baseName: r.baseName, txt: r.txt,
+    json: r.shouldSaveJson ? JSON.stringify(r.jsonData, null, 2) : null,
+    ...(status ? { status } : {})
+  });
+}
+
+// Called after every response: everything so far is kept on the device, so a
+// closed app or crash loses nothing (it shows as "interrupted" in Results).
+function autosaveAdaptive() {
+  storeAdaptive(buildAdaptiveResults(`in progress (autosaved after trial ${responseLog.length})`), "active");
+}
+
+function saveResults(optionalNote = "", status = null) {
+  const r = buildAdaptiveResults(optionalNote);
+  const { baseName, shouldSaveJson, jsonData } = r;
+  storeAdaptive(r, status);
+
   // --- Save TXT
-  const txtBlob = new Blob([txtLines.join("\n")], { type: "text/tab-separated-values" });
+  const txtBlob = new Blob([r.txt], { type: "text/tab-separated-values" });
   const a1 = document.createElement("a");
   a1.href = URL.createObjectURL(txtBlob);
-  a1.download = `UC4AFC_${participant}_${timeStr}.txt`;
+  a1.download = `${baseName}.txt`;
   a1.click();
 
   // --- Save JSON if enabled
-  const shouldSaveJson =
-    config && typeof config.saveJson !== "undefined" ? config.saveJson : true;
-
   if (shouldSaveJson) {
     const jsonBlob = new Blob([JSON.stringify(jsonData, null, 2)], { type: "application/json" });
     const a2 = document.createElement("a");
     a2.href = URL.createObjectURL(jsonBlob);
-    a2.download = `UC4AFC_${participant}_${timeStr}.json`;
+    a2.download = `${baseName}.json`;
     a2.click();
   } else {
     console.warn("[stop] Skipping JSON download due to config.saveJson = false");
@@ -4527,7 +4669,7 @@ function saveResults(optionalNote = "") {
  // --- Show end screen
 showScreen("thankyou");
 document.getElementById("fileinfo").textContent =
-  `Saved: UC4AFC_${participant}_${timeStr}.${shouldSaveJson ? "{txt,json}" : "txt"}`;
+  `Saved: ${baseName}.${shouldSaveJson ? "{txt,json}" : "txt"} (also kept in Results)`;
 
 // Enable Save Again button
 const saveAgainBtn = document.getElementById("saveAgainBtn");
@@ -4543,9 +4685,8 @@ if (saveAgainBtn) {
   // body — the file is already saved locally.
   const emailBtn = document.getElementById("emailBtn");
   if (emailBtn) {
-    const baseName = `UC4AFC_${participant}_${timeStr}`;
     const subject = `${baseName}.txt`;
-    const txtContent = txtLines.join("\n");
+    const txtContent = r.txt;
 
     // Conservative ceiling for the whole encoded mailto: URL body.
     const MAX_MAILTO_BODY = 1800;
@@ -4562,6 +4703,269 @@ if (saveAgainBtn) {
     }
   }
 }
+
+// --- resultsStore.js ---
+// File: resultsStore.js
+// -----------------------------------------------------------------------------
+// In-app Results store (the UC_CVCV / UC_KTT model).
+//
+//   * Every test run (adaptive and normalisation) is kept on the device in
+//     IndexedDB and re-saved after EVERY response, so closing the app, a crash
+//     or a flat battery loses nothing. Downloads still happen as before; this is
+//     the working copy, not a replacement for them.
+//   * IndexedDB rather than localStorage: all three apps (UC-4AFC, UC_CVCV,
+//     UC_KTT) share the gobeirne.github.io origin, whose localStorage quota is
+//     only ~5 MB in total, and a normalisation run is 30–60 KB.
+//   * A run left "active" when the app last closed is marked "interrupted" on
+//     the next load. Normalisation runs that weren't completed can be resumed.
+//   * Results screen: newest first; Download / Copy / Resume / Delete per run,
+//     plus "Download all (.zip)" — every file with its normal name, in one go.
+//
+// Record: { id, kind: "adaptive"|"normalisation", mode, participant, listId,
+//   startedAt, updatedAt, status: "active"|"complete"|"aborted"|"interrupted",
+//   done, total, summary, baseName, txt, json, resume? }
+// -----------------------------------------------------------------------------
+
+const RS_DB = "uc4afc_results", RS_STORE = "runs";
+let rsDbPromise = null;
+let rsPersistAsked = false;
+
+function rsOpen() {
+  if (!rsDbPromise) {
+    rsDbPromise = new Promise((resolve, reject) => {
+      if (typeof indexedDB === "undefined") return reject(new Error("IndexedDB unavailable"));
+      const req = indexedDB.open(RS_DB, 1);
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains(RS_STORE)) {
+          req.result.createObjectStore(RS_STORE, { keyPath: "id" });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    rsDbPromise.catch(err => console.warn("[results] store unavailable:", err && err.message));
+  }
+  return rsDbPromise;
+}
+
+function rsTx(mode, fn) {
+  return rsOpen().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(RS_STORE, mode);
+    const store = tx.objectStore(RS_STORE);
+    let out;
+    Promise.resolve(fn(store, (v) => { out = v; })).catch(reject);
+    tx.oncomplete = () => resolve(out);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  }));
+}
+
+const rsReq = (r) => new Promise((resolve, reject) => {
+  r.onsuccess = () => resolve(r.result);
+  r.onerror = () => reject(r.error);
+});
+
+function rsNewId() {
+  return `${new Date().toISOString()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Merge `partial` into the stored record (creating it if needed). Writes are
+// chained so autosaves land in order. Never throws to the caller.
+let rsChain = Promise.resolve();
+function rsSave(partial) {
+  if (!partial || !partial.id) return Promise.resolve();
+  if (!rsPersistAsked && navigator.storage && navigator.storage.persist) {
+    rsPersistAsked = true;
+    navigator.storage.persist().catch(() => {});      // ask not to be evicted
+  }
+  rsChain = rsChain.then(() => rsTx("readwrite", async (store) => {
+    const prev = await rsReq(store.get(partial.id));
+    const rec = Object.assign({ status: "active" }, prev || {}, partial, { updatedAt: new Date().toISOString() });
+    store.put(rec);
+  })).catch(err => console.warn("[results] save failed:", err && err.message));
+  return rsChain;
+}
+
+function rsGet(id) { return rsTx("readonly", async (s, set) => set(await rsReq(s.get(id)))); }
+function rsAll() {
+  return rsTx("readonly", async (s, set) => set(await rsReq(s.getAll())))
+    .then(list => (list || []).sort((a, b) => String(b.startedAt || b.updatedAt).localeCompare(String(a.startedAt || a.updatedAt))))
+    .catch(() => []);
+}
+function rsDelete(id) { return rsTx("readwrite", (s) => { s.delete(id); }); }
+function rsDeleteAll() { return rsTx("readwrite", (s) => { s.clear(); }); }
+
+// On load: anything still "active" belongs to a session that ended without
+// finishing (closed, crashed, reloaded) — mark it interrupted.
+function rsMarkInterrupted() {
+  return rsTx("readwrite", async (s) => {
+    const all = await rsReq(s.getAll());
+    for (const r of all || []) {
+      if (r.status === "active") { r.status = "interrupted"; s.put(r); }
+    }
+  }).catch(() => {});
+}
+
+// ---- Downloads ---------------------------------------------------------------
+function rsDownloadBlob(name, blob) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+function rsDownloadRun(rec) {
+  rsDownloadBlob(`${rec.baseName}.txt`, new Blob([rec.txt || ""], { type: "text/tab-separated-values" }));
+  if (rec.json) rsDownloadBlob(`${rec.baseName}.json`, new Blob([rec.json], { type: "application/json" }));
+}
+
+// Minimal ZIP writer (stored, no compression) — one file per run, normal names.
+const RS_CRC = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function rsCrc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = RS_CRC[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function rsMakeZip(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  const d = new Date();
+  const dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const dosDate = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  let offset = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name), data = enc.encode(f.text), crc = rsCrc32(data);
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true);
+    lh.setUint16(8, 0, true); lh.setUint16(10, dosTime, true); lh.setUint16(12, dosDate, true);
+    lh.setUint32(14, crc, true); lh.setUint32(18, data.length, true); lh.setUint32(22, data.length, true);
+    lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+    parts.push(new Uint8Array(lh.buffer), name, data);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true);
+    ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true); ch.setUint16(12, dosTime, true);
+    ch.setUint16(14, dosDate, true); ch.setUint32(16, crc, true); ch.setUint32(20, data.length, true);
+    ch.setUint32(24, data.length, true); ch.setUint16(28, name.length, true);
+    ch.setUint32(42, offset, true);
+    central.push(new Uint8Array(ch.buffer), name);
+    offset += 30 + name.length + data.length;
+  }
+  const cdSize = central.reduce((n, a) => n + a.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true);
+  end.setUint16(10, files.length, true); end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: "application/zip" });
+}
+
+async function rsDownloadAll() {
+  const runs = await rsAll();
+  if (!runs.length) return;
+  const used = new Set(), files = [];
+  const uniq = (n) => { let x = n, i = 2; while (used.has(x)) x = n.replace(/(\.\w+)$/, `_${i++}$1`); used.add(x); return x; };
+  for (const r of runs) {
+    files.push({ name: uniq(`${r.baseName}.txt`), text: r.txt || "" });
+    if (r.json) files.push({ name: uniq(`${r.baseName}.json`), text: r.json });
+  }
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+  rsDownloadBlob(`UC4AFC_results_${stamp}.zip`, rsMakeZip(files));
+}
+
+// ---- Results screen --------------------------------------------------------------
+const RS_STATUS = {
+  complete:    { label: "complete",    color: "#166534", bg: "#f0fdf4" },
+  aborted:     { label: "aborted",     color: "#555",    bg: "#f1f1f1" },
+  interrupted: { label: "interrupted", color: "#9a3412", bg: "#fff7ed" },
+  active:      { label: "in progress", color: "#1e40af", bg: "#eff6ff" }
+};
+
+function rsModeLabel(r) {
+  const m = { lpf: "LPF", quiet: "Quiet", snr: "Noise (SNR)" }[r.mode] || r.mode || "";
+  return r.kind === "normalisation" ? `Normalisation ${m}` : `Adaptive ${m}`;
+}
+
+async function rsRender() {
+  const listEl = document.getElementById("resultsList");
+  const info = document.getElementById("resultsInfo");
+  if (!listEl) return;
+  listEl.textContent = "";
+  const runs = await rsAll();
+  if (info) info.textContent = runs.length
+    ? `${runs.length} run${runs.length === 1 ? "" : "s"} kept on this device. Each is saved after every response.`
+    : "No runs stored on this device yet.";
+  const zipBtn = document.getElementById("resultsZipBtn");
+  if (zipBtn) zipBtn.disabled = !runs.length;
+  const delAll = document.getElementById("resultsDeleteAllBtn");
+  if (delAll) delAll.disabled = !runs.length;
+
+  for (const r of runs) {
+    const st = RS_STATUS[r.status] || RS_STATUS.active;
+    const card = document.createElement("div");
+    card.style.cssText = "border:1px solid #dde0e4;border-radius:8px;padding:.6rem .8rem;margin:.5rem 0;text-align:left;background:#fafafa";
+    const when = r.startedAt ? new Date(r.startedAt).toLocaleString("en-NZ", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+    const list = r.listId && r.listId !== "both" ? ` · List ${r.listId}` : "";
+    card.innerHTML =
+      `<div style="display:flex;justify-content:space-between;gap:.5rem;align-items:baseline;flex-wrap:wrap">` +
+      `<strong></strong><span style="font-size:.8rem;padding:.1rem .5rem;border-radius:6px;color:${st.color};background:${st.bg}">${st.label}</span></div>` +
+      `<div class="small" style="margin-top:.2rem"></div><div class="rs-actions" style="margin-top:.3rem"></div>`;
+    card.querySelector("strong").textContent = `${r.participant || "anon"} · ${rsModeLabel(r)}${list}`;
+    card.querySelector(".small").textContent =
+      `${when} · ${r.done ?? 0}${r.total ? ` / ${r.total}` : ""} trials${r.summary ? ` · ${r.summary}` : ""}`;
+    const actions = card.querySelector(".rs-actions");
+    const btn = (label, fn, grey) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = label;
+      b.style.cssText = "margin:.2rem .4rem .2rem 0;padding:.35rem .8rem;font-size:.9rem" + (grey ? ";background:#777" : "");
+      b.onclick = fn; actions.appendChild(b); return b;
+    };
+    btn("Download", () => rsDownloadRun(r));
+    btn("Copy", async (e) => {
+      try { await navigator.clipboard.writeText(r.txt || ""); e.target.textContent = "Copied"; }
+      catch (_) { e.target.textContent = "Copy failed"; }
+      setTimeout(() => { e.target.textContent = "Copy"; }, 1500);
+    });
+    if (r.kind === "normalisation" && r.status !== "complete" && r.resume && typeof csResume === "function") {
+      btn("Resume", () => csResume(r));
+    }
+    btn("Delete", async () => {
+      if (!confirm(`Delete this run (${r.participant || "anon"}, ${rsModeLabel(r)}, ${when})? This can't be undone.`)) return;
+      await rsDelete(r.id); rsRender();
+    }, true);
+    listEl.appendChild(card);
+  }
+}
+
+function rsSetupScreen() {
+  const open = document.getElementById("resultsBtn");
+  if (open) open.onclick = () => { showScreen("resultsScreen"); rsRender(); };
+  const back = document.getElementById("resultsBackBtn");
+  if (back) back.onclick = () => showScreen("intro");
+  const zip = document.getElementById("resultsZipBtn");
+  if (zip) zip.onclick = () => rsDownloadAll();
+  const delAll = document.getElementById("resultsDeleteAllBtn");
+  if (delAll) delAll.onclick = async () => {
+    const n = (await rsAll()).length;
+    if (!n || !confirm(`Delete ALL ${n} stored run${n === 1 ? "" : "s"} from this device? Download them first if you need them. This can't be undone.`)) return;
+    await rsDeleteAll(); rsRender();
+  };
+  rsMarkInterrupted();
+}
+
+if (typeof window !== "undefined") {
+  window.ResultsStore = {
+    newId: rsNewId, save: rsSave, get: rsGet, all: rsAll, remove: rsDelete,
+    markInterrupted: rsMarkInterrupted, downloadAll: rsDownloadAll, render: rsRender,
+    setupScreen: rsSetupScreen, _makeZip: rsMakeZip
+  };
+}
+
 
 // --- main.js ---
 let assetsReady = false;
@@ -4601,7 +5005,7 @@ if (phase === "training") {
     stopAudio();
     showScreen("thankyou");
     if (abortBtn) abortBtn.style.display = "none";
-    saveResults("test aborted at " + new Date().toLocaleString());
+    saveResults("test aborted at " + new Date().toLocaleString(), "aborted");
   }
 }
 
@@ -4894,6 +5298,7 @@ if (breakEveryInput) {
   };
   setupCalibrationScreen();
   setupLevelControls();      // after the preset (and its calibration) is active
+  if (typeof ResultsStore !== "undefined") ResultsStore.setupScreen();   // also marks interrupted runs
 
   // Setup screen (adaptive controls)
   const setupBtn = document.getElementById("setupBtn");
