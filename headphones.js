@@ -59,31 +59,31 @@ const HEADPHONE_PRESETS = {
   hd280_xfi: {
     label: "Sennheiser HD280 Pro + Sound Blaster X-Fi",
     curve: HD280_CURVE,
-    // Measured (GRAS): 90.9 ± 0.9 dB(A), 6 measurements across 3 individuals.
+    // Measured (Verifit): 90.9 ± 0.9 dB(A), 6 measurements across 3 individuals.
     // Full volume: Windows, browser and X-Fi at max; enhancements/effects off.
     defaultCal: {
       level: 90.9,
-      source: "built-in: GRAS, 90.9 ± 0.9 dB(A), 6 measurements, 3 individuals"
+      source: "built-in: Verifit, 90.9 ± 0.9 dB(A), 6 measurements, 3 individuals"
     }
   },
 
   hd280_ugreen: {
     label: "UGREEN UG-80154 + Sennheiser HD280 Pro",
     curve: HD280_CURVE,   // headphone-determined shape (measured via the X-Fi)
-    // Measured (GRAS): 89.3 ± 1.1 dB(A), 5 measurements across 2 individuals.
+    // Measured (Verifit): 89.3 ± 1.1 dB(A), 5 measurements across 2 individuals.
     defaultCal: {
       level: 89.3,
-      source: "built-in: GRAS, 89.3 ± 1.1 dB(A), 5 measurements, 2 individuals"
+      source: "built-in: Verifit, 89.3 ± 1.1 dB(A), 5 measurements, 2 individuals"
     }
   },
 
   sony_zx110_ugreen: {
     label: "UGREEN UG-80154 + Sony MDR-ZX110",
     curve: null,        // no frequency-response curve yet (LPF matching is flat)
-    // Measured (GRAS): 82.9 ± 0.9 dB(A), 8 measurements across 3 individuals.
+    // Measured (Verifit): 82.9 ± 0.9 dB(A), 8 measurements across 3 individuals.
     defaultCal: {
       level: 82.9,
-      source: "built-in: GRAS, 82.9 ± 0.9 dB(A), 8 measurements, 3 individuals"
+      source: "built-in: Verifit, 82.9 ± 0.9 dB(A), 8 measurements, 3 individuals"
     }
   }
 };
