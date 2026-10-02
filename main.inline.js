@@ -2288,7 +2288,7 @@ function adjustImageSize() {
 }
 
 
-function showInstructions(phase, onContinue) {
+function showInstructions(phase, onContinue, onBack) {
   const title = phase === "training" ? "Training Instructions" : "Test Instructions";
   const text = config.instructions?.[phase] || "(No instructions found)";
 
@@ -2297,12 +2297,14 @@ function showInstructions(phase, onContinue) {
 
   showScreen("instructions");
 
-  const okBtn = document.querySelector("#instructions button:last-of-type");
-  const handler = () => {
-    okBtn.removeEventListener("click", handler);
-    onContinue();
-  };
-  okBtn.addEventListener("click", handler);
+  // One OK/Back pair per showing. Assigning (not adding) the handlers replaces
+  // any left over from an earlier showing, so e.g. Start -> Back -> Training
+  // can't fire a stale Start handler on the next OK.
+  const okBtn = document.getElementById("okBtn");
+  const backBtn = document.getElementById("backBtn");
+  const clear = () => { okBtn.onclick = null; backBtn.onclick = null; };
+  okBtn.onclick = () => { clear(); onContinue(); };
+  backBtn.onclick = () => { clear(); (onBack || (() => showScreen("intro")))(); };
 }
 
 
@@ -3466,22 +3468,28 @@ function csStartRun() {
   CS.logRows = [];
   CS.presented = new Map();
   CS.correct = new Map();
-  CS.startedAt = new Date();
   CS.active = true;
 
-  // Resume the audio context within this user gesture (iOS/Safari), then run.
-  const go = () => { installOptHandlers(); showScreen("test"); csNextTrial(); };
-  if (typeof AudioEngine !== "undefined" && AudioEngine.resume) {
-    AudioEngine.resume().then(go).catch(go);
-  } else {
-    go();
-  }
+  // Unlock audio within this user gesture (iOS/Safari).
+  if (typeof AudioEngine !== "undefined" && AudioEngine.resume) AudioEngine.resume().catch(() => {});
 
-  // Show the hold-to-abort control (the run's only escape).
-  const abortBtn = document.getElementById("abortBtn");
-  if (abortBtn && config && config.showAbortXOnTouchDevices !== false) {
-    abortBtn.style.display = "block";
-  }
+  // Ready step: show the test instructions and wait for the participant to
+  // press OK, so the operator can hand the device over before anything plays.
+  // Back cancels the run and returns to the normalisation screen.
+  const go = () => {
+    CS.startedAt = new Date();                 // the run starts when they press OK
+    const abortBtn = document.getElementById("abortBtn");
+    if (abortBtn && config && config.showAbortXOnTouchDevices !== false) {
+      abortBtn.style.display = "block";       // the run's only escape
+    }
+    const run = () => { installOptHandlers(); showScreen("test"); csNextTrial(); };
+    if (typeof AudioEngine !== "undefined" && AudioEngine.resume) {
+      AudioEngine.resume().then(run).catch(run);
+    } else {
+      run();
+    }
+  };
+  showInstructions("test", go, () => { CS.active = false; showScreen("conststim"); });
 }
 
 // Word lookup: find the list item whose `correct` matches (for images/audio).
@@ -4760,7 +4768,7 @@ if (abortBtn) {
   const ok   = document.getElementById("okBtn");
   const ret  = document.getElementById("returnBtn");
 
-  if (back) back.addEventListener("click", () => showScreen("intro"));
+  // Back on the instructions screen is wired per showing by showInstructions().
  // if (ok)   ok.addEventListener("click", () => beginPhase(phase));
   if (ret)  ret.addEventListener("click", () => {
     trialIndex = 0;

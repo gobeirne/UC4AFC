@@ -241,7 +241,7 @@ if (abortBtn) {
   const ok   = document.getElementById("okBtn");
   const ret  = document.getElementById("returnBtn");
 
-  if (back) back.addEventListener("click", () => showScreen("intro"));
+  // Back on the instructions screen is wired per showing by showInstructions().
  // if (ok)   ok.addEventListener("click", () => beginPhase(phase));
   if (ret)  ret.addEventListener("click", () => {
     trialIndex = 0;

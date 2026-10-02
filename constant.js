@@ -328,22 +328,28 @@ function csStartRun() {
   CS.logRows = [];
   CS.presented = new Map();
   CS.correct = new Map();
-  CS.startedAt = new Date();
   CS.active = true;
 
-  // Resume the audio context within this user gesture (iOS/Safari), then run.
-  const go = () => { installOptHandlers(); showScreen("test"); csNextTrial(); };
-  if (typeof AudioEngine !== "undefined" && AudioEngine.resume) {
-    AudioEngine.resume().then(go).catch(go);
-  } else {
-    go();
-  }
+  // Unlock audio within this user gesture (iOS/Safari).
+  if (typeof AudioEngine !== "undefined" && AudioEngine.resume) AudioEngine.resume().catch(() => {});
 
-  // Show the hold-to-abort control (the run's only escape).
-  const abortBtn = document.getElementById("abortBtn");
-  if (abortBtn && config && config.showAbortXOnTouchDevices !== false) {
-    abortBtn.style.display = "block";
-  }
+  // Ready step: show the test instructions and wait for the participant to
+  // press OK, so the operator can hand the device over before anything plays.
+  // Back cancels the run and returns to the normalisation screen.
+  const go = () => {
+    CS.startedAt = new Date();                 // the run starts when they press OK
+    const abortBtn = document.getElementById("abortBtn");
+    if (abortBtn && config && config.showAbortXOnTouchDevices !== false) {
+      abortBtn.style.display = "block";       // the run's only escape
+    }
+    const run = () => { installOptHandlers(); showScreen("test"); csNextTrial(); };
+    if (typeof AudioEngine !== "undefined" && AudioEngine.resume) {
+      AudioEngine.resume().then(run).catch(run);
+    } else {
+      run();
+    }
+  };
+  showInstructions("test", go, () => { CS.active = false; showScreen("conststim"); });
 }
 
 // Word lookup: find the list item whose `correct` matches (for images/audio).

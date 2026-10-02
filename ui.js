@@ -33,7 +33,7 @@ export function adjustImageSize() {
 }
 
 
-export function showInstructions(phase, onContinue) {
+export function showInstructions(phase, onContinue, onBack) {
   const title = phase === "training" ? "Training Instructions" : "Test Instructions";
   const text = config.instructions?.[phase] || "(No instructions found)";
 
@@ -42,10 +42,12 @@ export function showInstructions(phase, onContinue) {
 
   showScreen("instructions");
 
-  const okBtn = document.querySelector("#instructions button:last-of-type");
-  const handler = () => {
-    okBtn.removeEventListener("click", handler);
-    onContinue();
-  };
-  okBtn.addEventListener("click", handler);
+  // One OK/Back pair per showing. Assigning (not adding) the handlers replaces
+  // any left over from an earlier showing, so e.g. Start -> Back -> Training
+  // can't fire a stale Start handler on the next OK.
+  const okBtn = document.getElementById("okBtn");
+  const backBtn = document.getElementById("backBtn");
+  const clear = () => { okBtn.onclick = null; backBtn.onclick = null; };
+  okBtn.onclick = () => { clear(); onContinue(); };
+  backBtn.onclick = () => { clear(); (onBack || (() => showScreen("intro")))(); };
 }
