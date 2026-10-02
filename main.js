@@ -1104,3 +1104,23 @@ function setupLevelControls() {
   });
   refreshLevelUI();
 }
+
+
+// --- Run protection: no pull-to-refresh / accidental reload mid-run ---------------
+// CSS (overscroll-behavior-y: none) switches pull-to-refresh off where it is
+// supported. As a fallback for browsers that ignore it, finger drags are
+// ignored while a run screen is showing (those screens never need scrolling;
+// taps and the hold-to-abort button are unaffected). And if anything still tries
+// to reload or close the page mid-run, the browser asks first.
+const RUN_SCREENS = new Set(["test", "main", "break"]);   // test, training, break
+let currentScreenId = "";
+document.addEventListener("uc4afc:screen", (e) => { currentScreenId = e.detail; });
+const inRun = () => RUN_SCREENS.has(currentScreenId);
+document.addEventListener("touchmove", (e) => {
+  if (inRun() && e.cancelable) e.preventDefault();
+}, { passive: false });
+window.addEventListener("beforeunload", (e) => {
+  if (!inRun()) return;
+  e.preventDefault();
+  e.returnValue = "";      // required by some browsers to show the prompt
+});
