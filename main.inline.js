@@ -595,11 +595,39 @@ const AudioEngine = (() => {
   function rateMismatch() { return _rateMismatch; }
 
   // Must be called from a user gesture on iOS/Safari to unlock audio.
+  // ---- Output keep-alive -------------------------------------------------
+  // Cheap USB DACs (and some phone audio paths) auto-mute on digital silence
+  // and take a moment to un-mute, clipping the start of the next sound — e.g.
+  // the first word after handing the device over, or after a break. A
+  // continuous 10 Hz tone at -70 dB re full scale keeps the output awake: to the
+  // DAC it is a real signal, yet it is inaudible (~40–50 dB SPL at 10 Hz even at
+  // full volume, >40 dB below the infrasound threshold), adds nothing to dB(A)
+  // (A-weighting is -70 dB at 10 Hz) and cannot mask speech. It goes straight to
+  // the output, bypassing the master/calibration gain, and runs for the whole
+  // session once audio is unlocked.
+  const KEEPALIVE_HZ = 10, KEEPALIVE_DB = -70;
+  let keepAlive = null;
+  function startKeepAlive() {
+    const c = context();
+    if (keepAlive || c.state !== "running") return;
+    try {
+      const osc = c.createOscillator();
+      osc.frequency.value = KEEPALIVE_HZ;
+      const g = c.createGain();
+      g.gain.value = LIN(KEEPALIVE_DB);
+      osc.connect(g);
+      g.connect(c.destination);
+      osc.start();
+      keepAlive = { osc, g };
+    } catch (err) { console.warn("[keep-alive] could not start:", err); }
+  }
+
   async function resume() {
     const c = context();
     if (c.state === "suspended") {
       try { await c.resume(); } catch (_) {}
     }
+    startKeepAlive();
     return c.state;
   }
 

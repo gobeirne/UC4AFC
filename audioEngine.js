@@ -388,7 +388,8 @@ const AudioEngine = (() => {
   let eq = null;                      // { key, h (level-scaled), scaleDb }
   let eqPending = null;
   const eqWordCache = new Map();      // `${name}|${eqKey}` -> equalised unfiltered result
-  const eqNoiseCache = new Map();     // `${url}|${eqKey}` -> equalised noise AudioBuffer
+  const eqNoiseCache = new Map();
+  const noisePeakCache = new WeakMap();  // noise AudioBuffer -> true peak (dB), for the clip diagnostic     // `${url}|${eqKey}` -> equalised noise AudioBuffer
   function eqActive() { return deemphOn && !!hpCurve; }
   function eqTag() { return eqActive() ? `eq:${hpId}` : "raw"; }
   function setHeadphoneCurve(id, curve, { deemph = false, noiseUrl, maxBoostDb = null } = {}) {
@@ -439,11 +440,6 @@ const AudioEngine = (() => {
     return { active: eqActive(), preset: hpId, scaleDb: eq ? eq.scaleDb : null,
              taps: eq ? eq.h.length : null, maxBoostDb: eqMaxBoostDb };
   }
-
-  // Optional pre-measured momentary LUFS per word name, loaded from a repo file
-  // (see loadLUFSTable). When present, decode() uses this instead of measuring
-  // live, saving per-word measurement cost. name -> momentary LUFS (number).
-  const preMeasured = new Map();
 
   let activeSource = null;
   // In SNR mode a second source (looped calibration noise) plays alongside the
@@ -498,11 +494,39 @@ const AudioEngine = (() => {
   function rateMismatch() { return _rateMismatch; }
 
   // Must be called from a user gesture on iOS/Safari to unlock audio.
+  // ---- Output keep-alive -------------------------------------------------
+  // Cheap USB DACs (and some phone audio paths) auto-mute on digital silence
+  // and take a moment to un-mute, clipping the start of the next sound — e.g.
+  // the first word after handing the device over, or after a break. A
+  // continuous 10 Hz tone at -70 dB re full scale keeps the output awake: to the
+  // DAC it is a real signal, yet it is inaudible (~40–50 dB SPL at 10 Hz even at
+  // full volume, >40 dB below the infrasound threshold), adds nothing to dB(A)
+  // (A-weighting is -70 dB at 10 Hz) and cannot mask speech. It goes straight to
+  // the output, bypassing the master/calibration gain, and runs for the whole
+  // session once audio is unlocked.
+  const KEEPALIVE_HZ = 10, KEEPALIVE_DB = -70;
+  let keepAlive = null;
+  function startKeepAlive() {
+    const c = context();
+    if (keepAlive || c.state !== "running") return;
+    try {
+      const osc = c.createOscillator();
+      osc.frequency.value = KEEPALIVE_HZ;
+      const g = c.createGain();
+      g.gain.value = LIN(KEEPALIVE_DB);
+      osc.connect(g);
+      g.connect(c.destination);
+      osc.start();
+      keepAlive = { osc, g };
+    } catch (err) { console.warn("[keep-alive] could not start:", err); }
+  }
+
   async function resume() {
     const c = context();
     if (c.state === "suspended") {
       try { await c.resume(); } catch (_) {}
     }
+    startKeepAlive();
     return c.state;
   }
 
@@ -511,30 +535,8 @@ const AudioEngine = (() => {
   // start with # are comments. Missing/malformed lines are skipped; words not in
   // the table simply fall back to live measurement in decode(). Returns the
   // number of entries loaded (0 on any failure, so callers degrade gracefully).
-  async function loadLUFSTable(url = "stimulus_lufs.txt") {
-    try {
-      const resp = await fetch(url);
-      if (!resp.ok) return 0;
-      const text = await resp.text();
-      let n = 0;
-      for (const line of text.split(/\r?\n/)) {
-        const t = line.trim();
-        if (!t || t.startsWith("#")) continue;
-        const m = t.split(/[\s,]+/);
-        if (m.length < 2) continue;
-        const name = m[0];
-        const lufs = parseFloat(m[1]);
-        if (name && isFinite(lufs)) { preMeasured.set(name, lufs); n++; }
-      }
-      return n;
-    } catch (_) {
-      return 0;
-    }
-  }
-
   // Decode one file (path like "sounds/nose.mp3") and cache raw buffer + its
-  // unfiltered momentary LUFS. Uses a pre-measured LUFS value when available
-  // (loadLUFSTable), otherwise measures live. Idempotent.
+  // unfiltered momentary LUFS (measured). Idempotent.
   async function decode(name, url) {
     if (cache.has(name)) return cache.get(name);
     const c = context();
@@ -542,8 +544,7 @@ const AudioEngine = (() => {
     if (!resp.ok) throw new Error(`decode fetch failed ${resp.status} for ${url}`);
     const arr = await resp.arrayBuffer();
     const raw = await c.decodeAudioData(arr);
-    const momentary = preMeasured.has(name) ? preMeasured.get(name)
-                                            : measureLUFS(raw).momentary;
+    const momentary = measureLUFS(raw).momentary;
     const entry = { raw, momentary };
     cache.set(name, entry);
     return entry;
@@ -799,8 +800,9 @@ const AudioEngine = (() => {
     // true peaks adding coherently. Warn only; the sound plays unchanged.
     {
       const m = LIN(masterDb());
+      if (!noisePeakCache.has(noiseBuf)) noisePeakCache.set(noiseBuf, estimateTruePeakDB(noiseBuf));
       const sum = (LIN(estimateTruePeakDB(wordBuf)) * sigLin +
-                   LIN(estimateTruePeakDB(noiseBuf)) * noiLin) * m;
+                   LIN(noisePeakCache.get(noiseBuf)) * noiLin) * m;
       const sumDb = DB(sum);
       const tag = `[snr] ${name} · SNR ${snrDb.toFixed(1)} dB · noise gain ${noiseGainDb.toFixed(1)} dB` +
         ` · worst-case output peak ${sumDb.toFixed(1)} dBFS`;
@@ -832,6 +834,31 @@ const AudioEngine = (() => {
     const maxOffset = Math.max(0, noiseBuf.duration - noiseDur);
     const noiseOffset = Math.random() * maxOffset;
 
+    // Build this trial's noise segment with the fades BAKED INTO THE SAMPLES
+    // (raised-cosine, cos^2), then play it at a constant gain. Previously the
+    // fade was AudioParam automation starting at the same instant as the source;
+    // before the first automation event a gain sits at its default of 1.0, so if
+    // a browser rendered the source's first sample one frame before the fade
+    // began (timing rounding varies trial to trial), that sample played at full
+    // level — an intermittent onset click. A baked fade starts at exactly 0
+    // whatever the scheduling rounding.
+    const nsr = noiseBuf.sampleRate;
+    const segLen = Math.max(0, Math.round(noiseDur * nsr));
+    const segStart = Math.min(Math.floor(noiseOffset * nsr), Math.max(0, noiseBuf.length - segLen));
+    const rampN = Math.min(Math.round(Math.max(0, rampSec) * nsr), Math.floor(segLen / 2));
+    const segBuf = segLen > 0 ? c.createBuffer(noiseBuf.numberOfChannels, segLen, nsr) : null;
+    if (segBuf) {
+      for (let ch = 0; ch < noiseBuf.numberOfChannels; ch++) {
+        const src = noiseBuf.getChannelData(ch), dst = segBuf.getChannelData(ch);
+        for (let i = 0; i < segLen; i++) dst[i] = src[segStart + i];
+        for (let i = 0; i < rampN; i++) {
+          const w = Math.sin(0.5 * Math.PI * i / rampN), g2 = w * w;   // cos^2 ramp: 0 -> 1
+          dst[i] *= g2;
+          dst[segLen - 1 - i] *= g2;
+        }
+      }
+    }
+
     // Word source + gain.
     const wordSrc = c.createBufferSource();
     wordSrc.buffer = wordBuf;
@@ -842,30 +869,17 @@ const AudioEngine = (() => {
 
     // Noise source (NOT looped — a single random segment) + gain, ramped in/out.
     const noiseSrc = c.createBufferSource();
-    noiseSrc.buffer = noiseBuf;
+    if (segBuf) noiseSrc.buffer = segBuf;
     noiseSrc.loop = false;
     const noiseG = c.createGain();
+    noiseG.gain.value = noiLin;                 // constant: fades are in the samples
     noiseSrc.connect(noiseG);
     makeEarRouter(c, noiseG, routing);
 
     activeSource = wordSrc;
     activeNoiseSource = noiseSrc;
 
-    // Equal-power (cosine) ramps of rampSec, clamped so two ramps fit the segment.
-    const ramp = Math.max(0, Math.min(rampSec, noiseDur / 2));
     const noiseStartClamped = Math.max(now, noiseStartAt);
-    const noiseEndAt = noiseStartClamped + noiseDur;
-    const g = noiseG.gain;
-    g.setValueAtTime(0.0001, noiseStartClamped);
-    if (ramp > 0) {
-      // exponentialRamp can't target 0, so start just above and use it for a
-      // smooth (near equal-power) fade; linear ramp to 0 at the tail.
-      g.exponentialRampToValueAtTime(Math.max(noiLin, 1e-4), noiseStartClamped + ramp);
-      g.setValueAtTime(noiLin, noiseEndAt - ramp);
-      g.linearRampToValueAtTime(0.0001, noiseEndAt);
-    } else {
-      g.setValueAtTime(noiLin, noiseStartClamped);
-    }
 
     return new Promise((resolve, reject) => {
       wordSrc.onended = () => {
@@ -873,9 +887,8 @@ const AudioEngine = (() => {
         resolve();
       };
       try {
-        if (noiseDur > 0) {
-          // start(when, offset, duration) — a single contiguous slice.
-          noiseSrc.start(noiseStartClamped, noiseOffset, noiseDur);
+        if (segBuf) {
+          noiseSrc.start(noiseStartClamped);      // whole pre-faded segment
           noiseSrc.onended = () => {
             if (activeNoiseSource === noiseSrc) activeNoiseSource = null;
             try { noiseSrc.disconnect(); } catch (_) {}
@@ -1013,7 +1026,7 @@ const AudioEngine = (() => {
     // lifecycle
     context, resume,
     // assets
-    decode, isDecoded, loadLUFSTable,
+    decode, isDecoded,
     // pipeline
     prepare, measure: measureLUFS,
     butterworthSections: butterworthLowpassSections,
