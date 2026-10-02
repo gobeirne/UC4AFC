@@ -324,6 +324,7 @@ function csStartRun() {
   }
 
   CS.pos = 0;
+  CS.awaiting = false;
   CS._lastBreakAt = -1;
   CS.logRows = [];
   CS.presented = new Map();
@@ -412,6 +413,7 @@ function csNextTrial() {
       optImgs[idx].style.opacity = "1.0";
     });
     CS.startTime = performance.now();
+    CS.awaiting = true;                   // one response per trial
   };
 
   const calibrated = (typeof Calibration !== "undefined" &&
@@ -481,7 +483,8 @@ function csAudioError(err) {
 
 // Response handling for a CS trial (installed on the option images during a run).
 function csRecordResponse(img) {
-  if (!CS.active) return;
+  if (!CS.active || !CS.awaiting) return;   // already answered (or not yet shown)
+  CS.awaiting = false;
   const trial = CS.queue[CS.pos];
   if (!trial) return;
 

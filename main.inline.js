@@ -2414,6 +2414,10 @@ const presGainDb = (level, routing) => (typeof Calibration !== "undefined" && Ca
   ? Calibration.gainDbForPresentation(level, routing) : Number(level);
 
 let lastBreakAt = -1;  // remember the index where we last stopped for a break
+// One response per trial: opened when the options appear, closed by the first
+// tap. (Without it, rapid taps each recorded a response and each advanced a
+// trial — ten taps skipped ten trials.)
+let awaitingResponse = false;
 
 const isNonEmpty = v => typeof v === "string" && v.trim().length > 0;
 const warn = (...args) => console.warn(...args);
@@ -2430,6 +2434,7 @@ let nextImagesToPreload = [];
 function beginPhase(p) {
   phase = p;
   trainingAborted = false;
+  awaitingResponse = false;
   participant = document.getElementById("name").value || "anon";
   testStartedAt = new Date();
 
@@ -2653,6 +2658,7 @@ if (phase === "test") {
       optImgs[idx].style.opacity = "1.0";
     });
     startTime = performance.now();
+    awaitingResponse = true;
   };
 
   // Mode-aware presentation:
@@ -2743,6 +2749,8 @@ if (phase === "test") {
 }
 
 function recordResponse(img) {
+  if (!awaitingResponse) return;          // already answered (or not yet shown)
+  awaitingResponse = false;
   const timeTaken = performance.now() - startTime;
   const chosen = img.getAttribute("data-name");
   // Use the same cycling word index the trial was built with.
@@ -3513,6 +3521,7 @@ function csStartRun() {
   }
 
   CS.pos = 0;
+  CS.awaiting = false;
   CS._lastBreakAt = -1;
   CS.logRows = [];
   CS.presented = new Map();
@@ -3601,6 +3610,7 @@ function csNextTrial() {
       optImgs[idx].style.opacity = "1.0";
     });
     CS.startTime = performance.now();
+    CS.awaiting = true;                   // one response per trial
   };
 
   const calibrated = (typeof Calibration !== "undefined" &&
@@ -3670,7 +3680,8 @@ function csAudioError(err) {
 
 // Response handling for a CS trial (installed on the option images during a run).
 function csRecordResponse(img) {
-  if (!CS.active) return;
+  if (!CS.active || !CS.awaiting) return;   // already answered (or not yet shown)
+  CS.awaiting = false;
   const trial = CS.queue[CS.pos];
   if (!trial) return;
 

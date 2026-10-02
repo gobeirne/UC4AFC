@@ -36,6 +36,10 @@ const presGainDb = (level, routing) => (typeof Calibration !== "undefined" && Ca
   ? Calibration.gainDbForPresentation(level, routing) : Number(level);
 
 let lastBreakAt = -1;  // remember the index where we last stopped for a break
+// One response per trial: opened when the options appear, closed by the first
+// tap. (Without it, rapid taps each recorded a response and each advanced a
+// trial — ten taps skipped ten trials.)
+let awaitingResponse = false;
 
 const isNonEmpty = v => typeof v === "string" && v.trim().length > 0;
 const warn = (...args) => console.warn(...args);
@@ -52,6 +56,7 @@ let nextImagesToPreload = [];
 export function beginPhase(p) {
   phase = p;
   trainingAborted = false;
+  awaitingResponse = false;
   participant = document.getElementById("name").value || "anon";
   testStartedAt = new Date();
 
@@ -275,6 +280,7 @@ if (phase === "test") {
       optImgs[idx].style.opacity = "1.0";
     });
     startTime = performance.now();
+    awaitingResponse = true;
   };
 
   // Mode-aware presentation:
@@ -365,6 +371,8 @@ if (phase === "test") {
 }
 
 export function recordResponse(img) {
+  if (!awaitingResponse) return;          // already answered (or not yet shown)
+  awaitingResponse = false;
   const timeTaken = performance.now() - startTime;
   const chosen = img.getAttribute("data-name");
   // Use the same cycling word index the trial was built with.
