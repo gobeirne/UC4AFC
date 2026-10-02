@@ -50,7 +50,9 @@ export function saveResults(optionalNote = "") {
   const adaptiveCfg = (config && config.adaptive) ? config.adaptive : null;
   const mode = (adaptiveCfg && adaptiveCfg.mode) || "lpf";
   const isLinear = (mode === "quiet" || mode === "snr");
-  const unit = (mode === "snr") ? "dB SNR" : (mode === "quiet") ? "dB" : "Hz";
+  const hasCal = (typeof Calibration !== "undefined" && Calibration.presentationLevel);
+  const lvlUnit = hasCal ? Calibration.levelUnit() : "dB";
+  const unit = (mode === "snr") ? "dB SNR" : (mode === "quiet") ? lvlUnit : "Hz";
   const stepUnit = isLinear ? "dB" : "dec";
   const valOf = (r) => (typeof r.value === "number" ? r.value : r.cutoffHz);
   const estOf = (r) => (typeof r.estimate === "number" ? r.estimate : r.estimateHz);
@@ -70,9 +72,9 @@ export function saveResults(optionalNote = "") {
   ];
 
   if (isAdaptive && adaptiveCfg) {
-    const startShown = isLinear
-      ? (adaptiveCfg.startValue ?? adaptiveCfg.start ?? "")
-      : (adaptiveCfg.startValue ?? adaptiveCfg.startCutoffHz ?? "");
+    // The value actually presented on trial 1 (quiet mode starts at the shared
+    // presentation level, so this is exact for every mode).
+    const startShown = responseLog.length ? (valOf(responseLog[0]) ?? "") : "";
     txtLines.push(
       `# Mode\t${mode}`,
       `# Procedure\t${adaptiveCfg.procedure}`,
@@ -86,17 +88,13 @@ export function saveResults(optionalNote = "") {
       `# Routing\t${(config && config.routing) || "binaural"}`,
       `# Threshold estimate (${unit})\t${lastEstimate != null ? lastEstimate : "n/a"}`
     );
-    if (mode === "snr") {
-      // In SNR mode the noise sits at the fixed presentation level; document it
-      // (the calibrated dB(A), else "uncalibrated") and the step multiplier.
-      const noiseLevel = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated())
-        ? `${Calibration.state().currentSliderDb} dB(A)`
-        : "uncalibrated (device volume sets level)";
-      txtLines.push(
-        `# Noise level (fixed)\t${noiseLevel}`,
-        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`
-      );
+    // The shared presentation level: the noise level in SNR mode (word = noise
+    // + SNR), the speech level in LPF mode. (Quiet mode's level is the track.)
+    if (hasCal && mode !== "quiet") {
+      txtLines.push(`# ${mode === "snr" ? "Noise level (fixed)" : "Presentation level"}\t` +
+        `${Calibration.presentationLevel()} ${lvlUnit}`);
     }
+    if (mode === "snr") txtLines.push(`# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`);
   }
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
     txtLines.push(`# Calibration\t${Calibration.calibrationHeader()}`);

@@ -327,6 +327,7 @@ if (breakEveryInput) {
     refreshCalStatus();
   };
   setupCalibrationScreen();
+  setupLevelControls();      // after the preset (and its calibration) is active
 
   // Setup screen (adaptive controls)
   const setupBtn = document.getElementById("setupBtn");
@@ -765,7 +766,7 @@ function showModeButtons(mode) {
   if (snrBlock) snrBlock.hidden = (mode !== "snr");
   // The LPF presentation-level block: LPF only. In quiet the level IS the
   // adaptive variable, and SNR sets its level in the noise block.
-  const lpfLevelBlock = document.getElementById("lpfLevelBlock");
+  const lpfLevelBlock = document.getElementById("lpfLevelBlock");   // filter block (verify tool)
   if (lpfLevelBlock) lpfLevelBlock.hidden = (mode !== "lpf");
 }
 
@@ -780,8 +781,12 @@ function applyModeLabels(mode) {
   // SNR noise-level label depends on calibration: dB(A) when calibrated, else a
   // dB FS attenuation the operator sets (device volume does the rest).
   const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
-  setText("lblSnrNoiseLevel", cal ? "Noise level (dB A)" : "Noise level (dB FS attenuation)");
-  setText("lblLpfLevel", cal ? "Level (dB A)" : "Level (dB FS attenuation)");
+  // Quiet mode starts at the shared presentation level (front page), so its
+  // start field is replaced by a note.
+  const sw = document.getElementById("setStartCutoffWrap");
+  if (sw) sw.hidden = isQuiet;
+  const qn = document.getElementById("quietStartNote");
+  if (qn) qn.hidden = !isQuiet;
   document.querySelectorAll(".lblStepUnit-wd").forEach(e => e.textContent = `Working down step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-wu").forEach(e => e.textContent = `Working up step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-id").forEach(e => e.textContent = `Initial down step (${stepUnit})`);
@@ -792,17 +797,6 @@ function applyModeLabels(mode) {
   if (sc) {
     if (isSnr || isQuiet) { sc.removeAttribute("min"); sc.removeAttribute("max"); sc.step = 1; }
     else { sc.min = 75; sc.max = 20000; sc.step = 10; }
-  }
-  // Presentation-level fields: no min/max (nothing is clamped; genuine output
-  // clipping is warned per presentation in the console). NEVER rewrite the
-  // user's entered value here (that caused -20 -> 0). Defaults: fillFormFromCfg.
-  const nl = document.getElementById("setSnrNoiseLevel");
-  if (nl) {
-    nl.removeAttribute("min"); nl.removeAttribute("max"); nl.step = 1;
-  }
-  const ll = document.getElementById("setLpfLevel");
-  if (ll) {
-    ll.removeAttribute("min"); ll.removeAttribute("max"); ll.step = 1;
   }
   // Step inputs: fine in SNR (small dB), medium in quiet, very fine in LPF.
   ["setWorkDown","setWorkUp","setInitDown","setInitUp"].forEach(id => {
@@ -826,18 +820,6 @@ function fillFormFromCfg(cfg) {
   : isQuiet ? (cfg.startValue ?? 65)
   : (cfg.startValue ?? cfg.startCutoffHz ?? 1000));
   set("setSnrStepMult", cfg.stepMult ?? 0.2);
-  // Presentation-level fields: default per calibration state when unset, and
-  // clamp a value carried from the other calibration state into range.
-  const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
-  const levelDefault = cal ? 65 : 0;
-  // Default only when nothing is saved; an existing value is shown as-is
-  // (no range clamping — genuine clipping is warned per presentation instead).
-  const clampLevel = (v) => {
-    const n = Number(v);
-    return isFinite(n) ? n : levelDefault;
-  };
-  set("setSnrNoiseLevel", clampLevel(cfg.snrNoiseLevel ?? levelDefault));
-  set("setLpfLevel", clampLevel(cfg.lpfLevel ?? levelDefault));
   set("setNTrials", cfg.nTrials ?? 33);
   set("setA", cfg.A ?? 4);
   set("setTarget", ((cfg.target ?? 0.625) * 100).toFixed(1) + "%");
@@ -929,12 +911,6 @@ function readSetupForm() {
     a2Doubling: !!(document.getElementById("setA2Doubling") || {}).checked,
     slopeHint: isLinear ? 6 : 43,
     stepMult,   // undefined unless SNR
-    // SNR noise presentation level (dB(A) if calibrated, else dB FS attenuation).
-    // Stored for all modes but only consumed in SNR.
-    snrNoiseLevel: num("setSnrNoiseLevel", (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated()) ? 65 : 0),
-    // LPF presentation level (dB(A) if calibrated, else dB FS attenuation).
-    // Consumed in LPF mode.
-    lpfLevel: num("setLpfLevel", (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated()) ? 65 : 0),
     routing: val("setRouting") || "binaural"
   };
 }
@@ -1079,4 +1055,51 @@ function setupSetupScreen() {
     updateDirtyUI();
     showScreen("intro");
   };
+}
+
+
+// --- Presentation level (front page + normalisation screen) -------------------
+// One shared level (Calibration.presentationLevel): dB(A) when calibrated, dB re
+// full scale when not, stored separately for each so a number never changes
+// meaning. Speech level for training/LPF, noise level for SNR, starting level
+// for quiet mode.
+function refreshLevelUI() {
+  if (typeof Calibration === "undefined" || !Calibration.presentationLevel) return;
+  const cal = Calibration.isCalibrated();
+  const unit = cal ? "dB A" : "dB re full scale";
+  const v = Calibration.presentationLevel();
+  const mode = (typeof config !== "undefined" && config && config.adaptive && config.adaptive.mode) || "lpf";
+  const setText = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  for (const id of ["levelInput", "csLevel"]) {
+    const el = document.getElementById(id);
+    if (el && document.activeElement !== el) el.value = v;
+  }
+  setText("levelLabel", `Level (${unit})`);
+  setText("csLevelLabel", `Level (${unit}; noise level in SNR mode)`);
+  setText("levelHint",
+    (mode === "quiet" ? "Quiet mode: the starting level. "
+      : mode === "snr" ? "Noise (SNR) mode: the noise level; words are presented relative to it. "
+      : "") +
+    "Training plays at this level." +
+    (cal ? "" : " Uncalibrated: 0 = full scale; device volume sets the absolute level."));
+}
+
+function setupLevelControls() {
+  const mirror = (src) => {
+    const n = parseFloat(src.value);
+    if (!Number.isFinite(n) || typeof Calibration === "undefined") return;
+    Calibration.setPresentationLevel(n);
+    for (const id of ["levelInput", "csLevel"]) {
+      const el = document.getElementById(id);
+      if (el && el !== src) el.value = n;
+    }
+  };
+  for (const id of ["levelInput", "csLevel"]) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", () => mirror(el));
+  }
+  document.addEventListener("uc4afc:screen", (e) => {
+    if (e.detail === "intro" || e.detail === "conststim") refreshLevelUI();
+  });
+  refreshLevelUI();
 }

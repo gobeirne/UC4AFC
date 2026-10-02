@@ -429,14 +429,8 @@ function csNextTrial() {
 
 // LPF presentation — mirrors the adaptive LPF branch in flow/bundle.
 function csPlayLpf(item, level, calibrated, routing, offset, revealOptions) {
-  const lpfLevel = Number(
-    (config && config.adaptive && isFinite(config.adaptive.lpfLevel))
-      ? config.adaptive.lpfLevel
-      : (calibrated ? 65 : 0)
-  );
-  const extraGainDb = calibrated
-    ? Calibration.gainDbForLevel(lpfLevel, routing)
-    : lpfLevel;   // dB re full scale; clipping is warned (engine), not floored
+  // Shared presentation level (front page / this screen) = the speech level.
+  const extraGainDb = Calibration.gainDbForPresentation(Calibration.presentationLevel(), routing);
 
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
     cutoffHz: level,
@@ -448,14 +442,8 @@ function csPlayLpf(item, level, calibrated, routing, offset, revealOptions) {
 
 // SNR presentation — mirrors the adaptive SNR branch in the bundle.
 function csPlaySnr(item, snrDb, calibrated, routing, offset, revealOptions) {
-  const noiseLevelSetting = Number(
-    (config && config.adaptive && isFinite(config.adaptive.snrNoiseLevel))
-      ? config.adaptive.snrNoiseLevel
-      : (calibrated ? 65 : 0)
-  );
-  const noiseGainDb = calibrated
-    ? Calibration.gainDbForLevel(noiseLevelSetting, routing)
-    : noiseLevelSetting;
+  // Shared presentation level = the NOISE level; the word sits at noise + SNR.
+  const noiseGainDb = Calibration.gainDbForPresentation(Calibration.presentationLevel(), routing);
   const noiseUrl = (config && config.snrNoiseFile)
     ? `sounds/${config.snrNoiseFile}` : "sounds/noise.mp3";
 
@@ -609,15 +597,8 @@ function csSaveResults(note) {
   lines.push(`# Total presentations\t${CS.logRows.length}`);
   lines.push(`# Break every\t${CS.breakEvery || "off"}`);
   lines.push(`# Routing\t${CS.ear || (config && config.routing) || "binaural"}`);
-  if (CS.mode === "snr") {
-    const nl = (config && config.adaptive && isFinite(config.adaptive.snrNoiseLevel))
-      ? config.adaptive.snrNoiseLevel : (calibrated ? 65 : 0);
-    lines.push(`# SNR noise level\t${nl}${calibrated ? " dB(A)" : " dB FS"}`);
-  } else {
-    const ll = (config && config.adaptive && isFinite(config.adaptive.lpfLevel))
-      ? config.adaptive.lpfLevel : (calibrated ? 65 : 0);
-    lines.push(`# LPF presentation level\t${ll}${calibrated ? " dB(A)" : " dB FS"}`);
-  }
+  lines.push(`# ${CS.mode === "snr" ? "Noise level" : "Presentation level"}\t` +
+    `${Calibration.presentationLevel()} ${Calibration.levelUnit()}`);
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
     lines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
   }

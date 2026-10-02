@@ -8,6 +8,8 @@ export function showScreen(id) {
   screens.forEach(s => s.style.display = "none");
   const target = document.getElementById(id);
   if (target) target.style.display = "block";
+  // Let other modules react to screen changes (e.g. refresh the level fields).
+  try { document.dispatchEvent(new CustomEvent("uc4afc:screen", { detail: id })); } catch (_) {}
 }
 
 export function adjustImageSize() {

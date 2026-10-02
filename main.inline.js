@@ -1381,6 +1381,38 @@ function gainDbForLevel(levelDbA, ear) {
   return 0;
 }
 
+// ---- Presentation level (front page / normalisation screen) -----------------
+// ONE level used by every mode: the speech level (training, LPF, normalisation
+// LPF), the NOISE level (SNR modes; word = noise + SNR), and the STARTING level
+// in quiet mode. Stored separately for the two calibration states so a number
+// never changes meaning: dB(A) when calibrated, dB re full scale when not.
+const LEVEL_KEY = "uc4afc_presentation_level";
+const LEVEL_DEFAULTS = { dbA: 65, dbFS: 0 };
+function readLevels() {
+  try { return { ...LEVEL_DEFAULTS, ...(JSON.parse(localStorage.getItem(LEVEL_KEY)) || {}) }; }
+  catch (_) { return { ...LEVEL_DEFAULTS }; }
+}
+function presentationLevel() {
+  const s = readLevels();
+  const v = Number(cal.isCalibrated ? s.dbA : s.dbFS);
+  return Number.isFinite(v) ? v : (cal.isCalibrated ? LEVEL_DEFAULTS.dbA : LEVEL_DEFAULTS.dbFS);
+}
+function setPresentationLevel(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return false;
+  const s = readLevels();
+  if (cal.isCalibrated) s.dbA = n; else s.dbFS = n;
+  try { localStorage.setItem(LEVEL_KEY, JSON.stringify(s)); } catch (_) {}
+  return true;
+}
+function levelUnit() { return cal.isCalibrated ? "dB(A)" : "dB re full scale"; }
+// Gain (dB) to present at `level`: calibrated -> exactly level - reference;
+// uncalibrated -> the level itself (dB re full scale). Clipping is warned by
+// the audio engine, never clamped.
+function gainDbForPresentation(level, ear) {
+  return cal.isCalibrated ? gainDbForLevel(level, ear) : Number(level);
+}
+
 function setCurrentSliderDb(db) {
   cal.currentSliderDb = db;
   persist();
@@ -1528,7 +1560,8 @@ if (typeof window !== "undefined") {
     loadStored, readStored, confirmStored, calibrationHeader,
     levelBounds, clampLevel,
     calMethod, calMethodInfo, isPerChannel, setMethod,
-    moreLevelAdvice, lessLevelAdvice, CAL_METHODS, setProfile
+    moreLevelAdvice, lessLevelAdvice, CAL_METHODS, setProfile,
+    presentationLevel, setPresentationLevel, levelUnit, gainDbForPresentation
   };
 }
 
@@ -2263,6 +2296,8 @@ function showScreen(id) {
   screens.forEach(s => s.style.display = "none");
   const target = document.getElementById(id);
   if (target) target.style.display = "block";
+  // Let other modules react to screen changes (e.g. refresh the level fields).
+  try { document.dispatchEvent(new CustomEvent("uc4afc:screen", { detail: id })); } catch (_) {}
 }
 
 function adjustImageSize() {
@@ -2342,7 +2377,13 @@ let trainingAborted = false;
 // unfiltered at a fixed level, e.g. training or a non-adaptive run).
 let track = null;
 let currentCutoffHz = null;   // pending trial's adaptive value (Hz LPF / dB quiet)
-let quietStartLevel = null;   // quiet-mode start level (dB), for uncalibrated relative gain
+// Shared presentation level (front page): dB(A) calibrated / dB re full scale
+// uncalibrated. Speech level for training/LPF, noise level for SNR, starting
+// level for quiet mode.
+const presLevel = () => (typeof Calibration !== "undefined" && Calibration.presentationLevel)
+  ? Calibration.presentationLevel() : 0;
+const presGainDb = (level, routing) => (typeof Calibration !== "undefined" && Calibration.gainDbForPresentation)
+  ? Calibration.gainDbForPresentation(level, routing) : Number(level);
 
 let lastBreakAt = -1;  // remember the index where we last stopped for a break
 
@@ -2391,13 +2432,11 @@ function beginPhase(p) {
       // Exactly the Setup value — no hidden "relative" shift (that old feature
       // has no Setup control, so a stale saved value could silently move the
       // start, e.g. 1000 Hz -> 250 Hz while Setup still showed 1000).
-      const startVal = isLinear
-        ? (adaptive.startValue ?? adaptive.start ?? (isSnr ? 2 : 65))
+      // Quiet mode starts at the shared presentation level; SNR at the Setup
+      // starting SNR; LPF at the Setup starting cutoff.
+      const startVal = isQuiet ? presLevel()
+        : isSnr ? (adaptive.startValue ?? 2)
         : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
-
-      // quietStartLevel doubles as the uncalibrated relative-gain anchor for
-      // BOTH linear modes (quiet's level and snr's noise level).
-      quietStartLevel = isLinear ? startVal : null;
       const trackCfg = resolveTrackConfig(adaptive, startVal);
       track = createTrack(trackCfg);
       currentCutoffHz = track.currentValue();
@@ -2428,9 +2467,11 @@ const item = list[trialIndex];
   // cutoff in Step 5. Reveal the training image `revealMs` after the buffer
   // starts (each file has ~600 ms leading silence, so this lands as the word
   // arrives), matching the original timing.
+  const trainRouting = (config && config.routing) || "binaural";
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
     cutoffHz: null,
-    routing: (config && config.routing) || "binaural",
+    extraGainDb: presGainDb(presLevel(), trainRouting),   // shared presentation level
+    routing: trainRouting,
     onStarted: () => {
       if (trainingAborted) return;
       setTimeout(() => {
@@ -2607,14 +2648,7 @@ if (phase === "test") {
     // the SNR noise file (noise.mp3) at the Setup SNR noise level, and the word
     // sits snrDb above/below it. Previously this used config.calibFile, which is
     // the 1 kHz CALIBRATION TONE, and the calibration slider level.
-    const noiseLevelSetting = Number(
-      (config && config.adaptive && isFinite(config.adaptive.snrNoiseLevel))
-        ? config.adaptive.snrNoiseLevel
-        : (calibrated ? 65 : 0)
-    );
-    const noiseGainDb = calibrated
-      ? Calibration.gainDbForLevel(noiseLevelSetting, routing)
-      : noiseLevelSetting;             // dB re full scale; clipping is warned, not floored
+    const noiseGainDb = presGainDb(presLevel(), routing);   // shared level = NOISE level
     const noiseUrl = (config && config.snrNoiseFile)
       ? `sounds/${config.snrNoiseFile}` : "sounds/noise.mp3";
 
@@ -2653,28 +2687,15 @@ if (phase === "test") {
 
   if (phase === "test" && track && isQuiet) {
     // Quiet mode: value is a dB level.
-    const level = currentCutoffHz; // (mode-neutral value; dB here)
-    if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(level, routing);
-    } else {
-      // Uncalibrated: play relative to the start level (start = unity).
-      extraGainDb = level - (quietStartLevel ?? level);
-    }
+    // dB(A) when calibrated, dB re full scale when not (the track started at
+    // the shared presentation level in the same unit).
+    extraGainDb = presGainDb(currentCutoffHz, routing);
   } else {
     // LPF mode (or non-adaptive): filter at the cutoff; presentation level from
     // the dedicated LPF level setting. Calibrated -> dB(A) via the curve;
     // uncalibrated -> dB FS attenuation (<= 0), device volume sets absolute level.
     cutoffHz = (phase === "test" && track) ? currentCutoffHz : null;
-    const lpfLevel = Number(
-      (config && config.adaptive && isFinite(config.adaptive.lpfLevel))
-        ? config.adaptive.lpfLevel
-        : (calibrated ? 65 : 0)
-    );
-    if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(lpfLevel, routing);
-    } else {
-      extraGainDb = lpfLevel;   // dB re full scale; clipping is warned (engine), not floored
-    }
+    extraGainDb = presGainDb(presLevel(), routing);     // shared presentation level
   }
 
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
@@ -3569,14 +3590,8 @@ function csNextTrial() {
 
 // LPF presentation — mirrors the adaptive LPF branch in flow/bundle.
 function csPlayLpf(item, level, calibrated, routing, offset, revealOptions) {
-  const lpfLevel = Number(
-    (config && config.adaptive && isFinite(config.adaptive.lpfLevel))
-      ? config.adaptive.lpfLevel
-      : (calibrated ? 65 : 0)
-  );
-  const extraGainDb = calibrated
-    ? Calibration.gainDbForLevel(lpfLevel, routing)
-    : lpfLevel;   // dB re full scale; clipping is warned (engine), not floored
+  // Shared presentation level (front page / this screen) = the speech level.
+  const extraGainDb = Calibration.gainDbForPresentation(Calibration.presentationLevel(), routing);
 
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
     cutoffHz: level,
@@ -3588,14 +3603,8 @@ function csPlayLpf(item, level, calibrated, routing, offset, revealOptions) {
 
 // SNR presentation — mirrors the adaptive SNR branch in the bundle.
 function csPlaySnr(item, snrDb, calibrated, routing, offset, revealOptions) {
-  const noiseLevelSetting = Number(
-    (config && config.adaptive && isFinite(config.adaptive.snrNoiseLevel))
-      ? config.adaptive.snrNoiseLevel
-      : (calibrated ? 65 : 0)
-  );
-  const noiseGainDb = calibrated
-    ? Calibration.gainDbForLevel(noiseLevelSetting, routing)
-    : noiseLevelSetting;
+  // Shared presentation level = the NOISE level; the word sits at noise + SNR.
+  const noiseGainDb = Calibration.gainDbForPresentation(Calibration.presentationLevel(), routing);
   const noiseUrl = (config && config.snrNoiseFile)
     ? `sounds/${config.snrNoiseFile}` : "sounds/noise.mp3";
 
@@ -3749,15 +3758,8 @@ function csSaveResults(note) {
   lines.push(`# Total presentations\t${CS.logRows.length}`);
   lines.push(`# Break every\t${CS.breakEvery || "off"}`);
   lines.push(`# Routing\t${CS.ear || (config && config.routing) || "binaural"}`);
-  if (CS.mode === "snr") {
-    const nl = (config && config.adaptive && isFinite(config.adaptive.snrNoiseLevel))
-      ? config.adaptive.snrNoiseLevel : (calibrated ? 65 : 0);
-    lines.push(`# SNR noise level\t${nl}${calibrated ? " dB(A)" : " dB FS"}`);
-  } else {
-    const ll = (config && config.adaptive && isFinite(config.adaptive.lpfLevel))
-      ? config.adaptive.lpfLevel : (calibrated ? 65 : 0);
-    lines.push(`# LPF presentation level\t${ll}${calibrated ? " dB(A)" : " dB FS"}`);
-  }
+  lines.push(`# ${CS.mode === "snr" ? "Noise level" : "Presentation level"}\t` +
+    `${Calibration.presentationLevel()} ${Calibration.levelUnit()}`);
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
     lines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
   }
@@ -4388,7 +4390,9 @@ function saveResults(optionalNote = "") {
   const adaptiveCfg = (config && config.adaptive) ? config.adaptive : null;
   const mode = (adaptiveCfg && adaptiveCfg.mode) || "lpf";
   const isLinear = (mode === "quiet" || mode === "snr");
-  const unit = (mode === "snr") ? "dB SNR" : (mode === "quiet") ? "dB" : "Hz";
+  const hasCal = (typeof Calibration !== "undefined" && Calibration.presentationLevel);
+  const lvlUnit = hasCal ? Calibration.levelUnit() : "dB";
+  const unit = (mode === "snr") ? "dB SNR" : (mode === "quiet") ? lvlUnit : "Hz";
   const stepUnit = isLinear ? "dB" : "dec";
   const valOf = (r) => (typeof r.value === "number" ? r.value : r.cutoffHz);
   const estOf = (r) => (typeof r.estimate === "number" ? r.estimate : r.estimateHz);
@@ -4408,9 +4412,9 @@ function saveResults(optionalNote = "") {
   ];
 
   if (isAdaptive && adaptiveCfg) {
-    const startShown = isLinear
-      ? (adaptiveCfg.startValue ?? adaptiveCfg.start ?? "")
-      : (adaptiveCfg.startValue ?? adaptiveCfg.startCutoffHz ?? "");
+    // The value actually presented on trial 1 (quiet mode starts at the shared
+    // presentation level, so this is exact for every mode).
+    const startShown = responseLog.length ? (valOf(responseLog[0]) ?? "") : "";
     txtLines.push(
       `# Mode\t${mode}`,
       `# Procedure\t${adaptiveCfg.procedure}`,
@@ -4424,17 +4428,13 @@ function saveResults(optionalNote = "") {
       `# Routing\t${(config && config.routing) || "binaural"}`,
       `# Threshold estimate (${unit})\t${lastEstimate != null ? lastEstimate : "n/a"}`
     );
-    if (mode === "snr") {
-      // In SNR mode the noise sits at the fixed presentation level; document it
-      // (the calibrated dB(A), else "uncalibrated") and the step multiplier.
-      const noiseLevel = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated())
-        ? `${Calibration.state().currentSliderDb} dB(A)`
-        : "uncalibrated (device volume sets level)";
-      txtLines.push(
-        `# Noise level (fixed)\t${noiseLevel}`,
-        `# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`
-      );
+    // The shared presentation level: the noise level in SNR mode (word = noise
+    // + SNR), the speech level in LPF mode. (Quiet mode's level is the track.)
+    if (hasCal && mode !== "quiet") {
+      txtLines.push(`# ${mode === "snr" ? "Noise level (fixed)" : "Presentation level"}\t` +
+        `${Calibration.presentationLevel()} ${lvlUnit}`);
     }
+    if (mode === "snr") txtLines.push(`# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`);
   }
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
     txtLines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
@@ -4854,6 +4854,7 @@ if (breakEveryInput) {
     refreshCalStatus();
   };
   setupCalibrationScreen();
+  setupLevelControls();      // after the preset (and its calibration) is active
 
   // Setup screen (adaptive controls)
   const setupBtn = document.getElementById("setupBtn");
@@ -5292,7 +5293,7 @@ function showModeButtons(mode) {
   if (snrBlock) snrBlock.hidden = (mode !== "snr");
   // The LPF presentation-level block: LPF only. In quiet the level IS the
   // adaptive variable, and SNR sets its level in the noise block.
-  const lpfLevelBlock = document.getElementById("lpfLevelBlock");
+  const lpfLevelBlock = document.getElementById("lpfLevelBlock");   // filter block (verify tool)
   if (lpfLevelBlock) lpfLevelBlock.hidden = (mode !== "lpf");
 }
 
@@ -5307,8 +5308,12 @@ function applyModeLabels(mode) {
   // SNR noise-level label depends on calibration: dB(A) when calibrated, else a
   // dB FS attenuation the operator sets (device volume does the rest).
   const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
-  setText("lblSnrNoiseLevel", cal ? "Noise level (dB A)" : "Noise level (dB FS attenuation)");
-  setText("lblLpfLevel", cal ? "Level (dB A)" : "Level (dB FS attenuation)");
+  // Quiet mode starts at the shared presentation level (front page), so its
+  // start field is replaced by a note.
+  const sw = document.getElementById("setStartCutoffWrap");
+  if (sw) sw.hidden = isQuiet;
+  const qn = document.getElementById("quietStartNote");
+  if (qn) qn.hidden = !isQuiet;
   document.querySelectorAll(".lblStepUnit-wd").forEach(e => e.textContent = `Working down step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-wu").forEach(e => e.textContent = `Working up step (${stepUnit})`);
   document.querySelectorAll(".lblStepUnit-id").forEach(e => e.textContent = `Initial down step (${stepUnit})`);
@@ -5319,17 +5324,6 @@ function applyModeLabels(mode) {
   if (sc) {
     if (isSnr || isQuiet) { sc.removeAttribute("min"); sc.removeAttribute("max"); sc.step = 1; }
     else { sc.min = 75; sc.max = 20000; sc.step = 10; }
-  }
-  // Presentation-level fields: no min/max (nothing is clamped; genuine output
-  // clipping is warned per presentation in the console). NEVER rewrite the
-  // user's entered value here (that caused -20 -> 0). Defaults: fillFormFromCfg.
-  const nl = document.getElementById("setSnrNoiseLevel");
-  if (nl) {
-    nl.removeAttribute("min"); nl.removeAttribute("max"); nl.step = 1;
-  }
-  const ll = document.getElementById("setLpfLevel");
-  if (ll) {
-    ll.removeAttribute("min"); ll.removeAttribute("max"); ll.step = 1;
   }
   // Step inputs: fine in SNR (small dB), medium in quiet, very fine in LPF.
   ["setWorkDown","setWorkUp","setInitDown","setInitUp"].forEach(id => {
@@ -5353,18 +5347,6 @@ function fillFormFromCfg(cfg) {
   : isQuiet ? (cfg.startValue ?? 65)
   : (cfg.startValue ?? cfg.startCutoffHz ?? 1000));
   set("setSnrStepMult", cfg.stepMult ?? 0.2);
-  // Presentation-level fields: default per calibration state when unset, and
-  // clamp a value carried from the other calibration state into range.
-  const cal = (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated());
-  const levelDefault = cal ? 65 : 0;
-  // Default only when nothing is saved; an existing value is shown as-is
-  // (no range clamping — genuine clipping is warned per presentation instead).
-  const clampLevel = (v) => {
-    const n = Number(v);
-    return isFinite(n) ? n : levelDefault;
-  };
-  set("setSnrNoiseLevel", clampLevel(cfg.snrNoiseLevel ?? levelDefault));
-  set("setLpfLevel", clampLevel(cfg.lpfLevel ?? levelDefault));
   set("setNTrials", cfg.nTrials ?? 33);
   set("setA", cfg.A ?? 4);
   set("setTarget", ((cfg.target ?? 0.625) * 100).toFixed(1) + "%");
@@ -5456,12 +5438,6 @@ function readSetupForm() {
     a2Doubling: !!(document.getElementById("setA2Doubling") || {}).checked,
     slopeHint: isLinear ? 6 : 43,
     stepMult,   // undefined unless SNR
-    // SNR noise presentation level (dB(A) if calibrated, else dB FS attenuation).
-    // Stored for all modes but only consumed in SNR.
-    snrNoiseLevel: num("setSnrNoiseLevel", (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated()) ? 65 : 0),
-    // LPF presentation level (dB(A) if calibrated, else dB FS attenuation).
-    // Consumed in LPF mode.
-    lpfLevel: num("setLpfLevel", (typeof Calibration !== "undefined" && Calibration.isCalibrated && Calibration.isCalibrated()) ? 65 : 0),
     routing: val("setRouting") || "binaural"
   };
 }
@@ -5606,6 +5582,53 @@ function setupSetupScreen() {
     updateDirtyUI();
     showScreen("intro");
   };
+}
+
+
+// --- Presentation level (front page + normalisation screen) -------------------
+// One shared level (Calibration.presentationLevel): dB(A) when calibrated, dB re
+// full scale when not, stored separately for each so a number never changes
+// meaning. Speech level for training/LPF, noise level for SNR, starting level
+// for quiet mode.
+function refreshLevelUI() {
+  if (typeof Calibration === "undefined" || !Calibration.presentationLevel) return;
+  const cal = Calibration.isCalibrated();
+  const unit = cal ? "dB A" : "dB re full scale";
+  const v = Calibration.presentationLevel();
+  const mode = (typeof config !== "undefined" && config && config.adaptive && config.adaptive.mode) || "lpf";
+  const setText = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  for (const id of ["levelInput", "csLevel"]) {
+    const el = document.getElementById(id);
+    if (el && document.activeElement !== el) el.value = v;
+  }
+  setText("levelLabel", `Level (${unit})`);
+  setText("csLevelLabel", `Level (${unit}; noise level in SNR mode)`);
+  setText("levelHint",
+    (mode === "quiet" ? "Quiet mode: the starting level. "
+      : mode === "snr" ? "Noise (SNR) mode: the noise level; words are presented relative to it. "
+      : "") +
+    "Training plays at this level." +
+    (cal ? "" : " Uncalibrated: 0 = full scale; device volume sets the absolute level."));
+}
+
+function setupLevelControls() {
+  const mirror = (src) => {
+    const n = parseFloat(src.value);
+    if (!Number.isFinite(n) || typeof Calibration === "undefined") return;
+    Calibration.setPresentationLevel(n);
+    for (const id of ["levelInput", "csLevel"]) {
+      const el = document.getElementById(id);
+      if (el && el !== src) el.value = n;
+    }
+  };
+  for (const id of ["levelInput", "csLevel"]) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", () => mirror(el));
+  }
+  document.addEventListener("uc4afc:screen", (e) => {
+    if (e.detail === "intro" || e.detail === "conststim") refreshLevelUI();
+  });
+  refreshLevelUI();
 }
 
 

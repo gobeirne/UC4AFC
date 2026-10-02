@@ -27,7 +27,13 @@ let trainingAborted = false;
 // unfiltered at a fixed level, e.g. training or a non-adaptive run).
 let track = null;
 let currentCutoffHz = null;   // pending trial's adaptive value (Hz LPF / dB quiet)
-let quietStartLevel = null;   // quiet-mode start level (dB), for uncalibrated relative gain
+// Shared presentation level (front page): dB(A) calibrated / dB re full scale
+// uncalibrated. Speech level for training/LPF, noise level for SNR, starting
+// level for quiet mode.
+const presLevel = () => (typeof Calibration !== "undefined" && Calibration.presentationLevel)
+  ? Calibration.presentationLevel() : 0;
+const presGainDb = (level, routing) => (typeof Calibration !== "undefined" && Calibration.gainDbForPresentation)
+  ? Calibration.gainDbForPresentation(level, routing) : Number(level);
 
 let lastBreakAt = -1;  // remember the index where we last stopped for a break
 
@@ -76,13 +82,11 @@ export function beginPhase(p) {
       // Exactly the Setup value — no hidden "relative" shift (that old feature
       // has no Setup control, so a stale saved value could silently move the
       // start, e.g. 1000 Hz -> 250 Hz while Setup still showed 1000).
-      const startVal = isLinear
-        ? (adaptive.startValue ?? adaptive.start ?? (isSnr ? 2 : 65))
+      // Quiet mode starts at the shared presentation level; SNR at the Setup
+      // starting SNR; LPF at the Setup starting cutoff.
+      const startVal = isQuiet ? presLevel()
+        : isSnr ? (adaptive.startValue ?? 2)
         : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
-
-      // quietStartLevel doubles as the uncalibrated relative-gain anchor for
-      // BOTH linear modes (quiet's level and snr's noise level).
-      quietStartLevel = isLinear ? startVal : null;
       const trackCfg = resolveTrackConfig(adaptive, startVal);
       track = createTrack(trackCfg);
       currentCutoffHz = track.currentValue();
@@ -113,9 +117,11 @@ const item = list[trialIndex];
   // cutoff in Step 5. Reveal the training image `revealMs` after the buffer
   // starts (each file has ~600 ms leading silence, so this lands as the word
   // arrives), matching the original timing.
+  const trainRouting = (config && config.routing) || "binaural";
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {
     cutoffHz: null,
-    routing: (config && config.routing) || "binaural",
+    extraGainDb: presGainDb(presLevel(), trainRouting),   // shared presentation level
+    routing: trainRouting,
     onStarted: () => {
       if (trainingAborted) return;
       setTimeout(() => {
@@ -292,14 +298,7 @@ if (phase === "test") {
     // the SNR noise file (noise.mp3) at the Setup SNR noise level, and the word
     // sits snrDb above/below it. Previously this used config.calibFile, which is
     // the 1 kHz CALIBRATION TONE, and the calibration slider level.
-    const noiseLevelSetting = Number(
-      (config && config.adaptive && isFinite(config.adaptive.snrNoiseLevel))
-        ? config.adaptive.snrNoiseLevel
-        : (calibrated ? 65 : 0)
-    );
-    const noiseGainDb = calibrated
-      ? Calibration.gainDbForLevel(noiseLevelSetting, routing)
-      : noiseLevelSetting;             // dB re full scale; clipping is warned, not floored
+    const noiseGainDb = presGainDb(presLevel(), routing);   // shared level = NOISE level
     const noiseUrl = (config && config.snrNoiseFile)
       ? `sounds/${config.snrNoiseFile}` : "sounds/noise.mp3";
 
@@ -338,28 +337,15 @@ if (phase === "test") {
 
   if (phase === "test" && track && isQuiet) {
     // Quiet mode: value is a dB level.
-    const level = currentCutoffHz; // (mode-neutral value; dB here)
-    if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(level, routing);
-    } else {
-      // Uncalibrated: play relative to the start level (start = unity).
-      extraGainDb = level - (quietStartLevel ?? level);
-    }
+    // dB(A) when calibrated, dB re full scale when not (the track started at
+    // the shared presentation level in the same unit).
+    extraGainDb = presGainDb(currentCutoffHz, routing);
   } else {
     // LPF mode (or non-adaptive): filter at the cutoff; presentation level from
     // the dedicated LPF level setting. Calibrated -> dB(A) via the curve;
     // uncalibrated -> dB FS attenuation (<= 0), device volume sets absolute level.
     cutoffHz = (phase === "test" && track) ? currentCutoffHz : null;
-    const lpfLevel = Number(
-      (config && config.adaptive && isFinite(config.adaptive.lpfLevel))
-        ? config.adaptive.lpfLevel
-        : (calibrated ? 65 : 0)
-    );
-    if (calibrated) {
-      extraGainDb = Calibration.gainDbForLevel(lpfLevel, routing);
-    } else {
-      extraGainDb = lpfLevel;   // dB re full scale; clipping is warned (engine), not floored
-    }
+    extraGainDb = presGainDb(presLevel(), routing);     // shared presentation level
   }
 
   AudioEngine.playStimulus(item.correct, `sounds/${item.audioFile}`, {

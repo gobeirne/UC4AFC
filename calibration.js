@@ -254,6 +254,38 @@ function gainDbForLevel(levelDbA, ear) {
   return 0;
 }
 
+// ---- Presentation level (front page / normalisation screen) -----------------
+// ONE level used by every mode: the speech level (training, LPF, normalisation
+// LPF), the NOISE level (SNR modes; word = noise + SNR), and the STARTING level
+// in quiet mode. Stored separately for the two calibration states so a number
+// never changes meaning: dB(A) when calibrated, dB re full scale when not.
+const LEVEL_KEY = "uc4afc_presentation_level";
+const LEVEL_DEFAULTS = { dbA: 65, dbFS: 0 };
+function readLevels() {
+  try { return { ...LEVEL_DEFAULTS, ...(JSON.parse(localStorage.getItem(LEVEL_KEY)) || {}) }; }
+  catch (_) { return { ...LEVEL_DEFAULTS }; }
+}
+function presentationLevel() {
+  const s = readLevels();
+  const v = Number(cal.isCalibrated ? s.dbA : s.dbFS);
+  return Number.isFinite(v) ? v : (cal.isCalibrated ? LEVEL_DEFAULTS.dbA : LEVEL_DEFAULTS.dbFS);
+}
+function setPresentationLevel(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return false;
+  const s = readLevels();
+  if (cal.isCalibrated) s.dbA = n; else s.dbFS = n;
+  try { localStorage.setItem(LEVEL_KEY, JSON.stringify(s)); } catch (_) {}
+  return true;
+}
+function levelUnit() { return cal.isCalibrated ? "dB(A)" : "dB re full scale"; }
+// Gain (dB) to present at `level`: calibrated -> exactly level - reference;
+// uncalibrated -> the level itself (dB re full scale). Clipping is warned by
+// the audio engine, never clamped.
+function gainDbForPresentation(level, ear) {
+  return cal.isCalibrated ? gainDbForLevel(level, ear) : Number(level);
+}
+
 function setCurrentSliderDb(db) {
   cal.currentSliderDb = db;
   persist();
@@ -401,7 +433,8 @@ if (typeof window !== "undefined") {
     loadStored, readStored, confirmStored, calibrationHeader,
     levelBounds, clampLevel,
     calMethod, calMethodInfo, isPerChannel, setMethod,
-    moreLevelAdvice, lessLevelAdvice, CAL_METHODS, setProfile
+    moreLevelAdvice, lessLevelAdvice, CAL_METHODS, setProfile,
+    presentationLevel, setPresentationLevel, levelUnit, gainDbForPresentation
   };
 }
 
