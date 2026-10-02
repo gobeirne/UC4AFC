@@ -1559,53 +1559,70 @@ if (typeof window !== "undefined") {
 const HP_KEY = "uc4afc_headphones";
 const HP_DEEMPH_KEY = "uc4afc_hp_deemph";   // "1" = equalise to flat (de-emphasis)
 
+// Raw HATS frequency response of the Sennheiser HD280 Pro (dB), measured with
+// the X-Fi. Its shape is set by the headphones, so it is shared by every chain
+// that uses the HD280.
+const HD280_CURVE = [
+  [0, 12.48784], [50, 12.48784], [100, 4.75783], [150, 4.196114],
+  [200, 0.259988], [250, 0.387803], [300, 0.767491], [350, 0.903058],
+  [400, 0.887052], [450, 0.854083], [500, 0.661139], [550, 0.578238],
+  [600, 0.383544], [650, 0.060629], [700, -0.10318], [750, -0.01785],
+  [800, 0.008676], [850, -0.13003], [900, -0.43919], [950, -0.52313],
+  [1000, -0.28539], [1100, 0.443688], [1200, 0.729564], [1300, 0.259018],
+  [1400, -0.37757], [1500, -0.8873], [1600, -0.7755], [1700, -0.84623],
+  [1800, -0.70259], [1900, -0.24701], [2000, 0.118596], [2250, 0.867295],
+  [2500, 1.553311], [2750, -0.03347], [3000, -4.59946], [3250, -7.9489],
+  [3500, -5.18471], [3750, -2.50899], [4000, -1.82328], [4250, -0.42877],
+  [4500, 0.173617], [4750, 0.48311], [5000, 1.399076], [5250, 4.120973],
+  [5500, 5.748327], [5750, 5.780714], [6000, 5.817753], [6250, 6.559097],
+  [6500, 6.804424], [6750, 6.153435], [7000, 5.80585], [7250, 6.261406],
+  [7500, 7.619856], [7750, 9.180964], [8000, 9.444511], [8250, 9.510284],
+  [8500, 9.278084], [8750, 8.847723], [9000, 8.119021], [9250, 7.291807],
+  [9500, 6.465921], [9750, 5.841209], [10000, 5.217527], [10500, 4.672712],
+  [11000, 3.33047], [11500, 0.889905], [12000, 0.750223], [12500, -1.18928],
+  [13000, -2.12922], [13500, -0.77013], [14000, -0.11249], [14500, -1.15671],
+  [15000, -2.10313], [15500, -2.95206], [16000, -3.10376], [16500, -2.55843],
+  [17000, -3.31627], [17500, -5.67743], [18000, -7.34202], [18500, -9.11014],
+  [19000, -10.0819], [19500, -9.15727], [20000, -9.23637], [20500, -9.11921],
+  [21000, -9.10579], [21500, -9.29613], [22000, -10.4902]
+];
+
 const HEADPHONE_PRESETS = {
   flat: {
-    label: "Other / no headphone correction (flat)",
+    label: "Manual",
     curve: null,
     defaultCal: null
   },
 
   hd280_xfi: {
     label: "Sennheiser HD280 Pro + Sound Blaster X-Fi",
-    // Raw HATS response (dB), HD280 Pro + X-Fi, as used in the LabVIEW chain.
-    curve: [
-      [0, 12.48784], [50, 12.48784], [100, 4.75783], [150, 4.196114],
-      [200, 0.259988], [250, 0.387803], [300, 0.767491], [350, 0.903058],
-      [400, 0.887052], [450, 0.854083], [500, 0.661139], [550, 0.578238],
-      [600, 0.383544], [650, 0.060629], [700, -0.10318], [750, -0.01785],
-      [800, 0.008676], [850, -0.13003], [900, -0.43919], [950, -0.52313],
-      [1000, -0.28539], [1100, 0.443688], [1200, 0.729564], [1300, 0.259018],
-      [1400, -0.37757], [1500, -0.8873], [1600, -0.7755], [1700, -0.84623],
-      [1800, -0.70259], [1900, -0.24701], [2000, 0.118596], [2250, 0.867295],
-      [2500, 1.553311], [2750, -0.03347], [3000, -4.59946], [3250, -7.9489],
-      [3500, -5.18471], [3750, -2.50899], [4000, -1.82328], [4250, -0.42877],
-      [4500, 0.173617], [4750, 0.48311], [5000, 1.399076], [5250, 4.120973],
-      [5500, 5.748327], [5750, 5.780714], [6000, 5.817753], [6250, 6.559097],
-      [6500, 6.804424], [6750, 6.153435], [7000, 5.80585], [7250, 6.261406],
-      [7500, 7.619856], [7750, 9.180964], [8000, 9.444511], [8250, 9.510284],
-      [8500, 9.278084], [8750, 8.847723], [9000, 8.119021], [9250, 7.291807],
-      [9500, 6.465921], [9750, 5.841209], [10000, 5.217527], [10500, 4.672712],
-      [11000, 3.33047], [11500, 0.889905], [12000, 0.750223], [12500, -1.18928],
-      [13000, -2.12922], [13500, -0.77013], [14000, -0.11249], [14500, -1.15671],
-      [15000, -2.10313], [15500, -2.95206], [16000, -3.10376], [16500, -2.55843],
-      [17000, -3.31627], [17500, -5.67743], [18000, -7.34202], [18500, -9.11014],
-      [19000, -10.0819], [19500, -9.15727], [20000, -9.23637], [20500, -9.11921],
-      [21000, -9.10579], [21500, -9.29613], [22000, -10.4902]
-    ],
-    // From the LabVIEW HATS model: calibration noise Leq 61.39 dB EU + 17.6 dB
-    // soundcard gain = 78.99 dB(A) at full volume (Windows, browser, X-Fi at max;
-    // enhancements/effects off).
+    curve: HD280_CURVE,
+    // Measured (GRAS): 90.9 ± 0.9 dB(A), 6 measurements across 3 individuals.
+    // Full volume: Windows, browser and X-Fi at max; enhancements/effects off.
     defaultCal: {
-      level: 78.99,
-      source: "HD280/X-Fi preset (LabVIEW HATS model)"
+      level: 90.9,
+      source: "built-in: GRAS, 90.9 ± 0.9 dB(A), 6 measurements, 3 individuals"
+    }
+  },
+
+  hd280_ugreen: {
+    label: "UGREEN UG-80154 + Sennheiser HD280 Pro",
+    curve: HD280_CURVE,   // headphone-determined shape (measured via the X-Fi)
+    // Measured (GRAS): 89.3 ± 1.1 dB(A), 5 measurements across 2 individuals.
+    defaultCal: {
+      level: 89.3,
+      source: "built-in: GRAS, 89.3 ± 1.1 dB(A), 5 measurements, 2 individuals"
     }
   },
 
   sony_zx110_ugreen: {
-    label: "Sony MDR-ZX110 + UGreen AV161",
-    curve: null,        // TODO: fill from GRAS measurement
-    defaultCal: null    // TODO: enter GRAS noise-calibration level
+    label: "UGREEN UG-80154 + Sony MDR-ZX110",
+    curve: null,        // no frequency-response curve yet (LPF matching is flat)
+    // Measured (GRAS): 82.9 ± 0.9 dB(A), 8 measurements across 3 individuals.
+    defaultCal: {
+      level: 82.9,
+      source: "built-in: GRAS, 82.9 ± 0.9 dB(A), 8 measurements, 3 individuals"
+    }
   }
 };
 
@@ -1633,6 +1650,12 @@ function hpActivate(id) {
   if (typeof Calibration !== "undefined" && Calibration.setProfile) {
     Calibration.setProfile(id);                 // clears in-memory cal, switches slot
     restored = Calibration.loadStored();
+    // A stored value WITH a source came from a built-in preset value (manual
+    // entries have none). If the built-in has since changed, use the new one.
+    if (restored && restored.source && p.defaultCal &&
+        (Number(restored.level) !== p.defaultCal.level || restored.source !== p.defaultCal.source)) {
+      restored = null;
+    }
     if (restored) {
       if (restored.method && Calibration.setMethod) Calibration.setMethod(restored.method);
       Calibration.confirmStored(restored);
@@ -1650,7 +1673,11 @@ function hpActivate(id) {
 // De-emphasis: equalise the selected headphones to a flat response at the ear
 // (played sound filtered by 1/curve; level-scaled so the calibration noise keeps
 // its calibrated dB(A)). Only possible for a preset with a curve.
+// The de-emphasis option is currently hidden in the UI and forced OFF (even if a
+// device previously ticked it). Set DEEMPH_ENABLED = true to bring it back.
+const DEEMPH_ENABLED = false;
 function hpDeemphOn() {
+  if (!DEEMPH_ENABLED) return false;
   try { return localStorage.getItem(HP_DEEMPH_KEY) === "1"; } catch (_) { return false; }
 }
 function hpSetDeemph(on) {
@@ -1672,7 +1699,7 @@ function hpPushToEngine(id) {
 function hpHeader() {
   const id = hpCurrentId(), p = hpPreset(id);
   let eqTxt = "";
-  if (p.curve) {
+  if (p.curve && DEEMPH_ENABLED) {
     const info = (typeof AudioEngine !== "undefined" && AudioEngine.eqInfo) ? AudioEngine.eqInfo() : null;
     eqTxt = hpDeemphOn()
       ? `; equalised to flat (de-emphasis${info && info.scaleDb != null ? `, level scale ${info.scaleDb.toFixed(2)} dB` : ""})`
@@ -5014,10 +5041,9 @@ function setupCalibrationScreen() {
     const dm = document.getElementById("calDeemph");
     if (dm) { dm.disabled = !p.curve; dm.checked = !!p.curve && Headphones.deemphOn(); }
     el.textContent = (p.curve
-      ? (Headphones.deemphOn()
-          ? "Equalised: stimuli are filtered by the inverse headphone response, so they reach the ear with a flat response. Calibrate as usual — the calibration noise always plays un-equalised, and the level is kept."
-          : "Frequency-response curve loaded: low-pass words are loudness-matched as heard through these headphones.")
-      : "No frequency-response curve: low-pass words are loudness-matched digitally (flat); equalisation unavailable.") +
+      ? "Frequency-response curve loaded: low-pass words are loudness-matched as heard through these headphones."
+      : "No frequency-response curve: low-pass words are loudness-matched digitally (flat).") +
+      (p.defaultCal ? ` Built-in calibration ${p.defaultCal.level} dB(A); entering your own measurement replaces it on this device.` : "") +
       " Calibration is stored separately for each preset.";
   };
   if (typeof Headphones !== "undefined") {

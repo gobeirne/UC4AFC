@@ -522,10 +522,9 @@ function setupCalibrationScreen() {
     const dm = document.getElementById("calDeemph");
     if (dm) { dm.disabled = !p.curve; dm.checked = !!p.curve && Headphones.deemphOn(); }
     el.textContent = (p.curve
-      ? (Headphones.deemphOn()
-          ? "Equalised: stimuli are filtered by the inverse headphone response, so they reach the ear with a flat response. Calibrate as usual — the calibration noise always plays un-equalised, and the level is kept."
-          : "Frequency-response curve loaded: low-pass words are loudness-matched as heard through these headphones.")
-      : "No frequency-response curve: low-pass words are loudness-matched digitally (flat); equalisation unavailable.") +
+      ? "Frequency-response curve loaded: low-pass words are loudness-matched as heard through these headphones."
+      : "No frequency-response curve: low-pass words are loudness-matched digitally (flat).") +
+      (p.defaultCal ? ` Built-in calibration ${p.defaultCal.level} dB(A); entering your own measurement replaces it on this device.` : "") +
       " Calibration is stored separately for each preset.";
   };
   if (typeof Headphones !== "undefined") {

@@ -68,7 +68,7 @@
   <div class="cal-method" style="max-width:34rem; margin:0.75rem auto; text-align:left;">
     <label for="calHeadphoneSelect"><strong>Headphones / soundcard</strong></label><br>
     <select id="calHeadphoneSelect" style="margin:0.35rem 0;"></select>
-    <label class="setup-check" style="font-weight:600; margin-top:0.2rem;">
+    <label class="setup-check" style="font-weight:600; margin-top:0.2rem; display:none;" hidden>
       <input type="checkbox" id="calDeemph"> Equalise to a flat response (de-emphasis)
     </label>
     <div id="calHeadphoneHint" class="small" style="margin-top:0.2rem;"></div>
@@ -170,7 +170,7 @@
     <span class="setup-label">Common</span>
     <div class="setup-grid">
       <label id="setStartCutoffWrap"><span id="lblStart">Starting cutoff (Hz)</span>
-        <input id="setStartCutoff" type="number" min="75" max="6000" step="10" value="1000">
+        <input id="setStartCutoff" type="number" min="75" max="20000" step="10" value="1000">
       </label>
       <label>Number of trials
         <input id="setNTrials" type="number" min="1" max="66" value="33">
