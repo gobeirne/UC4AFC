@@ -56,6 +56,8 @@ img { max-width: 100%; }
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body.empty .needs-data { display: none !important; }
 body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5; }
 .wrap { max-width: 72rem; margin: 0 auto; padding-inline: 16px; padding-block: 20px 48px; display: grid; gap: 22px; }
 h1, h2, h3 { margin: 0; text-wrap: balance; line-height: 1.2; }
@@ -155,9 +157,19 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
 #copyFallback { width: 100%; min-height: 8rem; font-family: var(--font-data); font-size: 0.75rem; }
 .method { display: grid; gap: 8px; color: var(--fg-2); font-size: 0.9rem; max-width: 70ch; }
 .progress { font-size: 0.82rem; color: var(--fg-2); }
+.plan-opts { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: end; }
+.plan-opts label { display: grid; gap: 4px; font-size: 0.82rem; color: var(--fg-2); font-weight: 700; }
+.plan-opts input { font: inherit; font-family: var(--font-data); width: 6.5rem; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); min-height: 40px; }
+#planText { width: 100%; min-height: 14rem; font-family: var(--font-data); font-size: 0.78rem; line-height: 1.45; padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--sunk); color: var(--fg); tab-size: 10; white-space: pre; overflow-wrap: normal; overflow-x: auto; }
+#planCheck { display: grid; gap: 2px; }
+#planCheck .err { color: var(--critical); }
+#planCheck .warn { color: var(--serious); }
+#planCheck .ok { color: var(--good); }
+.edited { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 0.85rem; color: var(--fg-2); }
+.planline { font-size: 0.8rem; color: var(--fg-2); }
+.planline b { font-family: var(--font-data); font-weight: 500; color: var(--fg); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
-
 </head>
 <body>
 <div class="wrap">
@@ -175,11 +187,11 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
       <button id="clearBtn" type="button">Clear</button>
       <span class="small muted">or drop files here. Adaptive-test files are skipped; repeated saves of the same run are counted once.</span>
     </div>
-    <div class="banner" id="exampleBanner">Showing <b>example data</b>: 9 simulated participants per mode, not real results. Load your files to replace it.</div>
+    <p class="small muted" id="emptyNote">No files loaded yet. The results appear here once you choose files.</p>
     <div id="loadLog" aria-live="polite"></div>
   </section>
 
-  <div class="toolbar">
+  <div class="toolbar needs-data">
     <div class="seg" role="group" aria-label="Mode">
       <button id="modeSNR" type="button" aria-pressed="true">Noise (SNR) <span class="num" id="cntSNR"></span></button>
       <button id="modeLPF" type="button" aria-pressed="false">Low-pass (LPF) <span class="num" id="cntLPF"></span></button>
@@ -187,9 +199,9 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
     <span class="progress" id="progress" aria-live="polite"></span>
   </div>
 
-  <section class="stats" id="stats" aria-label="Summary"></section>
+  <section class="stats needs-data" id="stats" aria-label="Summary"></section>
 
-  <section class="two">
+  <section class="two needs-data">
     <div class="panel">
       <div>
         <h2>Where each word's 62.5% point falls</h2>
@@ -209,18 +221,54 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
         <span><span class="sw line" style="background:var(--fg-3)"></span>Each participant</span>
         <span><span class="sw line" style="background:var(--accent)"></span>62.5% target</span>
       </div>
+      <p class="small muted" id="avgNote" hidden></p>
     </div>
   </section>
 
-  <section class="panel rec" id="recPanel" aria-label="Range recommendation"></section>
+  <section class="panel rec needs-data" id="recPanel" aria-label="Range recommendation"></section>
 
-  <details class="panel" id="partPanel">
+  <section class="panel needs-data" id="planPanel" aria-labelledby="planH">
+    <div>
+      <h2 id="planH">Level plan</h2>
+      <p class="small muted">Gives each word its own levels, centred where its curve rises, so fewer trials are spent at chance or at ceiling. Words are grouped by their 62.5% point and each group gets the same evenly spaced levels. Check the plan, change any word's levels if you like, then save it and load it on the app's normalisation screen.</p>
+    </div>
+    <div class="plan-opts">
+      <label for="planBands">Groups
+        <select id="planBands">
+          <option value="1">1 (same levels for all)</option>
+          <option value="2">2</option>
+          <option value="3" selected>3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+          <option value="word">Each word its own</option>
+        </select>
+      </label>
+      <label for="planN">Levels per word
+        <input id="planN" type="number" min="2" max="12" step="1" value="6" inputmode="numeric">
+      </label>
+      <label for="planStep"><span id="planStepLabel">Step (dB)</span>
+        <input id="planStep" type="number" min="0.1" step="0.5" value="3" inputmode="decimal">
+      </label>
+    </div>
+    <div class="rec" id="planSummary"></div>
+    <div class="edited" id="planEdited" hidden>You've edited this plan, so it no longer follows the data or the settings above. <button id="planReset" type="button">Start again from the data</button></div>
+    <label class="small muted" for="planText">Plan file. You can edit it here: the app reads each word's levels from the Levels column.</label>
+    <textarea id="planText" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off"></textarea>
+    <div id="planCheck" aria-live="polite"></div>
+    <div class="copyrow">
+      <button id="planSave" type="button" class="primary">Save plan file</button>
+      <button id="planCopy" type="button">Copy plan</button>
+    </div>
+    <p class="small muted">On the app's normalisation screen, choose <b>Per-word levels</b>, then load this file (or paste the text). Each mode has its own plan. If Save does nothing in this browser, use Copy and paste the text on the app's screen.</p>
+  </section>
+
+  <details class="panel needs-data" id="partPanel">
     <summary>Participants and runs <span class="muted small" id="partCount"></span></summary>
     <p class="small muted">Untick a run to leave it out (for example, a run with the wrong calibration, or the researchers' own runs). Everything updates.</p>
     <div class="tablewrap"><table id="partTable"></table></div>
   </details>
 
-  <section class="panel" aria-label="Words">
+  <section class="panel needs-data" aria-label="Words">
     <div class="toolbar" style="justify-content:space-between">
       <h2>Words</h2>
       <label class="small muted" for="sortSel">Sort
@@ -236,7 +284,7 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
     <div class="cards" id="cards"></div>
   </section>
 
-  <section class="panel" aria-label="Copy tables">
+  <section class="panel needs-data" aria-label="Copy tables">
     <h2>Copy for Excel</h2>
     <p class="small muted">Each button copies a tab-separated table; paste it into a blank sheet. Excluded runs are left out.</p>
     <div class="copyrow">
@@ -254,6 +302,7 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
       <p>The <b>62.5% point</b> is the level giving 62.5% correct (halfway from chance to 100%, the adaptive target). Its 95% interval comes from resampling participants 200 times. With 10–20 participants these intervals run slightly narrow (in simulation they held the true value about 90% of the time), so treat them as a guide.</p>
       <p>A word is <b>covered</b> when its function is no more than 20% of the way up at the hardest level tested and at least 80% of the way up at the easiest. Otherwise it needs lower levels (floor not reached), higher levels (top not reached), or both. <b>Low ceiling</b>: the curve levels off within the tested range at below 86% correct, which points to the recording or the foils rather than the levels. With about 10–20 trials per point this is a prompt to listen to the word, not proof; a plateau that sits right at the easiest level tested can also be missed. <b>Too little data</b>: fewer than 30 trials.</p>
       <p>The suggested range for a word runs from 10% to 90% of the way up its function (never below 75 Hz, the app's lowest cutoff). A word whose span is more than three times the typical span is marked too flat to judge. The pooled curve includes differences between listeners, so it is shallower than any one listener's curve, and the ranges are on the generous side. <b>Range needed</b> uses where words' 62.5% points fall, widened at each end by a typical word's spread.</p>
+      <p><b>Level plan</b>: words that can be placed (fitted, not too flat, and with a 62.5% point no more than one step outside the tested range) are sorted by their 62.5% point and split into groups of equal size. Each group's levels are centred on its middle word's 62.5% point, on a grid of whole steps from 0 dB (SNR) or from 1000 Hz (LPF), so groups share levels. SNR levels stop at +9 dB; cutoffs start at 75 Hz or above. A word counts as covered by the plan on the same rule as above, using its own lowest and highest planned level. Runs that used a plan are fitted like any other; they're only left out of the average chart and Average sheet, because different words were played at each level.</p>
     </div>
   </details>
 </div>
@@ -295,7 +344,7 @@ const CORE = (() => {
     return {
       file: name, source: "txt", participant: h["Participant"] || "anon", mode, levels,
       started: h["Started at"] || "", calibration: h["Calibration"] || "", headphones: h["Headphones"] || "",
-      level: h["Noise level"] || h["Presentation level"] || "", note: h["Note"] || "",
+      level: h["Noise level"] || h["Presentation level"] || "", note: h["Note"] || "", plan: h["Level plan"] || "",
       planned: Number(h["Total presentations"]) || null, trials
     };
   }
@@ -307,7 +356,7 @@ const CORE = (() => {
     return {
       file: name, source: "json", participant: d.participant || "anon", mode: String(d.mode || "").toUpperCase() === "LPF" ? "LPF" : "SNR",
       levels: (d.levels || []).map(Number), started: d.startedAt ? new Date(d.startedAt).toLocaleString("en-NZ") : "",
-      calibration: "", headphones: "", level: "", note: d.note || "", planned: null, trials
+      calibration: "", headphones: "", level: "", note: d.note || "", plan: d.plan ? String(d.plan.name || "level plan") : "", planned: null, trials
     };
   }
   function parseFile(name, text) {
@@ -486,9 +535,11 @@ const CORE = (() => {
   // a few very flat, noisy curves can't blow the range up.
   const LPF_FLOOR_X = Math.log2(75);          // the app's lowest cutoff
   function pctl(a, q) { const s = a.slice().sort((x, y) => x - y); if (!s.length) return NaN; const i = (s.length - 1) * q, lo = Math.floor(i), hi = Math.ceil(i); return s[lo] + (s[hi] - s[lo]) * (i - lo); }
-  function rangeSummary(mode, rows, levels) {
+  // stepX: the typical spacing between a run's levels (on the fitting axis), when
+  // known; runs with different level sets would otherwise make it look tiny.
+  function rangeSummary(mode, rows, levels, stepX) {
     const ax = AXES[mode], xs = levels.map(ax.toX);
-    const stp = xs.length > 1 ? (xs[xs.length - 1] - xs[0]) / (xs.length - 1) : 1;
+    const stp = stepX > 0 ? stepX : xs.length > 1 ? (xs[xs.length - 1] - xs[0]) / (xs.length - 1) : 1;
     const fitted = rows.filter(r => r.fit && r.status !== "thin" && r.status !== "ceiling");
     const beyond = fitted.filter(r => r.fit.T < xs[0] - stp || r.fit.T > xs[xs.length - 1] + stp);
     const use = fitted.filter(r => !beyond.includes(r));
@@ -497,7 +548,7 @@ const CORE = (() => {
     const hLo = pctl(use.map(r => r.fit.T - xAtRise(0.1, r.fit)), 0.5);
     const hHi = pctl(use.map(r => xAtRise(0.9, r.fit) - r.fit.T), 0.5);
     const clampLo = x => mode === "LPF" ? Math.max(LPF_FLOOR_X, x) : x;
-    const stepMed = xs.length > 1 ? pctl(xs.slice(1).map((x, i) => x - xs[i]), 0.5) : stp;
+    const stepMed = stepX > 0 ? stepX : xs.length > 1 ? pctl(xs.slice(1).map((x, i) => x - xs[i]), 0.5) : stp;
     return {
       beyond, hLo, hHi, step: stepMed,
       p90: [clampLo(pctl(Ts, 0.05) - hLo), pctl(Ts, 0.95) + hHi],
@@ -507,9 +558,225 @@ const CORE = (() => {
   }
   // A word whose own 10–90% span is over 3× the typical span is too flat (or too
   // noisy) to suggest a range from.
+  function runStep(mode, runs) {
+    const ax = AXES[mode];
+    const st = runs.map(r => { const xs = [...new Set(r.trials.map(t => t.level))].sort((a, b) => a - b).map(ax.toX); return xs.length > 1 ? pctl(xs.slice(1).map((x, i) => x - xs[i]), 0.5) : NaN; }).filter(Number.isFinite);
+    return st.length ? pctl(st, 0.5) : 0;
+  }
   function tooFlat(fit, summ) { return !!(summ && fit && (xAtRise(0.9, fit) - xAtRise(0.1, fit)) > 3 * (summ.hLo + summ.hHi)); }
 
-  return { AXES, FLOOR, LPF_FLOOR_X, rangeSummary, tooFlat, parseFile, dedupe, aggregate, perRunLevels, fitWord, classify, rise, xAtRise, pAt, bootstrap, fmtLevel, fmtX, mulberry32, runKey };
+  // Build a level plan from the fitted words. opts: { bands: 1–5 or "word",
+  // n: levels per word, step: dB (SNR) or octaves (LPF) }. Levels sit on a
+  // common grid (multiples of the step from 0 dB, or from 1000 Hz), so bands
+  // share levels and pooled tables still line up.
+  const BAND_NAMES = { 1: ["all"], 2: ["low", "high"], 3: ["low", "middle", "high"], 4: ["lowest", "low", "high", "highest"], 5: ["lowest", "low", "middle", "high", "highest"] };
+  function planGrid(mode, step) {
+    if (mode === "SNR") {
+      const val = k => { const v = Math.round(k * step * 100) / 100; return v === 0 ? 0 : v; };
+      // −36 to +9 dB SNR: the top keeps the word well clear of clipping
+      return { val, kOf: x => x / step, minK: Math.ceil(-36 / step - 1e-9), maxK: Math.floor(9 / step + 1e-9) };
+    }
+    const hz = k => 1000 * Math.pow(2, k * step);
+    const val = k => { const h = hz(k); return h < 1000 ? Math.round(h / 5) * 5 : Math.round(h / 10) * 10; };
+    let minK = Math.ceil(Math.log2(75 / 1000) / step) - 1;
+    while (val(minK) < 75) minK++;
+    let maxK = Math.floor(Math.log2(8) / step) + 1;
+    while (val(maxK) > 8000) maxK--;
+    return { val, kOf: x => (x - Math.log2(1000)) / step, minK, maxK };
+  }
+  function makePlan(mode, rows, tested, opts = {}) {
+    const ax = AXES[mode];
+    const n = Math.max(2, Math.min(12, Math.round(opts.n || 6)));
+    const step = Math.max(mode === "SNR" ? 0.5 : 0.1, opts.step > 0 ? opts.step : (mode === "SNR" ? 3 : 0.5));
+    const B = opts.bands === "word" ? "word" : Math.max(1, Math.min(5, Math.round(opts.bands || 3)));
+    const G = planGrid(mode, step);
+    const xs = tested.map(ax.toX).sort((a, b) => a - b);
+    const tStep = opts.stepX > 0 ? opts.stepX : xs.length > 1 ? (xs[xs.length - 1] - xs[0]) / (xs.length - 1) : step;
+    const summ = xs.length > 1 ? rangeSummary(mode, rows, tested, opts.stepX) : null;
+    const why = r => !r.fit || r.status === "thin" ? "too little data"
+      : r.fit.T < xs[0] - tStep ? "below the tested range"
+      : r.fit.T > xs[xs.length - 1] + tStep ? "above the tested range"
+      : tooFlat(r.fit, summ) ? "curve too flat" : "";
+    const placed = [], flat = [], unplaced = [];
+    for (const r of rows) { const y = why(r); (y === "curve too flat" ? flat : y ? unplaced : placed).push(r); }
+    placed.sort((a, b) => a.fit.T - b.fit.T);
+    // n consecutive grid points centred on x (shifted up to clear the LPF floor)
+    const fit = k0 => Math.max(G.minK, Math.min(k0, G.maxK - d0 * (n - 1)));
+    let d0 = 1;
+    const inside = ks => ks.filter(k => k >= G.minK && k <= G.maxK);
+    const setAt = (x, d = 1) => { d0 = d; const k0 = fit(Math.round(G.kOf(x) - d * (n - 1) / 2)); return inside(Array.from({ length: n }, (_, i) => k0 + d * i)); };
+    const bands = [], out = [];
+    if (B === "word") {
+      for (const r of placed) out.push({ word: r.word, band: "word", ks: setAt(r.fit.T), r });
+    } else {
+      const names = BAND_NAMES[B];
+      for (let b = 0; b < B; b++) {
+        const mem = placed.filter((_, i) => Math.floor(i * B / placed.length) === b);
+        if (!mem.length) continue;
+        const Ts = mem.map(r => r.fit.T), centre = pctl(Ts, 0.5);
+        const ks = setAt(centre);
+        bands.push({ name: names[b], centre, n: mem.length, from: Ts[0], to: Ts[Ts.length - 1], levels: ks.map(G.val) });
+        for (const r of mem) out.push({ word: r.word, band: names[b], ks, r });
+      }
+    }
+    // A word too flat to place gets levels twice as far apart, centred on its
+    // own 62.5% point. Words outside the tested range, or with too little data,
+    // get one wide set spanning everything planned.
+    for (const r of flat) out.push({ word: r.word, band: "wide", ks: setAt(r.fit.T, 2), r, why: "curve too flat" });
+    let wide = null;
+    if (unplaced.length) {
+      const allK = out.flatMap(o => o.band === "wide" ? [] : o.ks);
+      const kLo = allK.length ? Math.min(...allK) : Math.round(G.kOf(xs[0])), kHi = allK.length ? Math.max(...allK) : Math.round(G.kOf(xs[xs.length - 1]));
+      const d = Math.max(1, Math.ceil((kHi - kLo) / (n - 1)));
+      const ks = new Array(n);
+      d0 = d; const k0 = fit(Math.round((kLo + kHi) / 2 - d * (n - 1) / 2));
+      for (let i = 0; i < n; i++) ks[i] = k0 + d * i;
+      ks.splice(0, ks.length, ...inside(ks));
+      wide = ks.map(G.val);
+      for (const r of unplaced) out.push({ word: r.word, band: "wide", ks, r, why: why(r) });
+    }
+    for (const o of out) {
+      o.levels = o.ks.map(G.val);
+      const f = o.r.fit;
+      o.covered = !!(f && o.why !== "too little data" && rise(ax.toX(o.levels[0]), f) <= 0.2 && rise(ax.toX(o.levels[o.levels.length - 1]), f) >= 0.8);
+      o.coveredNow = !!(f && o.r.status === "good");
+      o.T = f ? f.T : null;
+      delete o.ks; delete o.r;
+    }
+    out.sort((a, b) => a.word.localeCompare(b.word));
+    return { mode, n, step, bands: B, bandList: bands, wide, words: out, nRuns: opts.nRuns || 0 };
+  }
+  function planName(plan, date) {
+    const st = plan.mode === "SNR" ? `${plan.step} dB` : `${plan.step} oct`;
+    const b = plan.bands === "word" ? "per word" : plan.bands === 1 ? "1 band" : `${plan.bands} bands`;
+    return `${plan.mode} · ${b} · ${plan.n} levels, ${st} steps · ${date}${plan.nRuns ? ` · from ${plan.nRuns} runs` : ""}`;
+  }
+  function planText(plan, name) {
+    const unit = plan.mode === "SNR" ? "dB SNR" : "Hz";
+    const fmt = v => plan.mode === "SNR" ? String(v) : String(Math.round(v));
+    const lines = ["# UC4AFC level plan", `# Mode\t${plan.mode}`, `# Name\t${name}`];
+    const un = plan.words.filter(w => w.band === "wide");
+    if (un.length) lines.push(`# Wide\t${un.map(w => `${w.word} (${w.why})`).join("; ")}`);
+    lines.push(`Word\tBand\tLevels (${unit})`);
+    for (const w of plan.words) lines.push(`${w.word}\t${w.band}\t${w.levels.map(fmt).join(", ")}`);
+    return lines.join("\n") + "\n";
+  }
+
+  /* shared-plan-begin */
+  // ---- Level plan files (shared, word for word, by the UC4AFC app and the
+  // word-coverage analysis page). A plan gives each word its own levels:
+  //   # UC4AFC level plan
+  //   # Mode	SNR
+  //   # Name	SNR · 3 bands · …
+  //   Word	Band	Levels
+  //   back	middle	-18, -15, -12, -9, -6, -3
+  // Only the Word and Levels columns are used. Tolerates CSV saved from Excel
+  // (quoted cells, or levels spread across cells), Unicode minus signs, and
+  // units after the numbers.
+  function planParse(text) {
+    const out = { mode: "", name: "", rows: [], issues: [] };
+    const lines = String(text || "").replace(/^﻿/, "").replace(/\r\n?/g, "\n").split("\n");
+    const dash = s => String(s).replace(/[−‒–—﹣－]/g, "-");
+    const split = l => {
+      if (l.includes("\t")) return l.split("\t");
+      const cells = []; let cur = "", q = false;
+      for (let i = 0; i < l.length; i++) {
+        const ch = l[i];
+        if (q) { if (ch === '"') { if (l[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+        else if (ch === '"') q = true;
+        else if (ch === "," || ch === ";") { cells.push(cur); cur = ""; }
+        else cur += ch;
+      }
+      cells.push(cur);
+      return cells;
+    };
+    const nums = s => (dash(s).match(/[-+]?(?:\d+(?:\.\d*)?|\.\d+)/g) || []).map(Number);
+    let iWord = -1, iLev = -1, iEnd = -1, iBand = -1;
+    lines.forEach((raw, idx) => {
+      const line = raw.replace(/^"(#[^"]*)"/, "$1");
+      if (!line.trim()) return;
+      if (/^\s*#/.test(line)) {
+        const m = line.replace(/^\s*#\s*/, "").match(/^([^\t,;:]+)[\t,;:]+\s*"?(.*?)"?\s*[,;\t]*$/);
+        if (!m) return;
+        const k = m[1].trim().toLowerCase(), v = m[2].trim();
+        if (k === "mode") out.mode = /lpf|low.?pass|cut.?off/i.test(v) ? "LPF" : /snr|noise/i.test(v) ? "SNR" : "";
+        else if (k === "name") out.name = v;
+        return;
+      }
+      const cells = split(line).map(c => c.trim());
+      const lc = cells.map(c => c.toLowerCase());
+      if (iWord < 0 && lc.includes("word") && lc.some(c => /^levels?\b/.test(c))) {
+        iWord = lc.indexOf("word");
+        iLev = lc.findIndex(c => /^levels?\b/.test(c));
+        iBand = lc.indexOf("band");
+        iEnd = lc.findIndex((c, j) => j > iLev && c !== "");
+        if (iEnd < 0) iEnd = Infinity;
+        if (!out.mode && /\bhz\b/.test(lc[iLev])) out.mode = "LPF";
+        if (!out.mode && /\bdb\b|snr/.test(lc[iLev])) out.mode = "SNR";
+        return;
+      }
+      let word, levels, band = "";
+      if (iWord >= 0) {
+        word = cells[iWord] || "";
+        levels = nums(cells.slice(iLev, iEnd).join(" "));
+        band = iBand >= 0 ? cells[iBand] || "" : "";
+      } else {
+        // no header row: the line starts with the word; every number after it is a level
+        const m = line.match(/^\s*"?([^\s\t,;:"]+)"?(.*)$/);
+        word = m ? m[1] : "";
+        levels = nums(m ? m[2] : "");
+      }
+      word = String(word).trim();
+      if (!word || /^word$/i.test(word)) return;
+      if (!/^[a-z][a-z'’ -]*$/i.test(word)) { out.issues.push(`Line ${idx + 1} skipped: "${word}" isn't a word.`); return; }
+      out.rows.push({ word, band, levels, line: idx + 1 });
+    });
+    return out;
+  }
+
+  // Check a parsed plan against the run's mode ("SNR"/"LPF") and the stimulus
+  // words. Returns per-word sorted levels plus errors (block the run) and
+  // warnings (shown, run allowed).
+  function planCheck(parsed, mode, words) {
+    const errors = [], warnings = [], perWord = new Map();
+    mode = String(mode).toUpperCase();
+    const unit = mode === "LPF" ? "Hz" : "dB";
+    if (!parsed || !parsed.rows.length) return { ok: false, errors: ["No words with levels found. Each line needs a word and its levels."], warnings, perWord, unknown: [], missing: words.slice(), union: [] };
+    const all = parsed.rows.flatMap(r => r.levels);
+    const guess = all.length && all.every(v => v >= 50) ? "LPF" : all.some(v => v < 0) ? "SNR" : "";
+    const wrong = parsed.mode && parsed.mode !== mode ? `This plan is for ${parsed.mode} but the run is ${mode}. Switch mode or load the ${mode} plan.`
+      : !parsed.mode && guess && guess !== mode ? `These levels look like ${guess === "LPF" ? "cutoffs in Hz" : "SNRs in dB"}, but the run is ${mode}. Switch mode or load the ${mode} plan.` : "";
+    if (wrong) return { ok: false, errors: [wrong], warnings, perWord, unknown: [], missing: [], union: [] };
+    if (!parsed.mode) warnings.push(`The file doesn't say which mode it's for; read as ${mode} (${unit}).`);
+    const canon = new Map(words.map(w => [w.toLowerCase(), w]));
+    const unknown = [], last = new Map(), outside = [], high = [];
+    for (const r of parsed.rows) {
+      const w = canon.get(r.word.toLowerCase());
+      if (!w) { unknown.push(r.word); continue; }
+      if (last.has(w)) warnings.push(`${w} is listed twice (lines ${last.get(w).line} and ${r.line}); the later line is used.`);
+      last.set(w, r);
+    }
+    for (const [w, r] of last) {
+      const lv = [...new Set(r.levels)].sort((a, b) => a - b);
+      const bad = lv.filter(v => mode === "LPF" ? (v < 75 || v > 20000) : (v < -40 || v > 15));
+      if (bad.length) outside.push(`${w} (${bad.join(", ")})`);
+      else if (lv.length < 2) errors.push(`${w} needs at least 2 levels (line ${r.line}).`);
+      if (mode === "SNR" && lv.some(v => v > 9)) high.push(w);
+      if (lv.length < r.levels.length) warnings.push(`${w}: repeated level${r.levels.length - lv.length === 1 ? "" : "s"} counted once.`);
+      perWord.set(w, lv);
+    }
+    if (outside.length) errors.push(`Levels outside ${mode === "LPF" ? "75–20000 Hz" : "−40 to +15 dB"}: ${outside.slice(0, 6).join(", ")}${outside.length > 6 ? ` and ${outside.length - 6} more words` : ""}.`);
+    if (high.length) warnings.push(`Above +9 dB SNR for ${high.join(", ")}: the word may clip at high presentation levels.`);
+    if (!perWord.size) errors.push("None of the words in this plan are in the word list.");
+    if (unknown.length) warnings.push(`Not in the word list, so ignored: ${unknown.join(", ")}.`);
+    (parsed.issues || []).forEach(t => warnings.push(t));
+    const missing = words.filter(w => !perWord.has(w));
+    const union = [...new Set([...perWord.values()].flat())].sort((a, b) => a - b);
+    return { ok: errors.length === 0, errors, warnings, perWord, unknown, missing, union };
+  }
+  /* shared-plan-end */
+
+  return { AXES, FLOOR, LPF_FLOOR_X, rangeSummary, runStep, tooFlat, makePlan, planName, planText, planParse, planCheck, parseFile, dedupe, aggregate, perRunLevels, fitWord, classify, rise, xAtRise, pAt, bootstrap, fmtLevel, fmtX, mulberry32, runKey };
 })();
 if (typeof module !== "undefined") module.exports = CORE;
 </script>
@@ -527,7 +794,11 @@ const STATUS = {
   thin:    { label: "Too little data", icon: "…", cls: "b-thin", color: "var(--fg-3)" }
 };
 const ORDER = ["ceiling", "both", "harder", "easier", "thin", "good"];
-const state = { all: [], excluded: new Set(), mode: "SNR", filter: "all", sort: "T", example: true, results: {}, bootJob: 0 };
+const state = { all: [], excluded: new Set(), mode: "SNR", filter: "all", sort: "T", results: {}, bootJob: 0,
+  plan: {
+    SNR: { bands: "3", n: 6, step: 3, text: "", edited: false, check: null },
+    LPF: { bands: "3", n: 6, step: 0.5, text: "", edited: false, check: null }
+  } };
 
 function dirWords(mode) {
   return mode === "SNR" ? { harder: "lower SNRs", easier: "higher SNRs" } : { harder: "lower cutoffs", easier: "higher cutoffs" };
@@ -580,7 +851,6 @@ async function loadFiles(fileList) {
     const r = C.parseFile(e.name, e.text);
     if (r && r.trials.length) parsed.push(r); else skipped.push(e.name);
   }
-  if (state.example) { state.all = []; state.example = false; }
   const { runs, dropped } = C.dedupe([...state.all, ...parsed]);
   state.all = runs;
   const nS = runs.filter(r => r.mode === "SNR").length, nL = runs.filter(r => r.mode === "LPF").length;
@@ -591,7 +861,6 @@ async function loadFiles(fileList) {
   if (dupNames.length) log.push({ warn: true, t: `More than one run for: ${dupNames.join(", ")}. Check the Participants list and untick any you don't want.` });
   showLog(log);
   if (!state.all.some(r => r.mode === state.mode) && state.all.length) state.mode = state.all[0].mode;
-  $("exampleBanner").hidden = true;
   renderAll();
 }
 function countDupParticipants(runs) {
@@ -602,34 +871,6 @@ function countDupParticipants(runs) {
 function showLog(items) {
   const el = $("loadLog"); el.textContent = "";
   for (const it of items) { const d = document.createElement("div"); d.textContent = it.t; if (it.warn) d.className = "warn"; el.appendChild(d); }
-}
-
-// ---------- example data (simulated, clearly marked) ----------
-const EXAMPLE_WORDS = ["back","bag","bat","bike","bin","bird","boat","bone","book","boot","bug","bus","cake","card","cat","chalk","chin","chip","coat","cot","dad","dirt","dog","duck","feet","fork","gate","goat","hat","head","heart","hood","house","hug","keys","king","kite","knees","knife","leaf","leg","lick","light","lock","man","meat","mouse","mum","night","nose","nurse","pen","pig","road","rock","sad","seed","shark","sheep","shirt","ship","shop","sock","sword","tap","tongue"];
-function makeExample() {
-  const rnd = C.mulberry32(7);
-  const gauss = () => { let u = 0, v = 0; while (!u) u = rnd(); v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
-  const runs = [];
-  for (const mode of ["SNR", "LPF"]) {
-    const levels = mode === "SNR" ? [-20, -17, -14, -11, -8, -5] : [200, 300, 450, 675, 1000, 1500];
-    const ax = C.AXES[mode];
-    const truth = EXAMPLE_WORDS.map((w, i) => ({
-      w, m: mode === "SNR" ? -12 + 3.5 * gauss() : Math.log2(420) + 0.55 * gauss(),
-      s: mode === "SNR" ? 1.3 + rnd() : 0.22 + 0.2 * rnd(), lam: i % 13 === 5 ? 0.22 : 0.02 * rnd()
-    }));
-    for (let p = 1; p <= 9; p++) {
-      const off = (mode === "SNR" ? 1.6 : 0.2) * gauss();
-      const trials = [];
-      let t0 = Date.UTC(2026, 9, p, 1, 0, 0);
-      for (const tr of truth) for (const L of levels) {
-        const P = { m: tr.m + off, s: tr.s, lam: tr.lam };
-        trials.push({ word: tr.w, level: L, correct: rnd() < C.pAt(ax.toX(L), P) ? 1 : 0, ts: new Date(t0 += 3000).toISOString() });
-      }
-      runs.push({ file: `example_${mode}_P${p}`, source: "example", participant: `Example P${p}`, mode, levels,
-        started: new Date(Date.UTC(2026, 9, p, 1)).toLocaleString("en-NZ"), calibration: "simulated", headphones: "", level: "", note: "", planned: trials.length, trials });
-    }
-  }
-  return C.dedupe(runs).runs;
 }
 
 // ---------- analysis for the current mode ----------
@@ -647,7 +888,7 @@ function analyse(mode) {
     if (fit) fits.set(w, fit);
     rows.push({ word: w, groups: groups.sort((a, b) => a.L - b.L), nTot, fit, status: C.classify(fit, nTot), ci: null });
   }
-  return { mode, ax, runs, levels, rows, fits, words };
+  return { mode, ax, runs, levels, rows, fits, words, stepX: C.runStep(mode, runs) };
 }
 
 function runBootstrap(res) {
@@ -673,6 +914,10 @@ function runBootstrap(res) {
 
 // ---------- rendering ----------
 function renderAll() {
+  const empty = !state.all.length;
+  document.body.classList.toggle("empty", empty);
+  $("emptyNote").hidden = !empty;
+  if (empty) { state.bootJob++; $("progress").textContent = ""; return; }
   for (const m of ["SNR", "LPF"]) {
     const n = state.all.filter(r => r.mode === m && !state.excluded.has(r.id)).length;
     $("cnt" + m).textContent = n ? `(${n})` : "";
@@ -681,7 +926,7 @@ function renderAll() {
   }
   const res = analyse(state.mode);
   state.results[state.mode] = res;
-  renderStats(res); renderStrip(res); renderAvg(res); renderRec(res); renderParts(); renderChips(res); renderCards(res);
+  renderStats(res); renderStrip(res); renderAvg(res); renderRec(res); renderPlan(res); renderParts(); renderChips(res); renderCards(res);
   runBootstrap(res);
 }
 
@@ -788,6 +1033,9 @@ function renderAvg(res) {
   const svg = $("avgChart"); svg.textContent = "";
   const W = 420, H = 220, ml = 36, mr = 12, mt = 12, mb = 36;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const note = $("avgNote"), nPlan = res.runs.filter(r => r.plan).length;
+  note.hidden = !nPlan;
+  note.textContent = nPlan ? `${nPlan} run${nPlan === 1 ? "" : "s"} with per-word levels ${nPlan === 1 ? "is" : "are"} left out here: different words were played at each level, so their averages aren't comparable.` : "";
   if (!res.levels.length) return;
   const dom = xDomain(res);
   const sx = x => ml + (x - dom[0]) / (dom[1] - dom[0]) * (W - ml - mr);
@@ -799,7 +1047,7 @@ function renderAvg(res) {
   svgEl("line", { x1: ml, x2: W - mr, y1: sy(0.625), y2: sy(0.625), stroke: "var(--accent)", "stroke-width": 1.2, "stroke-dasharray": "3 3" }, svg);
   for (const t of levelTicks(res, dom)) svgEl("text", { x: sx(t.x), y: H - mb + 14, "text-anchor": "middle" }, svg).textContent = t.label;
   svgEl("text", { x: (ml + W - mr) / 2, y: H - 4, "text-anchor": "middle" }, svg).textContent = res.mode === "SNR" ? "SNR (dB)" : "Cutoff (Hz)";
-  const per = C.perRunLevels(res.runs, res.levels);
+  const per = C.perRunLevels(res.runs.filter(r => !r.plan), res.levels);
   const xs = res.levels.map(res.ax.toX);
   for (const pr of per) {
     const pts = pr.p.map((p, i) => p == null ? null : [sx(xs[i]), sy(p)]).filter(Boolean);
@@ -827,7 +1075,7 @@ function pct(a, q) { const s = a.slice().sort((x, y) => x - y); if (!s.length) r
 function renderRec(res) {
   const el = $("recPanel"); el.textContent = "";
   const h = document.createElement("h2"); h.textContent = "Range needed"; el.appendChild(h);
-  const summ = res.levels.length > 1 ? C.rangeSummary(res.mode, res.rows, res.levels) : null;
+  const summ = res.levels.length > 1 ? C.rangeSummary(res.mode, res.rows, res.levels, res.stepX) : null;
   res.summ = summ;
   if (!summ) { el.append("Not enough data yet."); return; }
   const ax = res.ax, mode = res.mode, xs = res.levels.map(ax.toX);
@@ -857,7 +1105,7 @@ function renderParts() {
   $("partCount").textContent = `(${runs.filter(r => !state.excluded.has(r.id)).length} of ${runs.length} included)`;
   const t = $("partTable"); t.textContent = "";
   const head = t.createTHead().insertRow();
-  for (const k of ["Use", "Participant", "Started", "Trials", "Status", "Calibration / headphones"]) { const th = document.createElement("th"); th.textContent = k; head.appendChild(th); }
+  for (const k of ["Use", "Participant", "Started", "Trials", "Status", "Levels", "Calibration / headphones"]) { const th = document.createElement("th"); th.textContent = k; head.appendChild(th); }
   const body = t.createTBody();
   const counts = {};
   runs.forEach(r => counts[r.participant] = (counts[r.participant] || 0) + 1);
@@ -874,6 +1122,7 @@ function renderParts() {
     tr.insertCell().textContent = r.started;
     const c = tr.insertCell(); c.className = "num"; c.textContent = r.trials.length + (r.planned ? ` / ${r.planned}` : "");
     tr.insertCell().textContent = r.status;
+    tr.insertCell().textContent = r.plan ? `Plan: ${r.plan}` : r.levels.map(v => C.fmtLevel(r.mode, v)).join(", ");
     tr.insertCell().textContent = [r.calibration, r.headphones].filter(Boolean).join(" · ");
   }
 }
@@ -976,6 +1225,15 @@ function renderCards(res) {
       }
       card.appendChild(s);
     }
+    const pc = state.plan[mode].check, lv = pc && pc.perWord.get(r.word);
+    if (lv) {
+      const pl2 = document.createElement("p"); pl2.className = "planline";
+      const band = pc.bands.get(r.word);
+      pl2.append(`Plan${band ? ` (${band})` : ""}: `);
+      const b = document.createElement("b"); b.textContent = `${lv.map(v => fmtPlanLevel(mode, v)).join(", ")} ${ax.unit}`; pl2.append(b);
+      if (f && r.status !== "thin") pl2.append(planCovers(f, lv, ax) ? " · covers it" : " · doesn't span it");
+      card.appendChild(pl2);
+    }
     el.appendChild(card);
   }
   if (!rows.length) el.textContent = "No words match this filter.";
@@ -986,6 +1244,101 @@ function focusWord(w) {
   const el = document.getElementById("w-" + w);
   if (el) { el.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" }); el.style.outline = "2px solid var(--accent)"; setTimeout(() => { el.style.outline = ""; }, 1600); }
 }
+
+// ---------- level plan ----------
+const isoDate = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const fmtPlanLevel = (mode, v) => mode === "LPF" ? String(Math.round(v)) : C.fmtLevel(mode, v);
+const planCovers = (f, lv, ax) => C.rise(ax.toX(lv[0]), f) <= 0.2 && C.rise(ax.toX(lv[lv.length - 1]), f) >= 0.8;
+function buildPlanText(res) {
+  const P = state.plan[res.mode];
+  const plan = C.makePlan(res.mode, res.rows, res.levels, { bands: P.bands, n: P.n, step: P.step, stepX: res.stepX, nRuns: res.runs.length });
+  return C.planText(plan, C.planName(plan, isoDate()));
+}
+function renderPlan(res) {
+  const P = state.plan[res.mode], ax = res.ax, mode = res.mode;
+  $("planBands").value = P.bands; $("planN").value = P.n; $("planStep").value = P.step;
+  $("planStepLabel").textContent = mode === "SNR" ? "Step (dB)" : "Step (octaves)";
+  const ta = $("planText");
+  $("planStep").min = mode === "SNR" ? "0.5" : "0.1";
+  $("planStep").step = mode === "SNR" ? "0.5" : "0.1";
+  if (!res.rows.some(r => r.fit)) {
+    if (!P.edited) P.text = "";
+    ta.value = P.text; $("planEdited").hidden = !P.edited;
+    $("planSummary").textContent = "Not enough data yet."; $("planCheck").textContent = ""; P.check = null; return;
+  }
+  if (!P.edited) P.text = buildPlanText(res);
+  if (ta.value !== P.text) ta.value = P.text;
+  $("planEdited").hidden = !P.edited;
+  checkPlan(res);
+}
+// Read the plan as the app will, then summarise it against the fitted words.
+function checkPlan(res) {
+  const P = state.plan[res.mode], ax = res.ax, mode = res.mode;
+  const parsed = C.planParse(P.text);
+  const chk = C.planCheck(parsed, mode, res.words);
+  chk.bands = new Map(parsed.rows.map(r => [res.words.find(w => w.toLowerCase() === r.word.toLowerCase()), r.band]));
+  P.check = chk;
+  const out = $("planCheck"); out.textContent = "";
+  const line = (cls, t) => { const d = document.createElement("div"); d.className = cls; d.textContent = t; out.appendChild(d); };
+  const total = [...chk.perWord.values()].reduce((a, l) => a + l.length, 0);
+  chk.errors.forEach(e => line("err", "✗ " + e));
+  chk.warnings.forEach(w => line("warn", "! " + w));
+  if (chk.missing.length && chk.perWord.size) line("warn", `! No levels for ${chk.missing.join(", ")}: the app would give ${chk.missing.length === 1 ? "it" : "them"} the common levels.`);
+  if (chk.ok) line("ok", `✓ Reads correctly${parsed.name ? ` (“${parsed.name}”)` : ""}: ${chk.perWord.size} words, ${total} presentations per repeat.`);
+  // summary by band
+  const el = $("planSummary"); el.textContent = "";
+  if (!chk.perWord.size) return;
+  const groups = new Map();
+  for (const [w, lv] of chk.perWord) { const b = chk.bands.get(w) || "—"; if (!groups.has(b)) groups.set(b, []); groups.get(b).push({ w, lv }); }
+  const order = ["all", "lowest", "low", "middle", "high", "highest", "word", "wide"];
+  const keys = [...groups.keys()].sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
+  const dl = document.createElement("dl");
+  const add = (k, v) => { const dt = document.createElement("dt"); dt.textContent = k; const dd = document.createElement("dd"); dd.textContent = v; dl.append(dt, dd); };
+  const fmtL = lv => lv.map(v => fmtPlanLevel(mode, v)).join(", ");
+  for (const k of keys) {
+    const g = groups.get(k), same = g.every(x => x.lv.join() === g[0].lv.join());
+    const label = k === "word" ? "Own levels" : k === "wide" ? "Wide" : k[0].toUpperCase() + k.slice(1);
+    const lo = Math.min(...g.flatMap(x => x.lv)), hi = Math.max(...g.flatMap(x => x.lv));
+    add(`${label} · ${g.length} word${g.length === 1 ? "" : "s"}`, same ? `${fmtL(g[0].lv)} ${ax.unit}` : `${fmtPlanLevel(mode, lo)} to ${fmtPlanLevel(mode, hi)} ${ax.unit}, varies by word`);
+  }
+  const fitted = res.rows.filter(r => r.fit && r.status !== "thin" && chk.perWord.has(r.word));
+  const cov = fitted.filter(r => planCovers(r.fit, chk.perWord.get(r.word), ax)).length;
+  const now = res.rows.filter(r => r.status === "good").length;
+  add("Covered", `${cov} of ${fitted.length} words with this plan (${now} of ${res.rows.length} with the levels tested so far)`);
+  el.appendChild(dl);
+  const wide = groups.get("wide");
+  if (wide) {
+    const p = document.createElement("p"); p.className = "small muted";
+    p.textContent = `Wide: words that can't be placed yet (too flat, or outside the tested range). A flat word gets levels twice as far apart around its own 62.5% point; one outside the range gets levels spread across the whole plan. Worth a look before using the plan.`;
+    el.appendChild(p);
+  }
+}
+function onPlanOpt() {
+  const P = state.plan[state.mode];
+  const bands = $("planBands").value, n = Math.round(Number($("planN").value)), step = Number($("planStep").value);
+  if (!(n >= 2 && n <= 12) || !(step >= (state.mode === "SNR" ? 0.5 : 0.1))) { $("planN").value = P.n; $("planStep").value = P.step; return; }
+  if (P.edited && !confirm("Replace your edited plan with a new one from the data?")) { $("planBands").value = P.bands; $("planN").value = P.n; $("planStep").value = P.step; return; }
+  Object.assign(P, { bands, n, step, edited: false });
+  const res = state.results[state.mode]; renderPlan(res); renderCards(res);
+}
+let planTimer = 0;
+$("planText").addEventListener("input", () => {
+  const P = state.plan[state.mode];
+  P.text = $("planText").value; P.edited = true; $("planEdited").hidden = false;
+  clearTimeout(planTimer);
+  planTimer = setTimeout(() => { const res = state.results[state.mode]; checkPlan(res); renderCards(res); }, 350);
+});
+["planBands", "planN", "planStep"].forEach(id => $(id).addEventListener("change", onPlanOpt));
+$("planReset").addEventListener("click", () => { state.plan[state.mode].edited = false; const res = state.results[state.mode]; renderPlan(res); renderCards(res); });
+$("planCopy").addEventListener("click", e => copyText(e.currentTarget, $("planText").value));
+$("planSave").addEventListener("click", () => {
+  const text = $("planText").value;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.download = `UC4AFC_level_plan_${state.mode}_${isoDate()}.txt`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+});
 
 // ---------- tables for Excel ----------
 function tsvWords(res) {
@@ -1009,7 +1362,7 @@ function tsvProp(res) {
   return out.join("\n");
 }
 function tsvAvg(res) {
-  const L = res.levels, per = C.perRunLevels(res.runs, L);
+  const L = res.levels, per = C.perRunLevels(res.runs.filter(r => !r.plan), L);
   const out = [["Participant", "Started", ...L].join("\t")];
   for (const pr of per) out.push([pr.run.participant, pr.run.started, ...pr.p.map(p => p == null ? "" : p.toFixed(3))].join("\t"));
   const mean = L.map((_, i) => { const v = per.map(pr => pr.p[i]).filter(p => p != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; });
@@ -1036,7 +1389,11 @@ const dz = $("dropZone");
 ["dragenter", "dragover"].forEach(t => dz.addEventListener(t, e => { e.preventDefault(); dz.classList.add("drag"); }));
 ["dragleave", "drop"].forEach(t => dz.addEventListener(t, e => { e.preventDefault(); dz.classList.remove("drag"); }));
 dz.addEventListener("drop", e => { if (e.dataTransfer.files.length) loadFiles([...e.dataTransfer.files]); });
-$("clearBtn").addEventListener("click", () => { state.all = makeExample(); state.example = true; state.excluded.clear(); state.mode = "SNR"; $("exampleBanner").hidden = false; showLog([]); renderAll(); });
+$("clearBtn").addEventListener("click", () => {
+  state.all = []; state.excluded.clear(); state.mode = "SNR"; state.filter = "all";
+  for (const m of ["SNR", "LPF"]) Object.assign(state.plan[m], { text: "", edited: false, check: null });
+  showLog([]); renderAll();
+});
 $("modeSNR").addEventListener("click", () => { state.mode = "SNR"; state.filter = "all"; renderAll(); });
 $("modeLPF").addEventListener("click", () => { state.mode = "LPF"; state.filter = "all"; renderAll(); });
 $("sortSel").addEventListener("change", e => { state.sort = e.target.value; renderCards(state.results[state.mode]); });
@@ -1044,7 +1401,6 @@ $("copyWords").addEventListener("click", e => copyText(e.currentTarget, tsvWords
 $("copyProp").addEventListener("click", e => copyText(e.currentTarget, tsvProp(state.results[state.mode])));
 $("copyAvg").addEventListener("click", e => copyText(e.currentTarget, tsvAvg(state.results[state.mode])));
 
-state.all = makeExample();
 renderAll();
 </script>
 
