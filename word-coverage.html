@@ -1,0 +1,1052 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<style>
+/* Standalone page base (the Claude page viewer supplies these itself). */
+:root { color-scheme: light; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body { margin: 0; }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+</style>
+<title>UC4AFC Word Coverage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (max 72rem) — load bar, summary, then a grid of per-word cards that stacks to one column on a phone. */
+:root {
+  --bg: #fbfafa;
+  --surface: #ffffff;
+  --sunk: #f3f1f1;
+  --line: #e2dddd;
+  --fg: #1d1a1a;
+  --fg-2: #5b5455;
+  --fg-3: #847c7d;
+  --accent: #b3122c;          /* UC red, the app's own accent */
+  --accent-soft: #f7e3e6;
+  --data: #2a78d6;            /* observed proportions */
+  --data-soft: #cde2fb;
+  --fit: #1d1a1a;             /* fitted curve */
+  --good: #0f8a0f;
+  --warn: #b77900;
+  --serious: #c4582d;
+  --critical: #c22f2f;
+  --font-body: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #171516; --surface: #201d1e; --sunk: #2a2627; --line: #3a3536;
+    --fg: #f4f1f1; --fg-2: #c7bfc0; --fg-3: #978e8f;
+    --accent: #ef5d73; --accent-soft: #3a2026;
+    --data: #3987e5; --data-soft: #1c3a5e; --fit: #f4f1f1;
+    --good: #2fbf2f; --warn: #f0b429; --serious: #ec835a; --critical: #ef6b6b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #171516; --surface: #201d1e; --sunk: #2a2627; --line: #3a3536;
+  --fg: #f4f1f1; --fg-2: #c7bfc0; --fg-3: #978e8f;
+  --accent: #ef5d73; --accent-soft: #3a2026;
+  --data: #3987e5; --data-soft: #1c3a5e; --fit: #f4f1f1;
+  --good: #2fbf2f; --warn: #f0b429; --serious: #ec835a; --critical: #ef6b6b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 72rem; margin: 0 auto; padding-inline: 16px; padding-block: 20px 48px; display: grid; gap: 22px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; line-height: 1.2; }
+h1 { font-size: 1.6rem; letter-spacing: -0.01em; }
+h2 { font-size: 1.15rem; }
+h3 { font-size: 1rem; }
+p { margin: 0; }
+.muted { color: var(--fg-2); }
+.small { font-size: 0.85rem; }
+.num, .mono { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+.eyebrow { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); font-weight: 700; }
+header { display: grid; gap: 6px; }
+header .lede { color: var(--fg-2); max-width: 62ch; }
+
+button, .btn {
+  font: inherit; font-weight: 700; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--fg); padding: 9px 14px; cursor: pointer; min-height: 40px;
+}
+button:hover { border-color: var(--fg-3); }
+button:focus-visible, select:focus-visible, input:focus-visible, label.filebtn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary, label.filebtn { background: var(--accent); color: #fff; border-color: var(--accent); }
+label.filebtn { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; border-radius: 8px; padding: 9px 16px; min-height: 44px; cursor: pointer; }
+label.filebtn input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+select { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); min-height: 40px; }
+
+.load {
+  border: 1.5px dashed var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 10px; background: var(--surface);
+}
+.load.drag { border-color: var(--accent); background: var(--accent-soft); }
+.load-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.banner { border-radius: 8px; padding: 8px 12px; background: var(--accent-soft); color: var(--fg); font-size: 0.9rem; }
+#loadLog { font-size: 0.85rem; color: var(--fg-2); display: grid; gap: 2px; }
+#loadLog .warn { color: var(--serious); }
+
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 3px; background: var(--surface); }
+.seg button { border: 0; border-radius: 999px; min-height: 36px; padding: 6px 16px; background: transparent; }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.seg button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 640px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; display: grid; gap: 2px; }
+.stat .v { font-family: var(--font-data); font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+.stat .k { font-size: 0.8rem; color: var(--fg-2); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 14px; }
+.chart { width: 100%; height: auto; display: block; }
+.chart text { fill: var(--fg-2); font-family: var(--font-data); font-size: 12px; }
+.card .chart text { font-size: 10.5px; }
+.chart .axis { stroke: var(--line); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.8rem; color: var(--fg-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.sw.line { width: 16px; height: 2px; border-radius: 1px; }
+
+.rec { display: grid; gap: 8px; }
+.rec dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; }
+.rec dt { color: var(--fg-2); font-size: 0.88rem; }
+.rec dd { margin: 0; font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+
+details.panel > summary { cursor: pointer; font-weight: 700; list-style-position: outside; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.86rem; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--fg-2); font-weight: 700; font-size: 0.78rem; }
+td.num { text-align: right; }
+tr.off td { color: var(--fg-3); text-decoration: line-through; }
+tr.off td:first-child { text-decoration: none; }
+input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border-radius: 999px; padding: 5px 12px; min-height: 34px; font-weight: 400; font-size: 0.85rem; display: inline-flex; gap: 6px; align-items: center; }
+.chip[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.chip .n { font-family: var(--font-data); font-size: 0.78rem; opacity: 0.8; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 18.5rem), 1fr)); gap: 12px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px 12px; display: grid; gap: 6px; min-width: 0; }
+.card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.card-head h3 { font-size: 1.1rem; }
+.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 0.76rem; font-weight: 700; border-radius: 999px; padding: 2px 9px; border: 1px solid currentColor; }
+.b-good { color: var(--good); }
+.b-harder, .b-easier { color: var(--warn); }
+.b-both { color: var(--serious); }
+.b-ceiling { color: var(--critical); }
+.b-thin { color: var(--fg-3); }
+.facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 8px; font-size: 0.8rem; }
+.facts div { display: grid; }
+.facts .k { color: var(--fg-3); font-size: 0.72rem; }
+.facts .v { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+.perlevel { font-family: var(--font-data); font-size: 0.72rem; color: var(--fg-2); overflow-wrap: anywhere; }
+.suggest { font-size: 0.82rem; }
+.suggest b { font-family: var(--font-data); font-weight: 500; }
+
+.copyrow { display: flex; flex-wrap: wrap; gap: 8px; }
+#copyFallback { width: 100%; min-height: 8rem; font-family: var(--font-data); font-size: 0.75rem; }
+.method { display: grid; gap: 8px; color: var(--fg-2); font-size: 0.9rem; max-width: 70ch; }
+.progress { font-size: 0.82rem; color: var(--fg-2); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="eyebrow">UC4AFC · Normalisation</span>
+    <h1>Word coverage</h1>
+    <p class="lede">Load the normalisation results files (.txt or .json, or a .zip of them). Each word's trials are pooled across participants and fitted with a 4AFC psychometric function, to check whether the tested SNRs and cutoffs span every word.</p>
+  </header>
+
+  <section class="load" id="dropZone" aria-label="Load results files">
+    <div class="load-row">
+      <label class="filebtn" for="fileInput">Choose results files
+        <input id="fileInput" type="file" multiple accept=".txt,.tsv,.json,.zip,text/plain,application/json,application/zip">
+      </label>
+      <button id="clearBtn" type="button">Clear</button>
+      <span class="small muted">or drop files here. Adaptive-test files are skipped; repeated saves of the same run are counted once.</span>
+    </div>
+    <div class="banner" id="exampleBanner">Showing <b>example data</b>: 9 simulated participants per mode, not real results. Load your files to replace it.</div>
+    <div id="loadLog" aria-live="polite"></div>
+  </section>
+
+  <div class="toolbar">
+    <div class="seg" role="group" aria-label="Mode">
+      <button id="modeSNR" type="button" aria-pressed="true">Noise (SNR) <span class="num" id="cntSNR"></span></button>
+      <button id="modeLPF" type="button" aria-pressed="false">Low-pass (LPF) <span class="num" id="cntLPF"></span></button>
+    </div>
+    <span class="progress" id="progress" aria-live="polite"></span>
+  </div>
+
+  <section class="stats" id="stats" aria-label="Summary"></section>
+
+  <section class="two">
+    <div class="panel">
+      <div>
+        <h2>Where each word's 62.5% point falls</h2>
+        <p class="small muted">One dot per word. Shaded band: the levels tested. Dot colour shows coverage; tap a dot for the word.</p>
+      </div>
+      <svg class="chart" id="stripChart" role="img" aria-label="Distribution of word thresholds"></svg>
+      <div class="legend" id="stripLegend"></div>
+    </div>
+    <div class="panel">
+      <div>
+        <h2>Average across participants</h2>
+        <p class="small muted">Proportion correct at each level, all words. Thin lines: each participant. Dots: their mean ± 1 SE.</p>
+      </div>
+      <svg class="chart" id="avgChart" role="img" aria-label="Average psychometric function"></svg>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--data)"></span>Mean of participants</span>
+        <span><span class="sw line" style="background:var(--fg-3)"></span>Each participant</span>
+        <span><span class="sw line" style="background:var(--accent)"></span>62.5% target</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel rec" id="recPanel" aria-label="Range recommendation"></section>
+
+  <details class="panel" id="partPanel">
+    <summary>Participants and runs <span class="muted small" id="partCount"></span></summary>
+    <p class="small muted">Untick a run to leave it out (for example, a run with the wrong calibration, or the researchers' own runs). Everything updates.</p>
+    <div class="tablewrap"><table id="partTable"></table></div>
+  </details>
+
+  <section class="panel" aria-label="Words">
+    <div class="toolbar" style="justify-content:space-between">
+      <h2>Words</h2>
+      <label class="small muted" for="sortSel">Sort
+        <select id="sortSel">
+          <option value="T">by 62.5% point (hardest first)</option>
+          <option value="status">by coverage</option>
+          <option value="word">A–Z</option>
+          <option value="ci">by uncertainty</option>
+        </select>
+      </label>
+    </div>
+    <div class="chips" id="chips" role="group" aria-label="Filter words"></div>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section class="panel" aria-label="Copy tables">
+    <h2>Copy for Excel</h2>
+    <p class="small muted">Each button copies a tab-separated table; paste it into a blank sheet. Excluded runs are left out.</p>
+    <div class="copyrow">
+      <button id="copyWords" type="button">Word summary</button>
+      <button id="copyProp" type="button">Word × level proportions</button>
+      <button id="copyAvg" type="button">Average sheet (participant × level)</button>
+    </div>
+    <textarea id="copyFallback" hidden aria-label="Table text to copy" readonly></textarea>
+  </section>
+
+  <details class="panel">
+    <summary>How words are judged</summary>
+    <div class="method">
+      <p>For each word, every included trial at each level is pooled across participants. A 4AFC logistic is fitted by maximum likelihood: chance fixed at 25%, upper limit free between 70% and 100% (so a word that plateaus is not forced to 100%). SNR is fitted in dB; cutoff in octaves (log<sub>2</sub> Hz).</p>
+      <p>The <b>62.5% point</b> is the level giving 62.5% correct (halfway from chance to 100%, the adaptive target). Its 95% interval comes from resampling participants 200 times. With 10–20 participants these intervals run slightly narrow (in simulation they held the true value about 90% of the time), so treat them as a guide.</p>
+      <p>A word is <b>covered</b> when its function is no more than 20% of the way up at the hardest level tested and at least 80% of the way up at the easiest. Otherwise it needs lower levels (floor not reached), higher levels (top not reached), or both. <b>Low ceiling</b>: the curve levels off within the tested range at below 86% correct, which points to the recording or the foils rather than the levels. With about 10–20 trials per point this is a prompt to listen to the word, not proof; a plateau that sits right at the easiest level tested can also be missed. <b>Too little data</b>: fewer than 30 trials.</p>
+      <p>The suggested range for a word runs from 10% to 90% of the way up its function (never below 75 Hz, the app's lowest cutoff). A word whose span is more than three times the typical span is marked too flat to judge. The pooled curve includes differences between listeners, so it is shallower than any one listener's curve, and the ranges are on the generous side. <b>Range needed</b> uses where words' 62.5% points fall, widened at each end by a typical word's spread.</p>
+    </div>
+  </details>
+</div>
+
+<script id="core">
+/* ===== Core analysis (pure functions; no DOM) ===== */
+const CORE = (() => {
+  const FLOOR = 0.25, LAM_MAX = 0.3, LOW_CEILING = 0.86;
+  const AXES = {
+    SNR: { unit: "dB SNR", slopeUnit: "%/dB", sMin: 0.3, sMax: 12, toX: v => v, fromX: x => x, step: "dB" },
+    LPF: { unit: "Hz", slopeUnit: "%/oct", sMin: 0.03, sMax: 3, toX: v => Math.log2(v), fromX: x => Math.pow(2, x), step: "oct" }
+  };
+
+  // ---- parsing ----
+  function parseTxt(name, text) {
+    const lines = text.replace(/\r/g, "").split("\n");
+    if (!/Method of Constant Stimuli/i.test(lines[0] || "") && !lines.some(l => /^# LOG/.test(l))) return null;
+    const h = {};
+    for (const l of lines) {
+      const m = l.match(/^#\s*([^\t]+)\t(.*)$/);
+      if (m && !(m[1].trim() in h)) h[m[1].trim()] = m[2].trim();
+    }
+    const logStart = lines.findIndex(l => /^# LOG/.test(l));
+    if (logStart < 0) return null;
+    const head = (lines[logStart + 1] || "").split("\t");
+    const iW = head.indexOf("Word"), iL = 2, iC = head.indexOf("Correct?"), iT = head.indexOf("Timestamp");
+    const trials = [];
+    for (let i = logStart + 2; i < lines.length; i++) {
+      const c = lines[i].split("\t");
+      if (c.length < 5 || !c[iW]) continue;
+      const level = Number(c[iL]), corr = Number(c[iC]);
+      if (!Number.isFinite(level) || (corr !== 0 && corr !== 1)) continue;
+      trials.push({ word: c[iW].trim(), level, correct: corr, ts: c[iT] || "" });
+    }
+    let mode = (h["Mode"] || "").toUpperCase();
+    if (mode !== "SNR" && mode !== "LPF") mode = /cutoff|hz/i.test(head[2] || "") || /_CS_LPF_/i.test(name) ? "LPF" : "SNR";
+    const levelsKey = Object.keys(h).find(k => /^Levels/.test(k));
+    const levels = levelsKey ? h[levelsKey].split(/[,\s]+/).map(Number).filter(Number.isFinite) : [];
+    return {
+      file: name, source: "txt", participant: h["Participant"] || "anon", mode, levels,
+      started: h["Started at"] || "", calibration: h["Calibration"] || "", headphones: h["Headphones"] || "",
+      level: h["Noise level"] || h["Presentation level"] || "", note: h["Note"] || "",
+      planned: Number(h["Total presentations"]) || null, trials
+    };
+  }
+  function parseJson(name, text) {
+    let d; try { d = JSON.parse(text); } catch (_) { return null; }
+    if (!d || d.kind !== "constant-stimuli" || !Array.isArray(d.log)) return null;
+    const trials = d.log.map(r => ({ word: String(r.word), level: Number(r.level), correct: r.isCorrect ? 1 : 0, ts: r.ts || "" }))
+      .filter(t => Number.isFinite(t.level));
+    return {
+      file: name, source: "json", participant: d.participant || "anon", mode: String(d.mode || "").toUpperCase() === "LPF" ? "LPF" : "SNR",
+      levels: (d.levels || []).map(Number), started: d.startedAt ? new Date(d.startedAt).toLocaleString("en-NZ") : "",
+      calibration: "", headphones: "", level: "", note: d.note || "", planned: null, trials
+    };
+  }
+  function parseFile(name, text) {
+    const t = text.trimStart();
+    if (t.startsWith("{")) return parseJson(name, text);
+    return parseTxt(name, text);
+  }
+
+  // ---- runs: identity, de-duplication, status ----
+  function runKey(r) { return `${r.mode}|${r.participant}|${r.trials.length ? r.trials[0].ts : r.started}`; }
+  function dedupe(runs) {
+    const best = new Map(), dropped = [];
+    for (const r of runs) {
+      const k = runKey(r), prev = best.get(k);
+      if (!prev) { best.set(k, r); continue; }
+      const keep = (r.trials.length > prev.trials.length || (r.trials.length === prev.trials.length && r.source === "txt" && prev.source !== "txt")) ? r : prev;
+      const lose = keep === r ? prev : r;
+      // keep the header details from the .txt if the .json wins
+      if (keep.source === "json" && lose.source === "txt") Object.assign(keep, { calibration: lose.calibration, headphones: lose.headphones, level: lose.level, started: lose.started || keep.started });
+      best.set(k, keep); dropped.push(lose.file);
+    }
+    const out = [...best.values()];
+    out.forEach((r, i) => {
+      r.id = `${runKey(r)}#${i}`;
+      r.status = /abort/i.test(r.note) ? "aborted" : /in progress/i.test(r.note) ? "incomplete"
+        : (r.planned && r.trials.length < r.planned) ? "incomplete" : "complete";
+    });
+    return { runs: out, dropped };
+  }
+
+  // ---- aggregation ----
+  // counts[word][level] = {n,k}, for the given runs
+  function aggregate(runs) {
+    const counts = new Map(), levels = new Set();
+    for (const r of runs) for (const t of r.trials) {
+      levels.add(t.level);
+      if (!counts.has(t.word)) counts.set(t.word, new Map());
+      const m = counts.get(t.word);
+      const c = m.get(t.level) || { n: 0, k: 0 };
+      c.n++; c.k += t.correct; m.set(t.level, c);
+    }
+    return { counts, levels: [...levels].sort((a, b) => a - b) };
+  }
+  // per run, proportion correct at each level (all words) — the "Average sheet"
+  function perRunLevels(runs, levels) {
+    return runs.map(r => {
+      const m = new Map();
+      for (const t of r.trials) { const c = m.get(t.level) || { n: 0, k: 0 }; c.n++; c.k += t.correct; m.set(t.level, c); }
+      return { run: r, p: levels.map(L => m.has(L) ? m.get(L).k / m.get(L).n : null), n: levels.map(L => m.has(L) ? m.get(L).n : 0) };
+    });
+  }
+
+  // ---- psychometric fit ----
+  const sig = z => 1 / (1 + Math.exp(-z));
+  function unpack(q, ax) {
+    return { m: q[0], s: ax.sMin + (ax.sMax - ax.sMin) * sig(q[1]), lam: LAM_MAX * sig(q[2]) };
+  }
+  function pAt(x, P) { return FLOOR + (1 - FLOOR - P.lam) * sig((x - P.m) / P.s); }
+  function nll(q, groups, ax, xlo, xhi) {
+    const P = unpack(q, ax);
+    let L = 0;
+    for (const g of groups) {
+      let p = pAt(g.x, P);
+      p = Math.min(1 - 1e-9, Math.max(1e-9, p));
+      L -= g.k * Math.log(p) + (g.n - g.k) * Math.log(1 - p);
+    }
+    const span = Math.max(xhi - xlo, 1e-6);           // keep m within a generous window
+    const out = Math.max(0, xlo - span - P.m, P.m - xhi - span);
+    return L + 50 * out * out + 0.02 * q[2] * q[2];   // tiny shrink on λ's logit for stability
+  }
+  function nelderMead(f, x0, step, iters = 300) {
+    const n = x0.length;
+    let S = [x0.slice()];
+    for (let i = 0; i < n; i++) { const p = x0.slice(); p[i] += step[i]; S.push(p); }
+    let F = S.map(f);
+    for (let it = 0; it < iters; it++) {
+      const ord = F.map((v, i) => i).sort((a, b) => F[a] - F[b]);
+      S = ord.map(i => S[i]); F = ord.map(i => F[i]);
+      if (Math.abs(F[n] - F[0]) < 1e-9) break;
+      const c = new Array(n).fill(0);
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) c[j] += S[i][j] / n;
+      const pt = (a) => c.map((v, j) => v + a * (S[n][j] - v));
+      const xr = pt(-1), fr = f(xr);
+      if (fr < F[0]) { const xe = pt(-2), fe = f(xe); if (fe < fr) { S[n] = xe; F[n] = fe; } else { S[n] = xr; F[n] = fr; } continue; }
+      if (fr < F[n - 1]) { S[n] = xr; F[n] = fr; continue; }
+      const xc = fr < F[n] ? pt(-0.5) : pt(0.5), fc = f(xc);
+      if (fc < Math.min(fr, F[n])) { S[n] = xc; F[n] = fc; continue; }
+      for (let i = 1; i <= n; i++) { S[i] = S[i].map((v, j) => S[0][j] + 0.5 * (v - S[0][j])); F[i] = f(S[i]); }
+    }
+    let b = 0; for (let i = 1; i <= n; i++) if (F[i] < F[b]) b = i;
+    return { x: S[b], f: F[b] };
+  }
+  // groups: [{x, n, k}] ; returns fit summary or null
+  function fitWord(groups, ax, warm) {
+    groups = groups.filter(g => g.n > 0);
+    if (groups.length < 2) return null;
+    const xs = groups.map(g => g.x), xlo = Math.min(...xs), xhi = Math.max(...xs);
+    const f = q => nll(q, groups, ax, xlo, xhi);
+    const vMid = 0;      // s at mid of its range
+    // Resampling fits: the full-data fit plus one fresh start (warm start alone
+    // under-covers: intervals came out too narrow in simulation).
+    const starts = warm ? [warm, [(xlo + xhi) / 2, vMid, -2]] : [[(xlo + xhi) / 2, vMid, -2], [xlo, vMid, -2], [xhi, vMid, -2], [(xlo + xhi) / 2, -1.5, -1]];
+    let best = null;
+    for (const s0 of starts) {
+      const r = nelderMead(f, s0, [(xhi - xlo) / 4 || 1, 1, 1], warm ? 220 : 300);
+      if (!best || r.f < best.f) best = r;
+    }
+    const P = unpack(best.x, ax);
+    const q = 0.375 / (1 - FLOOR - P.lam);          // fraction of the rise at 62.5% correct
+    const T = P.m + P.s * Math.log(q / (1 - q));
+    const slope = 100 * (1 - FLOOR - P.lam) * q * (1 - q) / P.s;
+    return { ...P, T, slope, upper: 1 - P.lam, q: best.x, xlo, xhi };
+  }
+  // fraction of the way up the word's own function at x (0..1)
+  const rise = (x, P) => sig((x - P.m) / P.s);
+  const xAtRise = (r, P) => P.m + P.s * Math.log(r / (1 - r));
+
+  function classify(fit, nTotal) {
+    if (!fit || nTotal < 30) return "thin";
+    const lo = rise(fit.xlo, fit), hi = rise(fit.xhi, fit);
+    const harder = lo > 0.2, easier = hi < 0.8;
+    // Low ceiling only when the curve has levelled off within the tested range;
+    // if it is still rising at the easiest level, its plateau isn't measured yet.
+    if (fit.upper < LOW_CEILING && !easier) return "ceiling";
+    return harder && easier ? "both" : harder ? "harder" : easier ? "easier" : "good";
+  }
+
+  // ---- bootstrap over participants (generator, so the UI can stay responsive) ----
+  function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function* bootstrap(runs, words, ax, fits, reps = 200, seed = 12345) {
+    // per run: word -> level -> {n,k}
+    const per = runs.map(r => aggregate([r]).counts);
+    const rnd = mulberry32(seed);
+    const draws = [];
+    for (let b = 0; b < reps; b++) draws.push(runs.map(() => Math.floor(rnd() * runs.length)));
+    const out = new Map();
+    let done = 0;
+    for (const w of words) {
+      const Ts = [];
+      const base = fits.get(w);
+      if (base && runs.length >= 2) {
+        for (const d of draws) {
+          const acc = new Map();
+          for (const ri of d) {
+            const m = per[ri].get(w); if (!m) continue;
+            for (const [L, c] of m) { const a = acc.get(L) || { n: 0, k: 0 }; a.n += c.n; a.k += c.k; acc.set(L, a); }
+          }
+          const g = [...acc].map(([L, c]) => ({ x: ax.toX(L), n: c.n, k: c.k }));
+          const f = fitWord(g, ax, base.q);
+          if (f) Ts.push(f.T);
+        }
+      }
+      Ts.sort((a, b) => a - b);
+      out.set(w, Ts.length >= 20 ? [Ts[Math.floor(0.025 * Ts.length)], Ts[Math.ceil(0.975 * Ts.length) - 1]] : null);
+      done++;
+      yield { done, total: words.length, out };
+    }
+    return { done, total: words.length, out };
+  }
+
+  // ---- formatting ----
+  const minus = s => String(s).replace(/^-/, "−");
+  function fmtLevel(mode, v, opts = {}) {
+    if (mode === "SNR") {
+      const r = opts.round ? Math.round(v) : Math.round(v * 10) / 10;
+      return minus((r > 0 ? "+" : "") + r);
+    }
+    const hz = v;
+    const r = hz < 1000 ? Math.round(hz / 5) * 5 : Math.round(hz / 50) * 50;
+    return String(r);
+  }
+  function fmtX(mode, x, opts) { return fmtLevel(mode, AXES[mode].fromX(x), opts); }
+
+  // Range needed, built from where words' 62.5% points sit (well estimated),
+  // widened at each end by a TYPICAL word's half-width (median over words), so
+  // a few very flat, noisy curves can't blow the range up.
+  const LPF_FLOOR_X = Math.log2(75);          // the app's lowest cutoff
+  function pctl(a, q) { const s = a.slice().sort((x, y) => x - y); if (!s.length) return NaN; const i = (s.length - 1) * q, lo = Math.floor(i), hi = Math.ceil(i); return s[lo] + (s[hi] - s[lo]) * (i - lo); }
+  function rangeSummary(mode, rows, levels) {
+    const ax = AXES[mode], xs = levels.map(ax.toX);
+    const stp = xs.length > 1 ? (xs[xs.length - 1] - xs[0]) / (xs.length - 1) : 1;
+    const fitted = rows.filter(r => r.fit && r.status !== "thin" && r.status !== "ceiling");
+    const beyond = fitted.filter(r => r.fit.T < xs[0] - stp || r.fit.T > xs[xs.length - 1] + stp);
+    const use = fitted.filter(r => !beyond.includes(r));
+    if (!use.length) return null;
+    const Ts = use.map(r => r.fit.T);
+    const hLo = pctl(use.map(r => r.fit.T - xAtRise(0.1, r.fit)), 0.5);
+    const hHi = pctl(use.map(r => xAtRise(0.9, r.fit) - r.fit.T), 0.5);
+    const clampLo = x => mode === "LPF" ? Math.max(LPF_FLOOR_X, x) : x;
+    const stepMed = xs.length > 1 ? pctl(xs.slice(1).map((x, i) => x - xs[i]), 0.5) : stp;
+    return {
+      beyond, hLo, hHi, step: stepMed,
+      p90: [clampLo(pctl(Ts, 0.05) - hLo), pctl(Ts, 0.95) + hHi],
+      all: [clampLo(Math.min(...Ts) - hLo), Math.max(...Ts) + hHi],
+      floored: mode === "LPF" && Math.min(...Ts) - hLo < LPF_FLOOR_X
+    };
+  }
+  // A word whose own 10–90% span is over 3× the typical span is too flat (or too
+  // noisy) to suggest a range from.
+  function tooFlat(fit, summ) { return !!(summ && fit && (xAtRise(0.9, fit) - xAtRise(0.1, fit)) > 3 * (summ.hLo + summ.hHi)); }
+
+  return { AXES, FLOOR, LPF_FLOOR_X, rangeSummary, tooFlat, parseFile, dedupe, aggregate, perRunLevels, fitWord, classify, rise, xAtRise, pAt, bootstrap, fmtLevel, fmtX, mulberry32, runKey };
+})();
+if (typeof module !== "undefined") module.exports = CORE;
+</script>
+
+<script>
+/* ===== UI ===== */
+const $ = id => document.getElementById(id);
+const C = CORE;
+const STATUS = {
+  good:    { label: "Covered", icon: "✓", cls: "b-good", color: "var(--good)" },
+  harder:  { label: "Needs harder levels", icon: "▼", cls: "b-harder", color: "var(--warn)" },
+  easier:  { label: "Needs easier levels", icon: "▲", cls: "b-easier", color: "var(--warn)" },
+  both:    { label: "Needs a wider range", icon: "◆", cls: "b-both", color: "var(--serious)" },
+  ceiling: { label: "Low ceiling", icon: "!", cls: "b-ceiling", color: "var(--critical)" },
+  thin:    { label: "Too little data", icon: "…", cls: "b-thin", color: "var(--fg-3)" }
+};
+const ORDER = ["ceiling", "both", "harder", "easier", "thin", "good"];
+const state = { all: [], excluded: new Set(), mode: "SNR", filter: "all", sort: "T", example: true, results: {}, bootJob: 0 };
+
+function dirWords(mode) {
+  return mode === "SNR" ? { harder: "lower SNRs", easier: "higher SNRs" } : { harder: "lower cutoffs", easier: "higher cutoffs" };
+}
+
+// ---------- loading ----------
+async function readZip(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf), out = [];
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 66000); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error("not a zip file");
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const dec = new TextDecoder();
+  for (let i = 0; i < count; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true);
+    const nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+    const lho = dv.getUint32(p + 42, true);
+    const name = dec.decode(u8.subarray(p + 46, p + 46 + nlen));
+    p += 46 + nlen + xlen + clen;
+    if (name.endsWith("/") || /(^|\/)(__MACOSX|\._)/.test(name)) continue;
+    const lnl = dv.getUint16(lho + 26, true), lxl = dv.getUint16(lho + 28, true);
+    const data = u8.subarray(lho + 30 + lnl + lxl, lho + 30 + lnl + lxl + csize);
+    let bytes;
+    if (method === 0) bytes = data;
+    else if (method === 8 && typeof DecompressionStream !== "undefined") {
+      const ds = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      bytes = new Uint8Array(await new Response(ds).arrayBuffer());
+    } else { out.push({ name, error: "compression not supported in this browser" }); continue; }
+    out.push({ name: name.split("/").pop(), text: dec.decode(bytes) });
+  }
+  return out;
+}
+
+async function loadFiles(fileList) {
+  const log = [];
+  const entries = [];
+  for (const f of fileList) {
+    try {
+      if (/\.zip$/i.test(f.name)) {
+        const inner = await readZip(await f.arrayBuffer());
+        for (const e of inner) e.error ? log.push({ warn: true, t: `${f.name} › ${e.name}: ${e.error}` }) : entries.push(e);
+      } else entries.push({ name: f.name, text: await f.text() });
+    } catch (err) { log.push({ warn: true, t: `${f.name}: could not be read (${err.message})` }); }
+  }
+  const parsed = [], skipped = [];
+  for (const e of entries) {
+    if (!/\.(txt|tsv|json)$/i.test(e.name)) continue;
+    const r = C.parseFile(e.name, e.text);
+    if (r && r.trials.length) parsed.push(r); else skipped.push(e.name);
+  }
+  if (state.example) { state.all = []; state.example = false; }
+  const { runs, dropped } = C.dedupe([...state.all, ...parsed]);
+  state.all = runs;
+  const nS = runs.filter(r => r.mode === "SNR").length, nL = runs.filter(r => r.mode === "LPF").length;
+  log.unshift({ t: `Read ${parsed.length} normalisation file${parsed.length === 1 ? "" : "s"}: ${nS} SNR run${nS === 1 ? "" : "s"} and ${nL} LPF run${nL === 1 ? "" : "s"} in total.` });
+  if (dropped.length) log.push({ t: `${dropped.length} duplicate save${dropped.length === 1 ? "" : "s"} of the same run counted once (the fuller copy kept).` });
+  if (skipped.length) log.push({ t: `Skipped ${skipped.length} file${skipped.length === 1 ? "" : "s"} that ${skipped.length === 1 ? "isn't a" : "aren't"} normalisation run${skipped.length === 1 ? "" : "s"} (e.g. adaptive results).` });
+  const dupNames = countDupParticipants(runs);
+  if (dupNames.length) log.push({ warn: true, t: `More than one run for: ${dupNames.join(", ")}. Check the Participants list and untick any you don't want.` });
+  showLog(log);
+  if (!state.all.some(r => r.mode === state.mode) && state.all.length) state.mode = state.all[0].mode;
+  $("exampleBanner").hidden = true;
+  renderAll();
+}
+function countDupParticipants(runs) {
+  const m = new Map();
+  for (const r of runs) { const k = `${r.participant} (${r.mode})`; m.set(k, (m.get(k) || 0) + 1); }
+  return [...m].filter(([, n]) => n > 1).map(([k]) => k);
+}
+function showLog(items) {
+  const el = $("loadLog"); el.textContent = "";
+  for (const it of items) { const d = document.createElement("div"); d.textContent = it.t; if (it.warn) d.className = "warn"; el.appendChild(d); }
+}
+
+// ---------- example data (simulated, clearly marked) ----------
+const EXAMPLE_WORDS = ["back","bag","bat","bike","bin","bird","boat","bone","book","boot","bug","bus","cake","card","cat","chalk","chin","chip","coat","cot","dad","dirt","dog","duck","feet","fork","gate","goat","hat","head","heart","hood","house","hug","keys","king","kite","knees","knife","leaf","leg","lick","light","lock","man","meat","mouse","mum","night","nose","nurse","pen","pig","road","rock","sad","seed","shark","sheep","shirt","ship","shop","sock","sword","tap","tongue"];
+function makeExample() {
+  const rnd = C.mulberry32(7);
+  const gauss = () => { let u = 0, v = 0; while (!u) u = rnd(); v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+  const runs = [];
+  for (const mode of ["SNR", "LPF"]) {
+    const levels = mode === "SNR" ? [-20, -17, -14, -11, -8, -5] : [200, 300, 450, 675, 1000, 1500];
+    const ax = C.AXES[mode];
+    const truth = EXAMPLE_WORDS.map((w, i) => ({
+      w, m: mode === "SNR" ? -12 + 3.5 * gauss() : Math.log2(420) + 0.55 * gauss(),
+      s: mode === "SNR" ? 1.3 + rnd() : 0.22 + 0.2 * rnd(), lam: i % 13 === 5 ? 0.22 : 0.02 * rnd()
+    }));
+    for (let p = 1; p <= 9; p++) {
+      const off = (mode === "SNR" ? 1.6 : 0.2) * gauss();
+      const trials = [];
+      let t0 = Date.UTC(2026, 9, p, 1, 0, 0);
+      for (const tr of truth) for (const L of levels) {
+        const P = { m: tr.m + off, s: tr.s, lam: tr.lam };
+        trials.push({ word: tr.w, level: L, correct: rnd() < C.pAt(ax.toX(L), P) ? 1 : 0, ts: new Date(t0 += 3000).toISOString() });
+      }
+      runs.push({ file: `example_${mode}_P${p}`, source: "example", participant: `Example P${p}`, mode, levels,
+        started: new Date(Date.UTC(2026, 9, p, 1)).toLocaleString("en-NZ"), calibration: "simulated", headphones: "", level: "", note: "", planned: trials.length, trials });
+    }
+  }
+  return C.dedupe(runs).runs;
+}
+
+// ---------- analysis for the current mode ----------
+function analyse(mode) {
+  const ax = C.AXES[mode];
+  const runs = state.all.filter(r => r.mode === mode && !state.excluded.has(r.id));
+  const { counts, levels } = C.aggregate(runs);
+  const words = [...counts.keys()].sort();
+  const fits = new Map(), rows = [];
+  for (const w of words) {
+    const m = counts.get(w);
+    const groups = [...m].map(([L, c]) => ({ x: ax.toX(L), n: c.n, k: c.k, L }));
+    const nTot = groups.reduce((a, g) => a + g.n, 0);
+    const fit = C.fitWord(groups, ax);
+    if (fit) fits.set(w, fit);
+    rows.push({ word: w, groups: groups.sort((a, b) => a.L - b.L), nTot, fit, status: C.classify(fit, nTot), ci: null });
+  }
+  return { mode, ax, runs, levels, rows, fits, words };
+}
+
+function runBootstrap(res) {
+  const job = ++state.bootJob;
+  const gen = C.bootstrap(res.runs, res.words, res.ax, res.fits, 200);
+  const prog = $("progress");
+  if (res.runs.length < 3) { prog.textContent = "95% intervals need at least 3 participants."; return; }
+  const step = () => {
+    if (job !== state.bootJob) return;
+    const t0 = performance.now();
+    let r;
+    while (performance.now() - t0 < 30) { r = gen.next(); if (r.done) break; }
+    if (r.value) {
+      for (const row of res.rows) if (r.value.out.has(row.word)) row.ci = r.value.out.get(row.word);
+      prog.textContent = r.done ? "" : `Calculating 95% intervals… ${Math.round(100 * r.value.done / r.value.total)}%`;
+    }
+    if (r.done) { prog.textContent = ""; renderCards(res); renderRec(res); return; }
+    setTimeout(step, 0);
+  };
+  prog.textContent = "Calculating 95% intervals…";
+  setTimeout(step, 0);
+}
+
+// ---------- rendering ----------
+function renderAll() {
+  for (const m of ["SNR", "LPF"]) {
+    const n = state.all.filter(r => r.mode === m && !state.excluded.has(r.id)).length;
+    $("cnt" + m).textContent = n ? `(${n})` : "";
+    $("mode" + m).disabled = !state.all.some(r => r.mode === m);
+    $("mode" + m).setAttribute("aria-pressed", String(state.mode === m));
+  }
+  const res = analyse(state.mode);
+  state.results[state.mode] = res;
+  renderStats(res); renderStrip(res); renderAvg(res); renderRec(res); renderParts(); renderChips(res); renderCards(res);
+  runBootstrap(res);
+}
+
+function renderStats(res) {
+  const counts = Object.fromEntries(Object.keys(STATUS).map(k => [k, 0]));
+  res.rows.forEach(r => counts[r.status]++);
+  const nTrials = res.runs.reduce((a, r) => a + r.trials.length, 0);
+  const need = counts.harder + counts.easier + counts.both;
+  const items = [
+    [res.runs.length, `participant runs · ${nTrials.toLocaleString("en-NZ")} trials`],
+    [`${counts.good}/${res.rows.length}`, "words covered"],
+    [need, "need other levels"],
+    [counts.ceiling, "low ceiling"]
+  ];
+  const el = $("stats"); el.textContent = "";
+  for (const [v, k] of items) {
+    const d = document.createElement("div"); d.className = "stat";
+    d.innerHTML = `<span class="v"></span><span class="k"></span>`;
+    d.querySelector(".v").textContent = v; d.querySelector(".k").textContent = k;
+    el.appendChild(d);
+  }
+}
+
+const NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+// Strip-chart marks: triangles show the direction a word needs (down = harder
+// levels, up = easier), so it isn't carried by colour alone.
+function marker(svg, status, cx, cy, R) {
+  const fill = STATUS[status].color, a = { fill, stroke: "var(--surface)", "stroke-width": 1.2 };
+  if (status === "harder" || status === "easier") {
+    const up = status === "easier", h = R * 1.15;
+    const pts = up ? `${cx},${cy - h} ${cx + h},${cy + h * 0.8} ${cx - h},${cy + h * 0.8}` : `${cx},${cy + h} ${cx + h},${cy - h * 0.8} ${cx - h},${cy - h * 0.8}`;
+    return svgEl("polygon", { points: pts, ...a }, svg);
+  }
+  if (status === "both") return svgEl("rect", { x: cx - R * 0.85, y: cy - R * 0.85, width: R * 1.7, height: R * 1.7, transform: `rotate(45 ${cx} ${cy})`, ...a }, svg);
+  return svgEl("circle", { cx, cy, r: R, ...a }, svg);
+}
+
+function xDomain(res, extra = []) {
+  const xs = res.levels.map(res.ax.toX).concat(extra.filter(Number.isFinite));
+  if (!xs.length) return [0, 1];
+  let lo = Math.min(...xs), hi = Math.max(...xs);
+  const pad = (hi - lo || 1) * 0.06;
+  return [lo - pad, hi + pad];
+}
+function levelTicks(res, dom) {
+  return res.levels.map(L => ({ x: res.ax.toX(L), label: C.fmtLevel(res.mode, L) })).filter(t => t.x >= dom[0] && t.x <= dom[1]);
+}
+
+function renderStrip(res) {
+  const svg = $("stripChart"); svg.textContent = "";
+  const W = 420, H = 200, ml = 14, mr = 14, mt = 12, mb = 36;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const Ts = res.rows.filter(r => r.fit && r.status !== "thin").map(r => r.fit.T);
+  if (!Ts.length) { svgEl("text", { x: W / 2, y: H / 2, "text-anchor": "middle" }, svg).textContent = "No fitted words yet"; return; }
+  const xr = res.levels.map(res.ax.toX);
+  const span = Math.max(...xr) - Math.min(...xr) || 1;
+  const dom = [Math.min(...xr) - 0.25 * span, Math.max(...xr) + 0.25 * span];
+  const edgeL = Math.min(...xr) - 0.18 * span, edgeR = Math.max(...xr) + 0.18 * span;
+  const sx = x => ml + (x - dom[0]) / (dom[1] - dom[0]) * (W - ml - mr);
+  // tested band
+  svgEl("rect", { x: sx(Math.min(...xr)), y: mt, width: Math.max(1, sx(Math.max(...xr)) - sx(Math.min(...xr))), height: H - mt - mb, fill: "var(--data-soft)", opacity: 0.55 }, svg);
+  for (const t of levelTicks(res, dom)) {
+    svgEl("line", { x1: sx(t.x), x2: sx(t.x), y1: mt, y2: H - mb, stroke: "var(--line)", "stroke-width": 1 }, svg);
+    svgEl("text", { x: sx(t.x), y: H - mb + 14, "text-anchor": "middle" }, svg).textContent = t.label;
+  }
+  svgEl("text", { x: W / 2, y: H - 4, "text-anchor": "middle" }, svg).textContent = res.mode === "SNR" ? "SNR (dB) at 62.5% correct" : "Cutoff (Hz) at 62.5% correct";
+  svgEl("text", { x: sx(edgeL), y: mt + 10, "text-anchor": "middle" }, svg).textContent = "below";
+  svgEl("text", { x: sx(edgeR), y: mt + 10, "text-anchor": "middle" }, svg).textContent = "above";
+  // stacked dots in bins
+  const binW = res.mode === "SNR" ? 1 : 1 / 6;
+  const bins = new Map();
+  const rows = res.rows.filter(r => r.fit && r.status !== "thin").sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status));
+  const R = 4.6, base = H - mb - 7;
+  for (const r of rows) {
+    const T = r.fit.T, xMin = Math.min(...xr), xMax = Math.max(...xr);
+    const key = T < xMin - 0.5 * binW ? "L" : T > xMax + 0.5 * binW ? "R" : Math.round(T / binW);
+    const k = bins.get(key) || 0; bins.set(key, k + 1);
+    const cx = key === "L" ? sx(edgeL) : key === "R" ? sx(edgeR) : sx(key * binW), cy = base - k * (2 * R + 1.5);
+    if (cy < mt + 16) continue;
+    const c = marker(svg, r.status, cx, cy, R);
+    c.setAttribute("tabindex", "0");
+    svgEl("title", {}, c).textContent = `${r.word}: ${C.fmtX(res.mode, r.fit.T)} ${res.ax.unit} — ${STATUS[r.status].label}`;
+    c.style.cursor = "pointer";
+    c.addEventListener("click", () => focusWord(r.word));
+    c.addEventListener("keydown", e => { if (e.key === "Enter") focusWord(r.word); });
+  }
+  const lg = $("stripLegend"); lg.textContent = "";
+  for (const k of ["good", "harder", "easier", "both", "ceiling"]) {
+    if (!res.rows.some(r => r.status === k)) continue;
+    const s = document.createElement("span");
+    const sv = document.createElementNS(NS, "svg"); sv.setAttribute("viewBox", "0 0 12 12"); sv.setAttribute("width", "12"); sv.setAttribute("height", "12");
+    marker(sv, k, 6, 6, 4.6); s.appendChild(sv);
+    s.append(STATUS[k].label); lg.appendChild(s);
+  }
+}
+
+function renderAvg(res) {
+  const svg = $("avgChart"); svg.textContent = "";
+  const W = 420, H = 220, ml = 36, mr = 12, mt = 12, mb = 36;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  if (!res.levels.length) return;
+  const dom = xDomain(res);
+  const sx = x => ml + (x - dom[0]) / (dom[1] - dom[0]) * (W - ml - mr);
+  const sy = p => mt + (1 - p) * (H - mt - mb);
+  for (const p of [0.25, 0.5, 0.75, 1]) {
+    svgEl("line", { x1: ml, x2: W - mr, y1: sy(p), y2: sy(p), stroke: "var(--line)", "stroke-width": 1 }, svg);
+    svgEl("text", { x: ml - 6, y: sy(p) + 3, "text-anchor": "end" }, svg).textContent = p.toFixed(2);
+  }
+  svgEl("line", { x1: ml, x2: W - mr, y1: sy(0.625), y2: sy(0.625), stroke: "var(--accent)", "stroke-width": 1.2, "stroke-dasharray": "3 3" }, svg);
+  for (const t of levelTicks(res, dom)) svgEl("text", { x: sx(t.x), y: H - mb + 14, "text-anchor": "middle" }, svg).textContent = t.label;
+  svgEl("text", { x: (ml + W - mr) / 2, y: H - 4, "text-anchor": "middle" }, svg).textContent = res.mode === "SNR" ? "SNR (dB)" : "Cutoff (Hz)";
+  const per = C.perRunLevels(res.runs, res.levels);
+  const xs = res.levels.map(res.ax.toX);
+  for (const pr of per) {
+    const pts = pr.p.map((p, i) => p == null ? null : [sx(xs[i]), sy(p)]).filter(Boolean);
+    if (pts.length > 1) svgEl("polyline", { points: pts.map(p => p.join(",")).join(" "), fill: "none", stroke: "var(--fg-3)", "stroke-width": 1, opacity: 0.45 }, svg);
+  }
+  const mean = res.levels.map((L, i) => {
+    const v = per.map(pr => pr.p[i]).filter(p => p != null);
+    if (!v.length) return null;
+    const mu = v.reduce((a, b) => a + b, 0) / v.length;
+    const sd = v.length > 1 ? Math.sqrt(v.reduce((a, b) => a + (b - mu) ** 2, 0) / (v.length - 1)) : 0;
+    return { x: xs[i], mu, se: sd / Math.sqrt(v.length), n: v.length, L };
+  });
+  const mp = mean.filter(Boolean);
+  svgEl("polyline", { points: mp.map(m => `${sx(m.x)},${sy(m.mu)}`).join(" "), fill: "none", stroke: "var(--data)", "stroke-width": 2 }, svg);
+  for (const m of mp) {
+    svgEl("line", { x1: sx(m.x), x2: sx(m.x), y1: sy(Math.min(1, m.mu + m.se)), y2: sy(Math.max(0, m.mu - m.se)), stroke: "var(--data)", "stroke-width": 2 }, svg);
+    const c = svgEl("circle", { cx: sx(m.x), cy: sy(m.mu), r: 4.5, fill: "var(--data)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    svgEl("title", {}, c).textContent = `${C.fmtLevel(res.mode, m.L)} ${res.ax.unit}: mean ${(100 * m.mu).toFixed(1)}% (±${(100 * m.se).toFixed(1)}), ${m.n} participant${m.n === 1 ? "" : "s"}`;
+  }
+}
+
+function median(a) { const s = a.slice().sort((x, y) => x - y); return s.length ? s[Math.floor((s.length - 1) / 2)] * 0.5 + s[Math.ceil((s.length - 1) / 2)] * 0.5 : NaN; }
+function pct(a, q) { const s = a.slice().sort((x, y) => x - y); if (!s.length) return NaN; const i = (s.length - 1) * q, lo = Math.floor(i), hi = Math.ceil(i); return s[lo] + (s[hi] - s[lo]) * (i - lo); }
+
+function renderRec(res) {
+  const el = $("recPanel"); el.textContent = "";
+  const h = document.createElement("h2"); h.textContent = "Range needed"; el.appendChild(h);
+  const summ = res.levels.length > 1 ? C.rangeSummary(res.mode, res.rows, res.levels) : null;
+  res.summ = summ;
+  if (!summ) { el.append("Not enough data yet."); return; }
+  const ax = res.ax, mode = res.mode, xs = res.levels.map(ax.toX);
+  const nLevels = (lo, hi) => Math.max(2, Math.ceil((hi - lo) / summ.step - 1e-9) + 1);
+  const rng = (lo, hi) => `${C.fmtX(mode, lo, { round: true })} to ${C.fmtX(mode, hi, { round: true })} ${ax.unit}`;
+  const stepTxt = mode === "SNR" ? `${Math.round(summ.step * 10) / 10} dB` : `${Math.round(summ.step * 100) / 100} octave`;
+  const dl = document.createElement("dl");
+  const add = (k, v) => { const dt = document.createElement("dt"); dt.textContent = k; const dd = document.createElement("dd"); dd.textContent = v; dl.append(dt, dd); };
+  add("Tested now", `${rng(xs[0], xs[xs.length - 1])} (${xs.length} levels)`);
+  add("Covers 90% of words", `${rng(summ.p90[0], summ.p90[1])} (~${nLevels(summ.p90[0], summ.p90[1])} levels at ${stepTxt} steps)`);
+  add("Covers every word", `${rng(summ.all[0], summ.all[1])} (~${nLevels(summ.all[0], summ.all[1])} levels)`);
+  if (summ.beyond.length) add("Beyond the tested range", `${summ.beyond.length} word${summ.beyond.length === 1 ? "" : "s"}: ${summ.beyond.map(r => r.word).join(", ")}`);
+  el.appendChild(dl);
+  const n = { harder: 0, easier: 0, both: 0 };
+  res.rows.forEach(r => { if (r.status in n) n[r.status]++; });
+  const d = dirWords(mode);
+  const p = document.createElement("p"); p.className = "small muted";
+  p.textContent = `${n.harder + n.both} word${n.harder + n.both === 1 ? "" : "s"} would benefit from ${d.harder}, ${n.easier + n.both} from ${d.easier}. ` +
+    `Ranges are set by where words' 62.5% points fall, widened at each end by a typical word's spread (${mode === "SNR" ? `${summ.hLo.toFixed(1)} dB below, ${summ.hHi.toFixed(1)} dB above` : `${summ.hLo.toFixed(2)} octave below, ${summ.hHi.toFixed(2)} above`}). Low-ceiling words are left out.` +
+    (summ.floored ? " The low end is held at 75 Hz, the app's lowest cutoff." : "") +
+    (summ.beyond.length ? " Words beyond the tested range are left out too: their curves can't be estimated until the range reaches them." : "");
+  el.appendChild(p);
+}
+
+function renderParts() {
+  const runs = state.all.filter(r => r.mode === state.mode);
+  $("partCount").textContent = `(${runs.filter(r => !state.excluded.has(r.id)).length} of ${runs.length} included)`;
+  const t = $("partTable"); t.textContent = "";
+  const head = t.createTHead().insertRow();
+  for (const k of ["Use", "Participant", "Started", "Trials", "Status", "Calibration / headphones"]) { const th = document.createElement("th"); th.textContent = k; head.appendChild(th); }
+  const body = t.createTBody();
+  const counts = {};
+  runs.forEach(r => counts[r.participant] = (counts[r.participant] || 0) + 1);
+  runs.sort((a, b) => a.participant.localeCompare(b.participant, undefined, { numeric: true }));
+  for (const r of runs) {
+    const tr = body.insertRow();
+    if (state.excluded.has(r.id)) tr.className = "off";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !state.excluded.has(r.id);
+    cb.id = "use-" + r.id.replace(/[^a-z0-9]/gi, "_");
+    cb.setAttribute("aria-label", `Include ${r.participant}`);
+    cb.addEventListener("change", () => { cb.checked ? state.excluded.delete(r.id) : state.excluded.add(r.id); renderAll(); });
+    tr.insertCell().appendChild(cb);
+    tr.insertCell().textContent = r.participant + (counts[r.participant] > 1 ? " ⚑" : "");
+    tr.insertCell().textContent = r.started;
+    const c = tr.insertCell(); c.className = "num"; c.textContent = r.trials.length + (r.planned ? ` / ${r.planned}` : "");
+    tr.insertCell().textContent = r.status;
+    tr.insertCell().textContent = [r.calibration, r.headphones].filter(Boolean).join(" · ");
+  }
+}
+
+function renderChips(res) {
+  const el = $("chips"); el.textContent = "";
+  const counts = {}; res.rows.forEach(r => counts[r.status] = (counts[r.status] || 0) + 1);
+  const opts = [["all", "All", res.rows.length], ...ORDER.filter(k => counts[k]).map(k => [k, `${STATUS[k].icon} ${STATUS[k].label}`, counts[k]])];
+  if (state.filter !== "all" && !counts[state.filter]) state.filter = "all";
+  for (const [k, label, n] of opts) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip";
+    b.setAttribute("aria-pressed", String(state.filter === k));
+    b.append(label + " "); const s = document.createElement("span"); s.className = "n"; s.textContent = n; b.appendChild(s);
+    b.addEventListener("click", () => { state.filter = k; renderChips(res); renderCards(res); });
+    el.appendChild(b);
+  }
+}
+
+function sortRows(rows) {
+  const s = state.sort;
+  const T = r => r.fit ? r.fit.T : Infinity;
+  if (s === "word") return rows.sort((a, b) => a.word.localeCompare(b.word));
+  if (s === "status") return rows.sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || T(b) - T(a));
+  if (s === "ci") return rows.sort((a, b) => ((b.ci ? b.ci[1] - b.ci[0] : 99) - (a.ci ? a.ci[1] - a.ci[0] : 99)));
+  return rows.sort((a, b) => T(b) - T(a));   // hardest (highest level needed) first
+}
+
+function wordChart(res, row) {
+  const W = 300, H = 132, ml = 28, mr = 8, mt = 8, mb = 22;
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("class", "chart");
+  svg.setAttribute("role", "img"); svg.setAttribute("aria-label", `${row.word}: proportion correct by level`);
+  const extra = row.fit ? [Math.max(row.fit.T, row.fit.xlo - 2 * (row.fit.xhi - row.fit.xlo)), ...(row.ci || [])].map(v => Math.min(Math.max(v, row.fit.xlo - (row.fit.xhi - row.fit.xlo)), row.fit.xhi + (row.fit.xhi - row.fit.xlo))) : [];
+  const dom = xDomain(res, extra);
+  const sx = x => ml + (x - dom[0]) / (dom[1] - dom[0]) * (W - ml - mr);
+  const sy = p => mt + (1 - p) * (H - mt - mb);
+  for (const p of [0.25, 0.625, 1]) {
+    svgEl("line", { x1: ml, x2: W - mr, y1: sy(p), y2: sy(p), stroke: p === 0.625 ? "var(--accent)" : "var(--line)", "stroke-width": 1, "stroke-dasharray": p === 0.625 ? "3 3" : "none", opacity: p === 0.625 ? 0.7 : 1 }, svg);
+    svgEl("text", { x: ml - 4, y: sy(p) + 3, "text-anchor": "end" }, svg).textContent = p === 0.625 ? ".625" : p === 1 ? "1" : ".25";
+  }
+  const ticks = levelTicks(res, dom);
+  const every = Math.ceil(ticks.length / 6);
+  ticks.forEach((t, i) => { if (i % every === 0) svgEl("text", { x: sx(t.x), y: H - 6, "text-anchor": "middle" }, svg).textContent = t.label; });
+  if (row.fit) {
+    if (row.ci) {
+      const a = Math.max(dom[0], row.ci[0]), b = Math.min(dom[1], row.ci[1]);
+      if (b > a) svgEl("rect", { x: sx(a), y: sy(0.625) - 4, width: Math.max(1.5, sx(b) - sx(a)), height: 8, fill: "var(--accent)", opacity: 0.18, rx: 2 }, svg);
+    }
+    let d = "";
+    for (let i = 0; i <= 80; i++) { const x = dom[0] + (dom[1] - dom[0]) * i / 80; d += (i ? "L" : "M") + sx(x).toFixed(1) + "," + sy(C.pAt(x, row.fit)).toFixed(1); }
+    svgEl("path", { d, fill: "none", stroke: "var(--fit)", "stroke-width": 2 }, svg);
+    if (row.fit.T >= dom[0] && row.fit.T <= dom[1]) svgEl("line", { x1: sx(row.fit.T), x2: sx(row.fit.T), y1: sy(0.625) - 7, y2: sy(0.625) + 7, stroke: "var(--accent)", "stroke-width": 2 }, svg);
+  }
+  const nMax = Math.max(...row.groups.map(g => g.n), 1);
+  for (const g of row.groups) {
+    const p = g.k / g.n;
+    const c = svgEl("circle", { cx: sx(g.x), cy: sy(p), r: 2.5 + 3 * Math.sqrt(g.n / nMax), fill: "var(--data)", stroke: "var(--surface)", "stroke-width": 1.5 }, svg);
+    svgEl("title", {}, c).textContent = `${C.fmtLevel(res.mode, g.L)} ${res.ax.unit}: ${g.k}/${g.n} correct (${Math.round(100 * p)}%)`;
+  }
+  return svg;
+}
+
+function renderCards(res) {
+  const el = $("cards"); el.textContent = "";
+  const rows = sortRows(res.rows.filter(r => state.filter === "all" || r.status === state.filter));
+  const d = dirWords(res.mode), ax = res.ax, mode = res.mode;
+  for (const r of rows) {
+    const card = document.createElement("article"); card.className = "card"; card.id = "w-" + r.word;
+    const st = STATUS[r.status];
+    card.innerHTML = `<div class="card-head"><h3></h3><span class="badge ${st.cls}"></span></div>`;
+    card.querySelector("h3").textContent = r.word;
+    card.querySelector(".badge").textContent = `${st.icon} ${st.label}`;
+    card.appendChild(wordChart(res, r));
+    const facts = document.createElement("div"); facts.className = "facts";
+    const f = r.fit;
+    const add = (k, v) => { const x = document.createElement("div"); x.innerHTML = `<span class="k"></span><span class="v"></span>`; x.firstChild.textContent = k; x.lastChild.textContent = v; facts.appendChild(x); };
+    const u1 = mode === "LPF" ? " Hz" : " dB";
+    add("62.5% point", !f ? "–" : f.T > f.xhi ? `above ${C.fmtX(mode, f.xhi, { round: true })}${u1}` : f.T < f.xlo ? `below ${C.fmtX(mode, f.xlo, { round: true })}${u1}` : `${C.fmtX(mode, f.T)}${u1}`);
+    add("95% interval", r.ci ? `${C.fmtX(mode, r.ci[0], { round: true })} to ${C.fmtX(mode, r.ci[1], { round: true })}` : "…");
+    add("Slope", f ? `${f.slope.toFixed(mode === "SNR" ? 1 : 0)} ${ax.slopeUnit}` : "–");
+    add("Upper limit", f ? `${Math.round(100 * f.upper)}%` : "–");
+    add("Trials", String(r.nTot));
+    add("At ends", f ? `${Math.round(100 * C.pAt(f.xlo, f))}% · ${Math.round(100 * C.pAt(f.xhi, f))}%` : "–");
+    card.appendChild(facts);
+    const pl = document.createElement("div"); pl.className = "perlevel";
+    pl.textContent = r.groups.map(g => `${C.fmtLevel(mode, g.L)}: ${g.k}/${g.n}`).join("  ·  ");
+    card.appendChild(pl);
+    if (f && r.status !== "thin") {
+      const s = document.createElement("p"); s.className = "suggest";
+      const lo = mode === "LPF" ? Math.max(C.LPF_FLOOR_X, C.xAtRise(0.1, f)) : C.xAtRise(0.1, f), hi = C.xAtRise(0.9, f);
+      if (r.status === "ceiling") s.append(`Levels off at about ${Math.round(100 * f.upper)}% correct. Listen to the recording and check the three foils.`);
+      else if (C.tooFlat(f, res.summ)) s.append("Curve too flat to suggest a range: responses vary a lot between levels. More data, or a check of the recording and foils, would help.");
+      else {
+        s.append("Suggested range ");
+        const b = document.createElement("b"); b.textContent = `${C.fmtX(mode, lo, { round: true })} to ${C.fmtX(mode, hi, { round: true })} ${ax.unit}`; s.append(b);
+        if (r.status === "harder") s.append(` (add ${d.harder}).`);
+        else if (r.status === "easier") s.append(` (add ${d.easier}).`);
+        else if (r.status === "both") s.append(` (add ${d.harder} and ${d.easier}).`);
+        else s.append(".");
+      }
+      card.appendChild(s);
+    }
+    el.appendChild(card);
+  }
+  if (!rows.length) el.textContent = "No words match this filter.";
+}
+
+function focusWord(w) {
+  if (state.filter !== "all") { state.filter = "all"; const res = state.results[state.mode]; renderChips(res); renderCards(res); }
+  const el = document.getElementById("w-" + w);
+  if (el) { el.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" }); el.style.outline = "2px solid var(--accent)"; setTimeout(() => { el.style.outline = ""; }, 1600); }
+}
+
+// ---------- tables for Excel ----------
+function tsvWords(res) {
+  const u = res.ax.unit;
+  const lines = [["Word", "Status", "Trials", `62.5% point (${u})`, "95% CI low", "95% CI high", `Slope (${res.ax.slopeUnit})`, "Upper limit", "P at hardest level", "P at easiest level", `Suggested low (${u})`, `Suggested high (${u})`].join("\t")];
+  for (const r of res.rows) {
+    const f = r.fit, X = x => res.mode === "SNR" ? (Math.round(x * 10) / 10) : Math.round(Math.pow(2, x));
+    lines.push([r.word, STATUS[r.status].label, r.nTot,
+      f ? X(f.T) : "", r.ci ? X(r.ci[0]) : "", r.ci ? X(r.ci[1]) : "",
+      f ? f.slope.toFixed(2) : "", f ? f.upper.toFixed(3) : "",
+      f ? C.pAt(f.xlo, f).toFixed(3) : "", f ? C.pAt(f.xhi, f).toFixed(3) : "",
+      f ? X(C.xAtRise(0.1, f)) : "", f ? X(C.xAtRise(0.9, f)) : ""].join("\t"));
+  }
+  return lines.join("\n");
+}
+function tsvProp(res) {
+  const L = res.levels, out = [`Proportion correct (pooled over ${res.runs.length} participants)`, ["Word", ...L].join("\t")];
+  for (const r of res.rows) { const m = new Map(r.groups.map(g => [g.L, g])); out.push([r.word, ...L.map(l => m.has(l) ? (m.get(l).k / m.get(l).n).toFixed(3) : "")].join("\t")); }
+  out.push("", "Number presented", ["Word", ...L].join("\t"));
+  for (const r of res.rows) { const m = new Map(r.groups.map(g => [g.L, g])); out.push([r.word, ...L.map(l => m.has(l) ? m.get(l).n : 0)].join("\t")); }
+  return out.join("\n");
+}
+function tsvAvg(res) {
+  const L = res.levels, per = C.perRunLevels(res.runs, L);
+  const out = [["Participant", "Started", ...L].join("\t")];
+  for (const pr of per) out.push([pr.run.participant, pr.run.started, ...pr.p.map(p => p == null ? "" : p.toFixed(3))].join("\t"));
+  const mean = L.map((_, i) => { const v = per.map(pr => pr.p[i]).filter(p => p != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; });
+  const sd = L.map((_, i) => { const v = per.map(pr => pr.p[i]).filter(p => p != null); if (v.length < 2) return null; const m = mean[i]; return Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / (v.length - 1)); });
+  out.push(["Average", "", ...mean.map(m => m == null ? "" : m.toFixed(3))].join("\t"));
+  out.push(["SD", "", ...sd.map(s => s == null ? "" : s.toFixed(3))].join("\t"));
+  return out.join("\n");
+}
+async function copyText(btn, text) {
+  const ta = $("copyFallback");
+  try {
+    await navigator.clipboard.writeText(text);
+    ta.hidden = true;
+    const old = btn.textContent; btn.textContent = "Copied"; setTimeout(() => { btn.textContent = old; }, 1400);
+  } catch (_) {
+    ta.hidden = false; ta.value = text; ta.focus(); ta.select();
+    const old = btn.textContent; btn.textContent = "Select all below and copy"; setTimeout(() => { btn.textContent = old; }, 2500);
+  }
+}
+
+// ---------- wiring ----------
+$("fileInput").addEventListener("change", e => { if (e.target.files.length) loadFiles([...e.target.files]); e.target.value = ""; });
+const dz = $("dropZone");
+["dragenter", "dragover"].forEach(t => dz.addEventListener(t, e => { e.preventDefault(); dz.classList.add("drag"); }));
+["dragleave", "drop"].forEach(t => dz.addEventListener(t, e => { e.preventDefault(); dz.classList.remove("drag"); }));
+dz.addEventListener("drop", e => { if (e.dataTransfer.files.length) loadFiles([...e.dataTransfer.files]); });
+$("clearBtn").addEventListener("click", () => { state.all = makeExample(); state.example = true; state.excluded.clear(); state.mode = "SNR"; $("exampleBanner").hidden = false; showLog([]); renderAll(); });
+$("modeSNR").addEventListener("click", () => { state.mode = "SNR"; state.filter = "all"; renderAll(); });
+$("modeLPF").addEventListener("click", () => { state.mode = "LPF"; state.filter = "all"; renderAll(); });
+$("sortSel").addEventListener("change", e => { state.sort = e.target.value; renderCards(state.results[state.mode]); });
+$("copyWords").addEventListener("click", e => copyText(e.currentTarget, tsvWords(state.results[state.mode])));
+$("copyProp").addEventListener("click", e => copyText(e.currentTarget, tsvProp(state.results[state.mode])));
+$("copyAvg").addEventListener("click", e => copyText(e.currentTarget, tsvAvg(state.results[state.mode])));
+
+state.all = makeExample();
+renderAll();
+</script>
+
+</body>
+</html>
