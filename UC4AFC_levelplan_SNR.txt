@@ -1,0 +1,5 @@
+# UC4AFC level plan
+# Mode	SNR
+# Name	SNR · same levels for every word · 2026-10-12
+# Common	-22, -18, -14, -10, -6, -2, 2
+# Note	Every word is played at the Common levels. To give words their own levels, replace this file with a plan from the word-coverage page.

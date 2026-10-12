@@ -259,7 +259,7 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
       <button id="planSave" type="button" class="primary">Save plan file</button>
       <button id="planCopy" type="button">Copy plan</button>
     </div>
-    <p class="small muted">On the app's normalisation screen, choose <b>Per-word levels</b>, then load this file (or paste the text). Each mode has its own plan. If Save does nothing in this browser, use Copy and paste the text on the app's screen.</p>
+    <p class="small muted">To use it on every device: in the GitHub repository, replace <b>UC4AFC_levelplan_SNR.txt</b> or <b>UC4AFC_levelplan_LPF.txt</b> with this plan (Save gives the file that name; or open the file on GitHub, edit it, and paste the text from Copy). Devices set to <b>Central plan</b> pick it up the next time the normalisation screen opens. To try a plan on one device first, choose <b>Plan file</b> on that screen and load or paste it. If Save does nothing in this browser, use Copy.</p>
   </section>
 
   <details class="panel needs-data" id="partPanel">
@@ -356,7 +356,7 @@ const CORE = (() => {
     return {
       file: name, source: "json", participant: d.participant || "anon", mode: String(d.mode || "").toUpperCase() === "LPF" ? "LPF" : "SNR",
       levels: (d.levels || []).map(Number), started: d.startedAt ? new Date(d.startedAt).toLocaleString("en-NZ") : "",
-      calibration: "", headphones: "", level: "", note: d.note || "", plan: d.plan ? String(d.plan.name || "level plan") : "", planned: null, trials
+      calibration: "", headphones: "", level: "", note: d.note || "", plan: d.plan && d.plan.perWord !== false ? String(d.plan.name || "level plan") : "", planned: null, trials
     };
   }
   function parseFile(name, text) {
@@ -644,7 +644,8 @@ const CORE = (() => {
       delete o.ks; delete o.r;
     }
     out.sort((a, b) => a.word.localeCompare(b.word));
-    return { mode, n, step, bands: B, bandList: bands, wide, words: out, nRuns: opts.nRuns || 0 };
+    const common = Array.isArray(opts.common) && opts.common.length > 1 ? opts.common.slice().sort((a, b) => a - b) : null;
+    return { mode, n, step, bands: B, bandList: bands, wide, words: out, nRuns: opts.nRuns || 0, common };
   }
   function planName(plan, date) {
     const st = plan.mode === "SNR" ? `${plan.step} dB` : `${plan.step} oct`;
@@ -655,6 +656,7 @@ const CORE = (() => {
     const unit = plan.mode === "SNR" ? "dB SNR" : "Hz";
     const fmt = v => plan.mode === "SNR" ? String(v) : String(Math.round(v));
     const lines = ["# UC4AFC level plan", `# Mode\t${plan.mode}`, `# Name\t${name}`];
+    if (plan.common) lines.push(`# Common\t${plan.common.map(fmt).join(", ")}`);
     const un = plan.words.filter(w => w.band === "wide");
     if (un.length) lines.push(`# Wide\t${un.map(w => `${w.word} (${w.why})`).join("; ")}`);
     lines.push(`Word\tBand\tLevels (${unit})`);
@@ -668,13 +670,16 @@ const CORE = (() => {
   //   # UC4AFC level plan
   //   # Mode	SNR
   //   # Name	SNR · 3 bands · …
+  //   # Common	-22, -18, -14, -10, -6, -2, 2
   //   Word	Band	Levels
   //   back	middle	-18, -15, -12, -9, -6, -3
+  // "# Common" (optional) gives the levels for any word without its own line;
+  // a plan with only a Common line plays every word at the same levels.
   // Only the Word and Levels columns are used. Tolerates CSV saved from Excel
   // (quoted cells, or levels spread across cells), Unicode minus signs, and
   // units after the numbers.
   function planParse(text) {
-    const out = { mode: "", name: "", rows: [], issues: [] };
+    const out = { mode: "", name: "", common: null, rows: [], issues: [] };
     const lines = String(text || "").replace(/^﻿/, "").replace(/\r\n?/g, "\n").split("\n");
     const dash = s => String(s).replace(/[−‒–—﹣－]/g, "-");
     const split = l => {
@@ -701,6 +706,7 @@ const CORE = (() => {
         const k = m[1].trim().toLowerCase(), v = m[2].trim();
         if (k === "mode") out.mode = /lpf|low.?pass|cut.?off/i.test(v) ? "LPF" : /snr|noise/i.test(v) ? "SNR" : "";
         else if (k === "name") out.name = v;
+        else if (k === "common") out.common = nums(v);
         return;
       }
       const cells = split(line).map(c => c.trim());
@@ -741,12 +747,12 @@ const CORE = (() => {
     const errors = [], warnings = [], perWord = new Map();
     mode = String(mode).toUpperCase();
     const unit = mode === "LPF" ? "Hz" : "dB";
-    if (!parsed || !parsed.rows.length) return { ok: false, errors: ["No words with levels found. Each line needs a word and its levels."], warnings, perWord, unknown: [], missing: words.slice(), union: [] };
-    const all = parsed.rows.flatMap(r => r.levels);
+    if (!parsed || (!parsed.rows.length && !(parsed.common && parsed.common.length))) return { ok: false, errors: ["No words with levels found. Each line needs a word and its levels."], warnings, perWord, unknown: [], missing: words.slice(), union: [], common: null };
+    const all = parsed.rows.flatMap(r => r.levels).concat(parsed.common || []);
     const guess = all.length && all.every(v => v >= 50) ? "LPF" : all.some(v => v < 0) ? "SNR" : "";
     const wrong = parsed.mode && parsed.mode !== mode ? `This plan is for ${parsed.mode} but the run is ${mode}. Switch mode or load the ${mode} plan.`
       : !parsed.mode && guess && guess !== mode ? `These levels look like ${guess === "LPF" ? "cutoffs in Hz" : "SNRs in dB"}, but the run is ${mode}. Switch mode or load the ${mode} plan.` : "";
-    if (wrong) return { ok: false, errors: [wrong], warnings, perWord, unknown: [], missing: [], union: [] };
+    if (wrong) return { ok: false, errors: [wrong], warnings, perWord, unknown: [], missing: [], union: [], common: null };
     if (!parsed.mode) warnings.push(`The file doesn't say which mode it's for; read as ${mode} (${unit}).`);
     const canon = new Map(words.map(w => [w.toLowerCase(), w]));
     const unknown = [], last = new Map(), outside = [], high = [];
@@ -767,12 +773,20 @@ const CORE = (() => {
     }
     if (outside.length) errors.push(`Levels outside ${mode === "LPF" ? "75–20000 Hz" : "−40 to +15 dB"}: ${outside.slice(0, 6).join(", ")}${outside.length > 6 ? ` and ${outside.length - 6} more words` : ""}.`);
     if (high.length) warnings.push(`Above +9 dB SNR for ${high.join(", ")}: the word may clip at high presentation levels.`);
-    if (!perWord.size) errors.push("None of the words in this plan are in the word list.");
+    let common = null;
+    if (parsed.common) {
+      common = [...new Set(parsed.common)].sort((a, b) => a - b);
+      const bad = common.filter(v => mode === "LPF" ? (v < 75 || v > 20000) : (v < -40 || v > 15));
+      if (bad.length) errors.push(`Common levels outside ${mode === "LPF" ? "75–20000 Hz" : "−40 to +15 dB"}: ${bad.join(", ")}.`);
+      else if (common.length < 2) errors.push("The Common line needs at least 2 levels.");
+      if (mode === "SNR" && common.some(v => v > 9)) warnings.push("Common levels go above +9 dB SNR: the word may clip at high presentation levels.");
+    }
+    if (!perWord.size && parsed.rows.length) errors.push("None of the words in this plan are in the word list.");
     if (unknown.length) warnings.push(`Not in the word list, so ignored: ${unknown.join(", ")}.`);
     (parsed.issues || []).forEach(t => warnings.push(t));
     const missing = words.filter(w => !perWord.has(w));
-    const union = [...new Set([...perWord.values()].flat())].sort((a, b) => a - b);
-    return { ok: errors.length === 0, errors, warnings, perWord, unknown, missing, union };
+    const union = [...new Set([...perWord.values()].flat().concat(missing.length && common ? common : []))].sort((a, b) => a - b);
+    return { ok: errors.length === 0, errors, warnings, perWord, unknown, missing, union, common };
   }
   /* shared-plan-end */
 
@@ -1225,10 +1239,10 @@ function renderCards(res) {
       }
       card.appendChild(s);
     }
-    const pc = state.plan[mode].check, lv = pc && pc.perWord.get(r.word);
+    const pc = state.plan[mode].check, lv = pc && (pc.perWord.get(r.word) || (pc.ok && pc.common));
     if (lv) {
       const pl2 = document.createElement("p"); pl2.className = "planline";
-      const band = pc.bands.get(r.word);
+      const band = pc.perWord.has(r.word) ? pc.bands.get(r.word) : "common";
       pl2.append(`Plan${band ? ` (${band})` : ""}: `);
       const b = document.createElement("b"); b.textContent = `${lv.map(v => fmtPlanLevel(mode, v)).join(", ")} ${ax.unit}`; pl2.append(b);
       if (f && r.status !== "thin") pl2.append(planCovers(f, lv, ax) ? " · covers it" : " · doesn't span it");
@@ -1246,12 +1260,35 @@ function focusWord(w) {
 }
 
 // ---------- level plan ----------
+// The central plans sit next to this page on the website; their Common lines
+// carry over into generated plans. (Not reachable from a preview: ignored.)
+const centralCommon = { SNR: null, LPF: null };
+for (const m of ["SNR", "LPF"]) {
+  fetch(`UC4AFC_levelplan_${m}.txt?v=${Date.now()}`, { cache: "no-store" })
+    .then(r => r.ok ? r.text() : null)
+    .then(t => {
+      if (!t) return;
+      const p = C.planParse(t);
+      if (p.mode === m && p.common && p.common.length > 1) {
+        centralCommon[m] = p.common.slice().sort((a, b) => a - b);
+        const res = state.results[state.mode];
+        if (res && state.mode === m && !state.plan[m].edited) { renderPlan(res); renderCards(res); }
+      }
+    }).catch(() => {});
+}
 const isoDate = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const fmtPlanLevel = (mode, v) => mode === "LPF" ? String(Math.round(v)) : C.fmtLevel(mode, v);
 const planCovers = (f, lv, ax) => C.rise(ax.toX(lv[0]), f) <= 0.2 && C.rise(ax.toX(lv[lv.length - 1]), f) >= 0.8;
 function buildPlanText(res) {
   const P = state.plan[res.mode];
-  const plan = C.makePlan(res.mode, res.rows, res.levels, { bands: P.bands, n: P.n, step: P.step, stepX: res.stepX, nRuns: res.runs.length });
+  // Common levels (for any word without its own line): the levels of the
+  // latest run that played every word at the same levels.
+  const firstTs = r => (r.trials[0] && r.trials[0].ts) || "";
+  // Prefer the Common line of the central plan on the website, when this page
+  // is opened from there; otherwise the latest run's levels.
+  const latest = res.runs.filter(r => !r.plan && r.levels.length > 1).sort((a, b) => firstTs(b).localeCompare(firstTs(a)))[0];
+  const common = centralCommon[res.mode] || (latest ? latest.levels : null);
+  const plan = C.makePlan(res.mode, res.rows, res.levels, { bands: P.bands, n: P.n, step: P.step, stepX: res.stepX, nRuns: res.runs.length, common });
   return C.planText(plan, C.planName(plan, isoDate()));
 }
 function renderPlan(res) {
@@ -1283,11 +1320,16 @@ function checkPlan(res) {
   const total = [...chk.perWord.values()].reduce((a, l) => a + l.length, 0);
   chk.errors.forEach(e => line("err", "✗ " + e));
   chk.warnings.forEach(w => line("warn", "! " + w));
-  if (chk.missing.length && chk.perWord.size) line("warn", `! No levels for ${chk.missing.join(", ")}: the app would give ${chk.missing.length === 1 ? "it" : "them"} the common levels.`);
-  if (chk.ok) line("ok", `✓ Reads correctly${parsed.name ? ` (“${parsed.name}”)` : ""}: ${chk.perWord.size} words, ${total} presentations per repeat.`);
+  if (chk.missing.length && chk.perWord.size) line("warn", `! No line for ${chk.missing.join(", ")}: the app will use ${chk.common ? "the Common levels" : "the levels typed on its screen"}.`);
+  const nCommon = chk.common ? chk.missing.length : 0;
+  const perRep = total + nCommon * (chk.common ? chk.common.length : 0);
+  if (chk.ok) line("ok", `✓ Reads correctly${parsed.name ? ` (“${parsed.name}”)` : ""}: ` +
+    (chk.perWord.size ? `${chk.perWord.size} word${chk.perWord.size === 1 ? "" : "s"} with ${chk.perWord.size === 1 ? "its" : "their"} own levels` : "every word at the Common levels") +
+    (chk.perWord.size && nCommon ? `, ${nCommon} at the Common levels` : "") +
+    (chk.missing.length && !chk.common ? "." : `, ${perRep} presentations per repeat.`));
   // summary by band
   const el = $("planSummary"); el.textContent = "";
-  if (!chk.perWord.size) return;
+  if (!chk.perWord.size && !chk.common) return;
   const groups = new Map();
   for (const [w, lv] of chk.perWord) { const b = chk.bands.get(w) || "—"; if (!groups.has(b)) groups.set(b, []); groups.get(b).push({ w, lv }); }
   const order = ["all", "lowest", "low", "middle", "high", "highest", "word", "wide"];
@@ -1301,9 +1343,11 @@ function checkPlan(res) {
     const lo = Math.min(...g.flatMap(x => x.lv)), hi = Math.max(...g.flatMap(x => x.lv));
     add(`${label} · ${g.length} word${g.length === 1 ? "" : "s"}`, same ? `${fmtL(g[0].lv)} ${ax.unit}` : `${fmtPlanLevel(mode, lo)} to ${fmtPlanLevel(mode, hi)} ${ax.unit}, varies by word`);
   }
-  const fitted = res.rows.filter(r => r.fit && r.status !== "thin" && chk.perWord.has(r.word));
-  const cov = fitted.filter(r => planCovers(r.fit, chk.perWord.get(r.word), ax)).length;
+  const lvOf = w => chk.perWord.get(w) || chk.common;
+  const fitted = res.rows.filter(r => r.fit && r.status !== "thin" && lvOf(r.word));
+  const cov = fitted.filter(r => planCovers(r.fit, lvOf(r.word), ax)).length;
   const now = res.rows.filter(r => r.status === "good").length;
+  if (chk.common) add("Common", `${fmtL(chk.common)} ${ax.unit} (for any word without its own line)`);
   add("Covered", `${cov} of ${fitted.length} words with this plan (${now} of ${res.rows.length} with the levels tested so far)`);
   el.appendChild(dl);
   const wide = groups.get("wide");
@@ -1335,7 +1379,7 @@ $("planSave").addEventListener("click", () => {
   const text = $("planText").value;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-  a.download = `UC4AFC_level_plan_${state.mode}_${isoDate()}.txt`;
+  a.download = `UC4AFC_levelplan_${state.mode}.txt`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 });

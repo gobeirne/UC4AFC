@@ -316,9 +316,18 @@ img.disabled {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.4;
   tab-size: 9; white-space: pre; overflow-x: auto; padding: 0.5rem; border: 1px solid #c5cee0; border-radius: 6px;
 }
-.cs-plan-check { font-size: 0.85rem; margin-top: 0.35rem; display: grid; gap: 0.15rem; }
+.cs-plan-check { font-size: 0.85rem; margin: 0.35rem 0 0.5rem; display: grid; gap: 0.15rem; text-align: left; }
+.cs-source .seg-btn { padding: 0.45rem 0.7rem; white-space: nowrap; font-size: 0.9rem; }
+.cs-central-show { margin-top: 0.5rem; font-size: 0.85rem; }
+.cs-central-show summary { cursor: pointer; font-weight: 600; }
+#csCentralText {
+  margin: 0.4rem 0 0; max-height: 14rem; overflow: auto; padding: 0.5rem; border: 1px solid #c5cee0; border-radius: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.75rem; line-height: 1.4; tab-size: 9; white-space: pre; background: #f7f8fb;
+}
 .cs-plan-check .err { color: #b31b1b; }
 .cs-plan-check .warn { color: #8a5a00; }
 .cs-plan-check .ok { color: #1d6b1d; }
 /* Keep the normalisation screen's fields inside a phone-width screen. */
 #conststim input[type="text"], #conststim input[type="number"] { box-sizing: border-box; max-width: 100%; }
+@media (max-width: 400px) { .cs-source .seg-btn { padding: 0.45rem 0.55rem; font-size: 0.85rem; } }
+@media (max-width: 360px) { .cs-source .seg-btn { white-space: normal; } }

@@ -1,0 +1,5 @@
+# UC4AFC level plan
+# Mode	LPF
+# Name	LPF · same levels for every word · 2026-10-12
+# Common	90, 125, 200, 300, 450, 675, 1000
+# Note	Every word is played at the Common levels. To give words their own levels, replace this file with a plan from the word-coverage page.
