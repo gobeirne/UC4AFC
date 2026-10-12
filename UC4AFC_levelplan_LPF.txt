@@ -1,5 +1,72 @@
 # UC4AFC level plan
 # Mode	LPF
-# Name	LPF · same levels for every word · 2026-10-12
+# Name	LPF · 3 bands · 6 levels, 0.5 oct steps · 2026-10-12 · from 12 runs
 # Common	90, 125, 200, 300, 450, 675, 1000
-# Note	Every word is played at the Common levels. To give words their own levels, replace this file with a plan from the word-coverage page.
+# Wide	bat (above the tested range); bin (curve too flat); book (curve too flat); chip (curve too flat); dirt (curve too flat); hood (curve too flat); knees (above the tested range); lick (curve too flat); ship (curve too flat); tap (curve too flat)
+Word	Band	Levels (Hz)
+back	middle	175, 250, 355, 500, 705, 1000
+bag	low	90, 125, 175, 250, 355, 500
+bat	wide	90, 175, 355, 705, 1410, 2830
+bike	high	250, 355, 500, 705, 1000, 1410
+bin	wide	90, 175, 355, 705, 1410, 2830
+bird	low	90, 125, 175, 250, 355, 500
+boat	high	250, 355, 500, 705, 1000, 1410
+bone	low	90, 125, 175, 250, 355, 500
+book	wide	90, 175, 355, 705, 1410, 2830
+boot	high	250, 355, 500, 705, 1000, 1410
+bug	high	250, 355, 500, 705, 1000, 1410
+bus	low	90, 125, 175, 250, 355, 500
+cake	middle	175, 250, 355, 500, 705, 1000
+card	middle	175, 250, 355, 500, 705, 1000
+cat	middle	175, 250, 355, 500, 705, 1000
+chalk	middle	175, 250, 355, 500, 705, 1000
+chin	low	90, 125, 175, 250, 355, 500
+chip	wide	90, 175, 355, 705, 1410, 2830
+coat	high	250, 355, 500, 705, 1000, 1410
+cot	high	250, 355, 500, 705, 1000, 1410
+dad	middle	175, 250, 355, 500, 705, 1000
+dirt	wide	90, 175, 355, 705, 1410, 2830
+dog	high	250, 355, 500, 705, 1000, 1410
+duck	middle	175, 250, 355, 500, 705, 1000
+feet	low	90, 125, 175, 250, 355, 500
+fork	high	250, 355, 500, 705, 1000, 1410
+gate	middle	175, 250, 355, 500, 705, 1000
+goat	high	250, 355, 500, 705, 1000, 1410
+hat	middle	175, 250, 355, 500, 705, 1000
+head	low	90, 125, 175, 250, 355, 500
+heart	middle	175, 250, 355, 500, 705, 1000
+hood	wide	90, 175, 355, 705, 1410, 2830
+house	middle	175, 250, 355, 500, 705, 1000
+hug	middle	175, 250, 355, 500, 705, 1000
+keys	low	90, 125, 175, 250, 355, 500
+king	middle	175, 250, 355, 500, 705, 1000
+kite	high	250, 355, 500, 705, 1000, 1410
+knees	wide	90, 175, 355, 705, 1410, 2830
+knife	middle	175, 250, 355, 500, 705, 1000
+leaf	low	90, 125, 175, 250, 355, 500
+leg	low	90, 125, 175, 250, 355, 500
+lick	wide	90, 175, 355, 705, 1410, 2830
+light	high	250, 355, 500, 705, 1000, 1410
+lock	high	250, 355, 500, 705, 1000, 1410
+man	low	90, 125, 175, 250, 355, 500
+meat	low	90, 125, 175, 250, 355, 500
+mouse	middle	175, 250, 355, 500, 705, 1000
+mum	low	90, 125, 175, 250, 355, 500
+night	high	250, 355, 500, 705, 1000, 1410
+nose	middle	175, 250, 355, 500, 705, 1000
+nurse	low	90, 125, 175, 250, 355, 500
+pen	low	90, 125, 175, 250, 355, 500
+pig	low	90, 125, 175, 250, 355, 500
+road	middle	175, 250, 355, 500, 705, 1000
+rock	high	250, 355, 500, 705, 1000, 1410
+sad	low	90, 125, 175, 250, 355, 500
+seed	low	90, 125, 175, 250, 355, 500
+shark	high	250, 355, 500, 705, 1000, 1410
+sheep	low	90, 125, 175, 250, 355, 500
+ship	wide	125, 250, 500, 1000, 2000, 4000
+shirt	middle	175, 250, 355, 500, 705, 1000
+shop	high	250, 355, 500, 705, 1000, 1410
+sock	middle	175, 250, 355, 500, 705, 1000
+sword	high	250, 355, 500, 705, 1000, 1410
+tap	wide	90, 175, 355, 705, 1410, 2830
+tongue	high	250, 355, 500, 705, 1000, 1410
