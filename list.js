@@ -1,5 +1,13 @@
 // File: list.js (non-module)
-async function loadList() {
+//
+// loadList(which): which = "1" | "2" | "both" (default "both").
+//   "1"/"2" -> UC4AFC_list01.txt / UC4AFC_list02.txt (33 words each).
+//   "both"  -> list 1 + list 2 concatenated (66 words). Built from the two
+//              list files rather than the old combined UC4AFC_lists.txt, which
+//              was missing "chin" (65 rows).
+// Offline (file://) uses the two inline <script type="text/plain"> blocks
+// #list-fallback-1 and #list-fallback-2 in index.html.
+async function loadList(which = "both") {
   function parseLines(text, sourceLabel) {
     const lines = text.trim().split(/\r?\n/);
     const rows = lines.map((line, i) => {
@@ -19,28 +27,37 @@ async function loadList() {
     return rows;
   }
 
+  const ids = (which === "1" || which === "2") ? [which] : ["1", "2"];
+  const rows = [];
+
   if (location.protocol === "file:") {
-    const fallback = document.getElementById("list-fallback");
-    if (!fallback) {
-      alert("Local fallback list not found in page.");
-      throw new Error("Missing <script id='list-fallback'> element");
+    for (const id of ids) {
+      const el = document.getElementById(`list-fallback-${id}`);
+      if (!el) {
+        alert(`Local fallback list ${id} not found in page.`);
+        throw new Error(`Missing <script id='list-fallback-${id}'> element`);
+      }
+      rows.push(...parseLines(el.textContent || "", `inline fallback list ${id}`));
     }
-    const raw = fallback.textContent || "";
-    const rows = parseLines(raw, "inline fallback");
-    list.length = 0;
-    list.push(...rows);
-    console.warn("Loaded inline fallback list (file://)");
+    console.warn(`Loaded inline fallback list(s) ${ids.join("+")} (file://)`);
   } else {
     try {
-      const txt = await fetch("UC4AFC_lists.txt").then(r => r.text());
-      const rows = parseLines(txt, "UC4AFC_lists.txt");
-      list.length = 0;
-      list.push(...rows);
-      console.log("[ok] Loaded list from UC4AFC_lists.txt");
+      for (const id of ids) {
+        const file = `UC4AFC_list0${id}.txt`;
+        const res = await fetch(file);
+        if (!res.ok) throw new Error(`${file}: HTTP ${res.status}`);
+        rows.push(...parseLines(await res.text(), file));
+      }
+      console.log(`[ok] Loaded list(s) ${ids.join("+")}: ${rows.length} words`);
     } catch (err) {
-      console.error("Failed to load UC4AFC_lists.txt:", err);
+      console.error("Failed to load stimulus list:", err);
       alert("Failed to load stimulus list.");
     }
+  }
+
+  if (rows.length) {
+    list.length = 0;
+    list.push(...rows);
   }
 
   // [ok] All assets are preloaded via preloadAllAssets() in main.js

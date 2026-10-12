@@ -330,6 +330,19 @@
 
   <div class="setup-block">
     <span class="setup-label">Levels</span>
+    <div class="segmented" id="csSourceSegmented" style="margin-bottom:0.5rem;">
+      <button type="button" data-cssource="common" class="seg-btn active">Same for every word</button>
+      <button type="button" data-cssource="plan" class="seg-btn">Per-word levels</button>
+    </div>
+    <div id="csPlanBlock" class="cs-plan" hidden>
+      <p class="small" style="margin:0 0 0.4rem;">Load a level plan from the word-coverage page, or paste its text below. Each word is played at its own levels. SNR and LPF each keep their own plan.</p>
+      <label class="cs-filebtn">Load plan file…
+        <input id="csPlanFile" type="file" accept=".txt,.tsv,.csv,text/plain,text/csv,text/tab-separated-values">
+      </label>
+      <button type="button" id="csPlanClear" class="cs-plan-clear">Clear</button>
+      <textarea id="csPlanText" rows="7" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-label="Level plan text" placeholder="Word&#9;Band&#9;Levels&#10;back&#9;low&#9;-24, -21, -18, -15, -12, -9"></textarea>
+      <div id="csPlanCheck" class="cs-plan-check" aria-live="polite"></div>
+    </div>
     <label style="display:block; font-weight:600; font-size:0.85rem; color:#333; text-align:left;">
       <span id="csLevelsLabel">SNRs (dB, comma-separated)</span>
       <input id="csLevels" type="text" style="width:100%; margin-top:0.25rem;" placeholder="-15, -12, -9, -6, -3">

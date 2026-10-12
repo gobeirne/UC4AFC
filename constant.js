@@ -24,12 +24,20 @@
 //   4. Proportion table      (Word × level, correct / presented)
 //   5. Chronological log      (timestamp, word, level, chosen, correct?)
 // Rows are the 66 words (alphabetical); columns are the levels (ascending).
+//
+// Per-word levels: instead of one level list for every word, the operator can
+// load a LEVEL PLAN (a text file made by the word-coverage analysis page) that
+// gives each word its own levels. Words the plan leaves out use the common
+// list. The plan's name and per-word levels go into the results, and table
+// cells for levels a word was never planned at are left blank.
 // -----------------------------------------------------------------------------
 
 const CS_KEYS = {
   snr: "uc4afc_cs_snr",     // saved SNR level list (JSON array)
   lpf: "uc4afc_cs_lpf",     // saved LPF level list (JSON array)
-  opts: "uc4afc_cs_opts"    // { repeats, breakEvery, mode }
+  opts: "uc4afc_cs_opts",   // { repeats, breakEvery, mode }
+  plan: { snr: "uc4afc_cs_plan_snr", lpf: "uc4afc_cs_plan_lpf" },   // level-plan text per mode
+  planOn: "uc4afc_cs_plan_on"                                         // { snr: bool, lpf: bool }
 };
 
 // Sensible starting defaults (only used until the operator saves their own).
@@ -67,7 +75,8 @@ const CS = {
   repeats: 1,
   breakEvery: 40,
   easeIn: 20,
-  queue: [],            // [{ wordIdx, level, rep }] in presentation order
+  plan: null,           // per-word levels for this run: { name, levels: { word: [..] } } or null
+  queue: [],            // [{ word, level, rep }] in presentation order
   pos: 0,               // index into queue of the CURRENT (pending) trial
   startedAt: null,
   logRows: [],          // chronological: { ts, word, level, chosen, correct, isCorrect, timeMs }
@@ -89,6 +98,168 @@ function csParseLevels(text) {
     .filter(s => s.length)
     .map(Number)
     .filter(n => Number.isFinite(n));
+}
+
+// --- Level plans ------------------------------------------------------------
+  // ---- Level plan files (shared, word for word, by the UC4AFC app and the
+  // word-coverage analysis page). A plan gives each word its own levels:
+  //   # UC4AFC level plan
+  //   # Mode	SNR
+  //   # Name	SNR · 3 bands · …
+  //   Word	Band	Levels
+  //   back	middle	-18, -15, -12, -9, -6, -3
+  // Only the Word and Levels columns are used. Tolerates CSV saved from Excel
+  // (quoted cells, or levels spread across cells), Unicode minus signs, and
+  // units after the numbers.
+  function planParse(text) {
+    const out = { mode: "", name: "", rows: [], issues: [] };
+    const lines = String(text || "").replace(/^﻿/, "").replace(/\r\n?/g, "\n").split("\n");
+    const dash = s => String(s).replace(/[−‒–—﹣－]/g, "-");
+    const split = l => {
+      if (l.includes("\t")) return l.split("\t");
+      const cells = []; let cur = "", q = false;
+      for (let i = 0; i < l.length; i++) {
+        const ch = l[i];
+        if (q) { if (ch === '"') { if (l[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+        else if (ch === '"') q = true;
+        else if (ch === "," || ch === ";") { cells.push(cur); cur = ""; }
+        else cur += ch;
+      }
+      cells.push(cur);
+      return cells;
+    };
+    const nums = s => (dash(s).match(/[-+]?(?:\d+(?:\.\d*)?|\.\d+)/g) || []).map(Number);
+    let iWord = -1, iLev = -1, iEnd = -1, iBand = -1;
+    lines.forEach((raw, idx) => {
+      const line = raw.replace(/^"(#[^"]*)"/, "$1");
+      if (!line.trim()) return;
+      if (/^\s*#/.test(line)) {
+        const m = line.replace(/^\s*#\s*/, "").match(/^([^\t,;:]+)[\t,;:]+\s*"?(.*?)"?\s*[,;\t]*$/);
+        if (!m) return;
+        const k = m[1].trim().toLowerCase(), v = m[2].trim();
+        if (k === "mode") out.mode = /lpf|low.?pass|cut.?off/i.test(v) ? "LPF" : /snr|noise/i.test(v) ? "SNR" : "";
+        else if (k === "name") out.name = v;
+        return;
+      }
+      const cells = split(line).map(c => c.trim());
+      const lc = cells.map(c => c.toLowerCase());
+      if (iWord < 0 && lc.includes("word") && lc.some(c => /^levels?\b/.test(c))) {
+        iWord = lc.indexOf("word");
+        iLev = lc.findIndex(c => /^levels?\b/.test(c));
+        iBand = lc.indexOf("band");
+        iEnd = lc.findIndex((c, j) => j > iLev && c !== "");
+        if (iEnd < 0) iEnd = Infinity;
+        if (!out.mode && /\bhz\b/.test(lc[iLev])) out.mode = "LPF";
+        if (!out.mode && /\bdb\b|snr/.test(lc[iLev])) out.mode = "SNR";
+        return;
+      }
+      let word, levels, band = "";
+      if (iWord >= 0) {
+        word = cells[iWord] || "";
+        levels = nums(cells.slice(iLev, iEnd).join(" "));
+        band = iBand >= 0 ? cells[iBand] || "" : "";
+      } else {
+        // no header row: the line starts with the word; every number after it is a level
+        const m = line.match(/^\s*"?([^\s\t,;:"]+)"?(.*)$/);
+        word = m ? m[1] : "";
+        levels = nums(m ? m[2] : "");
+      }
+      word = String(word).trim();
+      if (!word || /^word$/i.test(word)) return;
+      if (!/^[a-z][a-z'’ -]*$/i.test(word)) { out.issues.push(`Line ${idx + 1} skipped: "${word}" isn't a word.`); return; }
+      out.rows.push({ word, band, levels, line: idx + 1 });
+    });
+    return out;
+  }
+
+  // Check a parsed plan against the run's mode ("SNR"/"LPF") and the stimulus
+  // words. Returns per-word sorted levels plus errors (block the run) and
+  // warnings (shown, run allowed).
+  function planCheck(parsed, mode, words) {
+    const errors = [], warnings = [], perWord = new Map();
+    mode = String(mode).toUpperCase();
+    const unit = mode === "LPF" ? "Hz" : "dB";
+    if (!parsed || !parsed.rows.length) return { ok: false, errors: ["No words with levels found. Each line needs a word and its levels."], warnings, perWord, unknown: [], missing: words.slice(), union: [] };
+    const all = parsed.rows.flatMap(r => r.levels);
+    const guess = all.length && all.every(v => v >= 50) ? "LPF" : all.some(v => v < 0) ? "SNR" : "";
+    const wrong = parsed.mode && parsed.mode !== mode ? `This plan is for ${parsed.mode} but the run is ${mode}. Switch mode or load the ${mode} plan.`
+      : !parsed.mode && guess && guess !== mode ? `These levels look like ${guess === "LPF" ? "cutoffs in Hz" : "SNRs in dB"}, but the run is ${mode}. Switch mode or load the ${mode} plan.` : "";
+    if (wrong) return { ok: false, errors: [wrong], warnings, perWord, unknown: [], missing: [], union: [] };
+    if (!parsed.mode) warnings.push(`The file doesn't say which mode it's for; read as ${mode} (${unit}).`);
+    const canon = new Map(words.map(w => [w.toLowerCase(), w]));
+    const unknown = [], last = new Map(), outside = [], high = [];
+    for (const r of parsed.rows) {
+      const w = canon.get(r.word.toLowerCase());
+      if (!w) { unknown.push(r.word); continue; }
+      if (last.has(w)) warnings.push(`${w} is listed twice (lines ${last.get(w).line} and ${r.line}); the later line is used.`);
+      last.set(w, r);
+    }
+    for (const [w, r] of last) {
+      const lv = [...new Set(r.levels)].sort((a, b) => a - b);
+      const bad = lv.filter(v => mode === "LPF" ? (v < 75 || v > 20000) : (v < -40 || v > 15));
+      if (bad.length) outside.push(`${w} (${bad.join(", ")})`);
+      else if (lv.length < 2) errors.push(`${w} needs at least 2 levels (line ${r.line}).`);
+      if (mode === "SNR" && lv.some(v => v > 9)) high.push(w);
+      if (lv.length < r.levels.length) warnings.push(`${w}: repeated level${r.levels.length - lv.length === 1 ? "" : "s"} counted once.`);
+      perWord.set(w, lv);
+    }
+    if (outside.length) errors.push(`Levels outside ${mode === "LPF" ? "75–20000 Hz" : "−40 to +15 dB"}: ${outside.slice(0, 6).join(", ")}${outside.length > 6 ? ` and ${outside.length - 6} more words` : ""}.`);
+    if (high.length) warnings.push(`Above +9 dB SNR for ${high.join(", ")}: the word may clip at high presentation levels.`);
+    if (!perWord.size) errors.push("None of the words in this plan are in the word list.");
+    if (unknown.length) warnings.push(`Not in the word list, so ignored: ${unknown.join(", ")}.`);
+    (parsed.issues || []).forEach(t => warnings.push(t));
+    const missing = words.filter(w => !perWord.has(w));
+    const union = [...new Set([...perWord.values()].flat())].sort((a, b) => a - b);
+    return { ok: errors.length === 0, errors, warnings, perWord, unknown, missing, union };
+  }
+
+function csPlanLoad(mode) {
+  try { return localStorage.getItem(CS_KEYS.plan[mode]) || ""; } catch (_) { return ""; }
+}
+function csPlanStore(mode, text) {
+  try { localStorage.setItem(CS_KEYS.plan[mode], text || ""); } catch (_) {}
+}
+function csPlanOn(mode) {
+  try { return !!(JSON.parse(localStorage.getItem(CS_KEYS.planOn) || "{}")[mode]); } catch (_) { return false; }
+}
+function csPlanSetOn(mode, on) {
+  try {
+    const o = JSON.parse(localStorage.getItem(CS_KEYS.planOn) || "{}");
+    o[mode] = !!on;
+    localStorage.setItem(CS_KEYS.planOn, JSON.stringify(o));
+  } catch (_) {}
+}
+// The plan currently on screen, checked against the loaded words and mode.
+function csPlanState() {
+  const text = document.getElementById("csPlanText")?.value || "";
+  const parsed = planParse(text);
+  const chk = planCheck(parsed, CS.mode, csWordRows());
+  return { text, parsed, chk };
+}
+function csPlanRender() {
+  const out = document.getElementById("csPlanCheck");
+  if (!out) return null;
+  out.textContent = "";
+  const st = csPlanState();
+  const line = (cls, t) => { const d = document.createElement("div"); d.className = cls; d.textContent = t; out.appendChild(d); };
+  if (!st.text.trim()) { line("warn", "No plan loaded yet."); return st; }
+  st.chk.errors.forEach(e => line("err", "✗ " + e));
+  st.chk.warnings.forEach(w => line("warn", "! " + w));
+  if (st.chk.missing.length && st.chk.perWord.size) {
+    line("warn", `! Not in the plan, so given the common levels below: ${st.chk.missing.join(", ")}.`);
+  }
+  if (st.chk.ok) {
+    const total = [...st.chk.perWord.values()].reduce((a, l) => a + l.length, 0);
+    line("ok", `✓ ${st.parsed.name ? `“${st.parsed.name}”: ` : ""}${st.chk.perWord.size} words with their own levels (${total} presentations per repeat).`);
+  }
+  return st;
+}
+const csUsingPlan = () => !!document.querySelector('#csSourceSegmented .seg-btn.active[data-cssource="plan"]');
+function csShowSource(usePlan) {
+  const seg = document.getElementById("csSourceSegmented");
+  if (seg) seg.querySelectorAll(".seg-btn").forEach(b => b.classList.toggle("active", (b.dataset.cssource === "plan") === usePlan));
+  const blk = document.getElementById("csPlanBlock");
+  if (blk) blk.hidden = !usePlan;
 }
 
 function csLoadList(mode) {
@@ -175,12 +346,17 @@ function csPopulateForm() {
 function csFillLevelsField() {
   const field = document.getElementById("csLevels");
   if (field) field.value = csLoadList(CS.mode).join(", ");
+  const pt = document.getElementById("csPlanText");
+  if (pt) pt.value = csPlanLoad(CS.mode);
+  csShowSource(csPlanOn(CS.mode));
+  csLevelsLabel();
+  csPlanRender();
+}
+function csLevelsLabel() {
   const lbl = document.getElementById("csLevelsLabel");
-  if (lbl) {
-    lbl.textContent = CS.mode === "snr"
-      ? "SNRs (dB, comma-separated)"
-      : "LPF corner frequencies (Hz, comma-separated)";
-  }
+  if (!lbl) return;
+  const what = CS.mode === "snr" ? "SNRs (dB, comma-separated)" : "LPF corner frequencies (Hz, comma-separated)";
+  lbl.textContent = csUsingPlan() ? `Common levels, for any word the plan leaves out: ${what}` : what;
 }
 
 function csUpdateSummary() {
@@ -188,6 +364,16 @@ function csUpdateSummary() {
   if (!el) return;
   const levels = csParseLevels(document.getElementById("csLevels")?.value);
   const reps = Math.max(1, Math.round(Number(document.getElementById("csRepeats")?.value) || 1));
+  if (csUsingPlan()) {
+    const st = csPlanState();
+    if (!st.text.trim()) { el.textContent = "Load or paste a level plan."; return; }
+    if (!st.chk.ok) { el.textContent = "Fix the plan before starting."; return; }
+    const missing = st.chk.missing.length;
+    if (missing && !levels.length) { el.textContent = `Enter common levels for the ${missing} word${missing === 1 ? "" : "s"} not in the plan.`; return; }
+    const perRep = [...st.chk.perWord.values()].reduce((a, l) => a + l.length, 0) + missing * levels.length;
+    el.textContent = `Per-word levels: ${perRep} presentations per repeat × ${reps} = ${perRep * reps} presentations.`;
+    return;
+  }
   const words = csWordRows().length || 66;
   const total = words * levels.length * reps;
   el.textContent = levels.length
@@ -245,6 +431,53 @@ function setupConstantScreen() {
     });
   }
 
+  // Common levels vs. a per-word level plan (remembered per mode).
+  const srcSeg = document.getElementById("csSourceSegmented");
+  if (srcSeg) {
+    srcSeg.querySelectorAll(".seg-btn").forEach(btn => {
+      btn.onclick = () => {
+        const on = btn.dataset.cssource === "plan";
+        csShowSource(on);
+        csPlanSetOn(CS.mode, on);
+        csLevelsLabel();
+        csPlanRender();
+        csUpdateSummary();
+        csStatus("");
+      };
+    });
+  }
+  // The plan text is kept on the device as soon as it changes.
+  const planText = document.getElementById("csPlanText");
+  if (planText) planText.addEventListener("input", () => {
+    csPlanStore(CS.mode, planText.value);
+    csPlanRender();
+    csUpdateSummary();
+  });
+  const planFile = document.getElementById("csPlanFile");
+  if (planFile) planFile.addEventListener("change", async () => {
+    const f = planFile.files && planFile.files[0];
+    planFile.value = "";
+    if (!f) return;
+    try {
+      const text = await f.text();
+      if (planText) planText.value = text;
+      csPlanStore(CS.mode, text);
+      const st = csPlanRender();
+      csUpdateSummary();
+      csStatus(st && st.chk.ok ? `Loaded ${f.name}.` : `Loaded ${f.name}, but it needs fixing (see above).`, !(st && st.chk.ok));
+    } catch (e) {
+      csStatus(`Couldn't read ${f.name}.`, true);
+    }
+  });
+  const planClear = document.getElementById("csPlanClear");
+  if (planClear) planClear.onclick = () => {
+    if (planText && planText.value.trim() && !confirm("Clear the level plan for " + CS.mode.toUpperCase() + "?")) return;
+    if (planText) planText.value = "";
+    csPlanStore(CS.mode, "");
+    csPlanRender();
+    csUpdateSummary();
+  };
+
   // Live summary as the operator edits levels/repeats.
   ["csLevels", "csRepeats"].forEach(id => {
     const el = document.getElementById(id);
@@ -260,6 +493,8 @@ function setupConstantScreen() {
     const brk = Math.max(0, Math.round(Number(document.getElementById("csBreakEvery").value) || 0));
     const ease = Math.max(0, Math.round(Number(document.getElementById("csEaseIn").value) || 0));
     const ok = csSaveDefaults(CS.mode, levels, reps, brk, CS.ear, ease);
+    csPlanSetOn(CS.mode, csUsingPlan());
+    csPlanStore(CS.mode, document.getElementById("csPlanText")?.value || "");
     csStatus(ok ? `Saved as default for ${CS.mode.toUpperCase()} mode.` : "Could not save (storage unavailable).", !ok);
   };
 
@@ -277,20 +512,38 @@ function setupConstantScreen() {
 // ---------------------------------------------------------------------------
 function csStartRun() {
   const levels = csParseLevels(document.getElementById("csLevels").value);
-  if (!levels.length) { csStatus("Enter at least one valid level.", true); return; }
+  const words = csWordRows();
+  if (!words.length) { csStatus("No stimulus words loaded.", true); return; }
+
+  // Each word's levels: from the plan when one is in use, else the common list.
+  let plan = null;
+  if (csUsingPlan()) {
+    const st = csPlanState();
+    if (!st.text.trim()) { csStatus("Load or paste a level plan first.", true); return; }
+    if (!st.chk.ok) { csStatus("The level plan needs fixing: " + st.chk.errors[0], true); return; }
+    if (st.chk.missing.length && !levels.length) { csStatus("Enter common levels for the words not in the plan.", true); return; }
+    const per = {};
+    for (const w of words) per[w] = st.chk.perWord.get(w) || levels.slice().sort((a, b) => a - b);
+    plan = {
+      name: st.parsed.name || "unnamed plan",
+      levels: per,
+      fromCommon: st.chk.missing.slice()
+    };
+  } else if (!levels.length) { csStatus("Enter at least one valid level.", true); return; }
   const reps = Math.max(1, Math.round(Number(document.getElementById("csRepeats").value) || 1));
   const brk = Math.max(0, Math.round(Number(document.getElementById("csBreakEvery").value) || 0));
   const easeIn = Math.max(0, Math.round(Number(document.getElementById("csEaseIn").value) || 0));
 
   // Ascending order is what the tables use; keep a sorted copy for columns.
-  CS.levels = levels.slice().sort((a, b) => a - b);
+  // With a plan, the columns are every level any word is played at.
+  CS.plan = plan;
+  CS.levels = plan
+    ? [...new Set(Object.values(plan.levels).flat())].sort((a, b) => a - b)
+    : levels.slice().sort((a, b) => a - b);
   CS.repeats = reps;
   CS.breakEvery = brk;
   CS.easeIn = easeIn;
   CS.mode = CS.mode || "snr";
-
-  const words = csWordRows();
-  if (!words.length) { csStatus("No stimulus words loaded.", true); return; }
 
   // Build the queue: one full (word × level) block per repeat, shuffled WITHIN
   // each rep-block, then the blocks concatenated (rep 1 fully, then rep 2, …).
@@ -298,8 +551,8 @@ function csStartRun() {
   for (let rep = 0; rep < reps; rep++) {
     const block = [];
     for (let wi = 0; wi < words.length; wi++) {
-      for (let li = 0; li < CS.levels.length; li++) {
-        block.push({ word: words[wi], level: CS.levels[li], rep: rep + 1 });
+      for (const level of csLevelsFor(words[wi])) {
+        block.push({ word: words[wi], level, rep: rep + 1 });
       }
     }
     shuffle(block);            // reuse the app's Durstenfeld shuffle
@@ -312,14 +565,22 @@ function csStartRun() {
   // more speech passband), so easiest->hardest is descending by level. Ties
   // (same level, different word) keep their shuffled order — a stable sort on a
   // descending-level key. Clamped to the queue length.
+  // With per-word levels, "easiest" is relative to each word's own levels: its
+  // highest level first, then its next, and so on (the same order as before
+  // when every word has the same levels).
   const n = Math.min(easeIn, CS.queue.length);
   if (n > 1) {
     const head = CS.queue.slice(0, n);
-    // Stable descending sort by level (decorate-sort-undecorate to guarantee
+    const ease = t => {
+      if (!CS.plan) return t.level;
+      const lv = csLevelsFor(t.word);
+      return lv.length > 1 ? lv.indexOf(t.level) / (lv.length - 1) : 1;
+    };
+    // Stable descending sort by ease (decorate-sort-undecorate to guarantee
     // stability across engines).
     head
-      .map((t, i) => ({ t, i }))
-      .sort((a, b) => (b.t.level - a.t.level) || (a.i - b.i))
+      .map((t, i) => ({ t, i, e: ease(t) }))
+      .sort((a, b) => (b.e - a.e) || (a.i - b.i))
       .forEach((o, k) => { CS.queue[k] = o.t; });
   }
 
@@ -369,6 +630,11 @@ function csItemForWord(word) {
 }
 
 function csKey(word, level) { return `${word}\u0000${level}`; }
+
+// The levels a word is played at in this run (ascending).
+function csLevelsFor(word) {
+  return (CS.plan && CS.plan.levels[word]) || CS.levels;
+}
 
 function csNextTrial() {
   if (!CS.active) return;
@@ -607,6 +873,7 @@ function csBuildResults(note) {
   lines.push(`# Saved at\t${fmtTime(now)}`);
   lines.push(`# Mode\t${modeUp}`);
   lines.push(`# Levels (${unit})\t${levels.join(", ")}`);
+  if (CS.plan) lines.push(`# Level plan\t${CS.plan.name}`);
   lines.push(`# Repeats\t${CS.repeats}`);
   lines.push(`# Words\t${words.length}`);
   lines.push(`# Total presentations\t${CS.logRows.length}`);
@@ -619,6 +886,16 @@ function csBuildResults(note) {
   }
   if (typeof Headphones !== "undefined") lines.push(`# Headphones\t${Headphones.header()}`);
   if (note) lines.push(`# Note\t${note}`);
+
+  // Per-word levels, when a plan was used.
+  if (CS.plan) {
+    lines.push("");
+    lines.push(`# LEVEL PLAN — levels per word (${unit})`);
+    lines.push("Word\tLevels");
+    for (const w of words) lines.push(`${w}\t${csLevelsFor(w).join(", ")}${CS.plan.fromCommon && CS.plan.fromCommon.includes(w) ? "\t(common levels: not in the plan)" : ""}`);
+  }
+  // A cell is blank where that word was never planned at that level.
+  const planned = (w, lv) => !CS.plan || csLevelsFor(w).includes(lv);
 
   const header = ["Word", ...levels].join("\t");
 
@@ -637,13 +914,13 @@ function csBuildResults(note) {
   // Table 1: presentations (denominator)
   lines.push(...tableBlock(
     "TABLE 1 — Presentations (count presented)",
-    (w, lv) => CS.presented.get(csKey(w, lv)) || 0
+    (w, lv) => planned(w, lv) ? (CS.presented.get(csKey(w, lv)) || 0) : null
   ));
 
   // Table 2: correct (numerator)
   lines.push(...tableBlock(
     "TABLE 2 — Correct (count correct)",
-    (w, lv) => CS.correct.get(csKey(w, lv)) || 0
+    (w, lv) => planned(w, lv) ? (CS.correct.get(csKey(w, lv)) || 0) : null
   ));
 
   // Table 3: proportion correct = correct / presented (blank if never presented)
@@ -680,7 +957,7 @@ function csBuildResults(note) {
             const n = CS.presented.get(csKey(w, lv)) || 0;
             rows[w][lv] = n === 0 ? null : (CS.correct.get(csKey(w, lv)) || 0) / n;
           } else {
-            rows[w][lv] = map.get(csKey(w, lv)) || 0;
+            rows[w][lv] = planned(w, lv) ? (map.get(csKey(w, lv)) || 0) : null;
           }
         }
       }
@@ -692,6 +969,7 @@ function csBuildResults(note) {
       mode: CS.mode,
       unit,
       levels,
+      plan: CS.plan ? { name: CS.plan.name, levels: CS.plan.levels, fromCommon: CS.plan.fromCommon || [] } : undefined,
       repeats: CS.repeats,
       breakEvery: CS.breakEvery,
       startedAt: CS.startedAt ? CS.startedAt.toISOString() : null,
@@ -728,7 +1006,7 @@ function csStore(r, status, resumePos) {
     rec.resume = {
       queue: CS.queue, pos: resumePos, logRows: CS.logRows,
       presented: [...CS.presented], correct: [...CS.correct],
-      levels: CS.levels, repeats: CS.repeats, breakEvery: CS.breakEvery, easeIn: CS.easeIn,
+      levels: CS.levels, plan: CS.plan, repeats: CS.repeats, breakEvery: CS.breakEvery, easeIn: CS.easeIn,
       mode: CS.mode, ear: CS.ear, startedAt: rec.startedAt, participant: r.who,
       level: (typeof Calibration !== "undefined" && Calibration.presentationLevel) ? Calibration.presentationLevel() : null,
       calibrated: (typeof Calibration !== "undefined" && Calibration.isCalibrated) ? Calibration.isCalibrated() : false,
@@ -772,6 +1050,7 @@ async function csResume(rec) {
   CS.presented = new Map(R.presented || []);
   CS.correct = new Map(R.correct || []);
   CS.levels = R.levels;
+  CS.plan = R.plan || null;
   CS.repeats = R.repeats;
   CS.breakEvery = R.breakEvery;
   CS.easeIn = R.easeIn;
