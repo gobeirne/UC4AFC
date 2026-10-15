@@ -1170,7 +1170,11 @@ function wordChart(res, row) {
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("class", "chart");
   svg.setAttribute("role", "img"); svg.setAttribute("aria-label", `${row.word}: proportion correct by level`);
   const extra = row.fit ? [Math.max(row.fit.T, row.fit.xlo - 2 * (row.fit.xhi - row.fit.xlo)), ...(row.ci || [])].map(v => Math.min(Math.max(v, row.fit.xlo - (row.fit.xhi - row.fit.xlo)), row.fit.xhi + (row.fit.xhi - row.fit.xlo))) : [];
-  const dom = xDomain(res, extra);
+  // Planned levels for this word (from the plan box), drawn as small green marks.
+  const pc = state.plan[res.mode] && state.plan[res.mode].check;
+  const planLv = pc ? (pc.perWord.get(row.word) || (pc.ok && pc.common) || null) : null;
+  const planX = planLv ? planLv.map(res.ax.toX) : [];
+  const dom = xDomain(res, extra.concat(planX));
   const sx = x => ml + (x - dom[0]) / (dom[1] - dom[0]) * (W - ml - mr);
   const sy = p => mt + (1 - p) * (H - mt - mb);
   for (const p of [0.25, 0.625, 1]) {
@@ -1189,6 +1193,11 @@ function wordChart(res, row) {
     for (let i = 0; i <= 80; i++) { const x = dom[0] + (dom[1] - dom[0]) * i / 80; d += (i ? "L" : "M") + sx(x).toFixed(1) + "," + sy(C.pAt(x, row.fit)).toFixed(1); }
     svgEl("path", { d, fill: "none", stroke: "var(--fit)", "stroke-width": 2 }, svg);
     if (row.fit.T >= dom[0] && row.fit.T <= dom[1]) svgEl("line", { x1: sx(row.fit.T), x2: sx(row.fit.T), y1: sy(0.625) - 7, y2: sy(0.625) + 7, stroke: "var(--accent)", "stroke-width": 2 }, svg);
+  }
+  if (planX.length) {
+    const g = svgEl("g", { class: "planmarks" }, svg);
+    svgEl("title", {}, g).textContent = `Planned levels: ${planLv.map(v => fmtPlanLevel(res.mode, v)).join(", ")} ${res.ax.unit}`;
+    for (const x of planX) svgEl("line", { x1: sx(x), x2: sx(x), y1: sy(0) - 5, y2: sy(0), stroke: "var(--good)", "stroke-width": 1.5 }, g);
   }
   const nMax = Math.max(...row.groups.map(g => g.n), 1);
   for (const g of row.groups) {
@@ -1243,7 +1252,8 @@ function renderCards(res) {
     if (lv) {
       const pl2 = document.createElement("p"); pl2.className = "planline";
       const band = pc.perWord.has(r.word) ? pc.bands.get(r.word) : "common";
-      pl2.append(`Plan${band ? ` (${band})` : ""}: `);
+      const tag = document.createElement("span"); tag.style.color = "var(--good)"; tag.textContent = "Plan";
+      pl2.append(tag, `${band ? ` (${band})` : ""}: `);
       const b = document.createElement("b"); b.textContent = `${lv.map(v => fmtPlanLevel(mode, v)).join(", ")} ${ax.unit}`; pl2.append(b);
       if (f && r.status !== "thin") pl2.append(planCovers(f, lv, ax) ? " · covers it" : " · doesn't span it");
       card.appendChild(pl2);
