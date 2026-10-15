@@ -351,6 +351,52 @@ async function renderButterworthLowpass(ctxForBuffers, buffer, cutoffHz) {
  * SECTION C — Engine (context, decode cache, pipeline, playback)
  * ========================================================================= */
 
+// ---- Glitches in the masking noise ------------------------------------------
+// A single-sample glitch in the noise file is heard as a click whenever a
+// trial's random noise segment happens to contain it. Find any such spot once
+// (a sample-to-sample jump far larger than the noise ever makes on its own:
+// over 6x the 99.9th-percentile jump) and keep the random segments clear of it.
+// Returns [[startSec, endSec], ...] with a 10 ms margin either side.
+function findSampleGlitches(buffer, { factor = 6, marginSec = 0.01 } = {}) {
+  const sr = buffer.sampleRate, zones = [];
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    const x = buffer.getChannelData(ch), n = x.length;
+    if (n < 1000) continue;
+    const stride = 7, sample = new Float32Array(Math.floor((n - 1) / stride));
+    for (let i = 0, j = 0; j < sample.length; i += stride, j++) sample[j] = Math.abs(x[i + 1] - x[i]);
+    sample.sort();
+    const thr = factor * sample[Math.floor(0.999 * (sample.length - 1))];
+    if (!(thr > 0)) continue;
+    for (let i = 0; i < n - 1; i++) {
+      if (Math.abs(x[i + 1] - x[i]) > thr) zones.push([i / sr - marginSec, (i + 1) / sr + marginSec]);
+    }
+  }
+  zones.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const z of zones) {
+    const last = merged[merged.length - 1];
+    if (last && z[0] <= last[1]) last[1] = Math.max(last[1], z[1]); else merged.push(z.slice());
+  }
+  return merged;
+}
+// A random start time for a segment of segDur seconds inside a file of fileDur
+// seconds, uniform over the starts whose segment avoids every bad zone. Falls
+// back to any start if no clean segment fits (never happens with a 10 s file).
+function pickCleanSegmentStart(fileDur, segDur, zones, rnd = Math.random) {
+  const maxStart = Math.max(0, fileDur - segDur);
+  let free = [[0, maxStart]];
+  for (const [a, b] of zones || []) {
+    const lo = a - segDur, hi = b;            // starts in (lo, hi) would overlap [a, b]
+    free = free.flatMap(([s, e]) => (hi <= s || lo >= e) ? [[s, e]] : [[s, Math.min(e, lo)], [Math.max(s, hi), e]].filter(([u, v]) => v > u));
+  }
+  const total = free.reduce((t, [s, e]) => t + (e - s), 0);
+  if (!(total > 0)) return { start: rnd() * maxStart, clean: false };
+  let r = rnd() * total;
+  for (const [s, e] of free) { if (r <= e - s) return { start: s + r, clean: true }; r -= e - s; }
+  const [s, e] = free[free.length - 1];
+  return { start: e, clean: true };
+}
+
 const DB = (linear) => 20 * Math.log10(Math.max(linear, 1e-20));
 const LIN = (db) => Math.pow(10, db / 20);
 
@@ -780,6 +826,7 @@ const AudioEngine = (() => {
     const prepared = await prepare(name, null);      // SNR mode never filters
     const wordBuf = prepared.buffer;
     const noiseBuf = await noiseForPlayback(noiseUrl);   // equalised if de-emphasis is on
+    const noiseGlitches = (await ensureCalibNoise(noiseUrl)).glitches || [];
 
     // --- Levels: NO measurement, NO per-file re-matching. --------------------
     // The files are already pinned at source: every word is -22.5 LUFS and the
@@ -829,10 +876,11 @@ const AudioEngine = (() => {
     if (noiseDur < 0) noiseDur = 0;
 
     // Random contiguous offset inside the 10 s file such that
-    // [offset, offset + noiseDur] stays within the file. (Request: start between
-    // 0 and fileLen - segmentLen.)
-    const maxOffset = Math.max(0, noiseBuf.duration - noiseDur);
-    const noiseOffset = Math.random() * maxOffset;
+    // [offset, offset + noiseDur] stays within the file (start between 0 and
+    // fileLen - segmentLen) and clear of any glitch found in the file.
+    const pick = pickCleanSegmentStart(noiseBuf.duration, noiseDur, noiseGlitches);
+    const noiseOffset = pick.start;
+    if (!pick.clean) console.warn("[snr] no glitch-free noise segment long enough; using any segment");
 
     // Build this trial's noise segment with the fades BAKED INTO THE SAMPLES
     // (raised-cosine, cos^2), then play it at a constant gain. Previously the
@@ -949,7 +997,12 @@ const AudioEngine = (() => {
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`noise fetch failed ${resp.status} for ${url}`);
       const raw = await c.decodeAudioData(await resp.arrayBuffer());
-      entry = { raw, momentary: null };
+      const glitches = findSampleGlitches(raw);
+      if (glitches.length) {
+        console.warn(`[noise] ${url}: click-like glitch at ${glitches.map(([a, b]) => ((a + b) / 2).toFixed(3) + " s").join(", ")}` +
+          " — SNR trials use noise segments that avoid it. Worth fixing in the source file.");
+      }
+      entry = { raw, momentary: null, glitches };
       cache.set(key, entry);
     }
     return entry;
@@ -1036,6 +1089,8 @@ const AudioEngine = (() => {
     playBuffer, playStimulus, playStimulusWithNoise, stop, setMasterGainDb,
     // calibration
     startCalibrationTone, stopCalibrationTone, setCalibrationEar, setCalibrationGainDb, isCalibrationTonePlaying, ensureCalibNoise,
+    // noise glitch handling (exposed for checks)
+    findSampleGlitches, pickCleanSegmentStart,
     // audio-graph diagnostics
     rateMismatch,
     // headphone preset (LPF loudness match on curve-shaped copies)

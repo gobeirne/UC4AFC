@@ -453,6 +453,52 @@ async function renderButterworthLowpass(ctxForBuffers, buffer, cutoffHz) {
  * SECTION C — Engine (context, decode cache, pipeline, playback)
  * ========================================================================= */
 
+// ---- Glitches in the masking noise ------------------------------------------
+// A single-sample glitch in the noise file is heard as a click whenever a
+// trial's random noise segment happens to contain it. Find any such spot once
+// (a sample-to-sample jump far larger than the noise ever makes on its own:
+// over 6x the 99.9th-percentile jump) and keep the random segments clear of it.
+// Returns [[startSec, endSec], ...] with a 10 ms margin either side.
+function findSampleGlitches(buffer, { factor = 6, marginSec = 0.01 } = {}) {
+  const sr = buffer.sampleRate, zones = [];
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    const x = buffer.getChannelData(ch), n = x.length;
+    if (n < 1000) continue;
+    const stride = 7, sample = new Float32Array(Math.floor((n - 1) / stride));
+    for (let i = 0, j = 0; j < sample.length; i += stride, j++) sample[j] = Math.abs(x[i + 1] - x[i]);
+    sample.sort();
+    const thr = factor * sample[Math.floor(0.999 * (sample.length - 1))];
+    if (!(thr > 0)) continue;
+    for (let i = 0; i < n - 1; i++) {
+      if (Math.abs(x[i + 1] - x[i]) > thr) zones.push([i / sr - marginSec, (i + 1) / sr + marginSec]);
+    }
+  }
+  zones.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const z of zones) {
+    const last = merged[merged.length - 1];
+    if (last && z[0] <= last[1]) last[1] = Math.max(last[1], z[1]); else merged.push(z.slice());
+  }
+  return merged;
+}
+// A random start time for a segment of segDur seconds inside a file of fileDur
+// seconds, uniform over the starts whose segment avoids every bad zone. Falls
+// back to any start if no clean segment fits (never happens with a 10 s file).
+function pickCleanSegmentStart(fileDur, segDur, zones, rnd = Math.random) {
+  const maxStart = Math.max(0, fileDur - segDur);
+  let free = [[0, maxStart]];
+  for (const [a, b] of zones || []) {
+    const lo = a - segDur, hi = b;            // starts in (lo, hi) would overlap [a, b]
+    free = free.flatMap(([s, e]) => (hi <= s || lo >= e) ? [[s, e]] : [[s, Math.min(e, lo)], [Math.max(s, hi), e]].filter(([u, v]) => v > u));
+  }
+  const total = free.reduce((t, [s, e]) => t + (e - s), 0);
+  if (!(total > 0)) return { start: rnd() * maxStart, clean: false };
+  let r = rnd() * total;
+  for (const [s, e] of free) { if (r <= e - s) return { start: s + r, clean: true }; r -= e - s; }
+  const [s, e] = free[free.length - 1];
+  return { start: e, clean: true };
+}
+
 const DB = (linear) => 20 * Math.log10(Math.max(linear, 1e-20));
 const LIN = (db) => Math.pow(10, db / 20);
 
@@ -882,6 +928,7 @@ const AudioEngine = (() => {
     const prepared = await prepare(name, null);      // SNR mode never filters
     const wordBuf = prepared.buffer;
     const noiseBuf = await noiseForPlayback(noiseUrl);   // equalised if de-emphasis is on
+    const noiseGlitches = (await ensureCalibNoise(noiseUrl)).glitches || [];
 
     // --- Levels: NO measurement, NO per-file re-matching. --------------------
     // The files are already pinned at source: every word is -22.5 LUFS and the
@@ -931,10 +978,11 @@ const AudioEngine = (() => {
     if (noiseDur < 0) noiseDur = 0;
 
     // Random contiguous offset inside the 10 s file such that
-    // [offset, offset + noiseDur] stays within the file. (Request: start between
-    // 0 and fileLen - segmentLen.)
-    const maxOffset = Math.max(0, noiseBuf.duration - noiseDur);
-    const noiseOffset = Math.random() * maxOffset;
+    // [offset, offset + noiseDur] stays within the file (start between 0 and
+    // fileLen - segmentLen) and clear of any glitch found in the file.
+    const pick = pickCleanSegmentStart(noiseBuf.duration, noiseDur, noiseGlitches);
+    const noiseOffset = pick.start;
+    if (!pick.clean) console.warn("[snr] no glitch-free noise segment long enough; using any segment");
 
     // Build this trial's noise segment with the fades BAKED INTO THE SAMPLES
     // (raised-cosine, cos^2), then play it at a constant gain. Previously the
@@ -1051,7 +1099,12 @@ const AudioEngine = (() => {
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`noise fetch failed ${resp.status} for ${url}`);
       const raw = await c.decodeAudioData(await resp.arrayBuffer());
-      entry = { raw, momentary: null };
+      const glitches = findSampleGlitches(raw);
+      if (glitches.length) {
+        console.warn(`[noise] ${url}: click-like glitch at ${glitches.map(([a, b]) => ((a + b) / 2).toFixed(3) + " s").join(", ")}` +
+          " — SNR trials use noise segments that avoid it. Worth fixing in the source file.");
+      }
+      entry = { raw, momentary: null, glitches };
       cache.set(key, entry);
     }
     return entry;
@@ -1138,6 +1191,8 @@ const AudioEngine = (() => {
     playBuffer, playStimulus, playStimulusWithNoise, stop, setMasterGainDb,
     // calibration
     startCalibrationTone, stopCalibrationTone, setCalibrationEar, setCalibrationGainDb, isCalibrationTonePlaying, ensureCalibNoise,
+    // noise glitch handling (exposed for checks)
+    findSampleGlitches, pickCleanSegmentStart,
     // audio-graph diagnostics
     rateMismatch,
     // headphone preset (LPF loudness match on curve-shaped copies)
@@ -2366,9 +2421,62 @@ function showInstructions(phase, onContinue, onBack) {
   // can't fire a stale Start handler on the next OK.
   const okBtn = document.getElementById("okBtn");
   const backBtn = document.getElementById("backBtn");
+  okBtn.textContent = "OK";
+  backBtn.textContent = "Back";
+  backBtn.style.display = "";
   const clear = () => { okBtn.onclick = null; backBtn.onclick = null; };
   okBtn.onclick = () => { clear(); onContinue(); };
   backBtn.onclick = () => { clear(); (onBack || (() => showScreen("intro")))(); };
+}
+
+// A message on the instructions screen with its own button labels, e.g. the
+// end of a training list. Leave backLabel out for a single button.
+function showMessage(title, text, { okLabel = "OK", onOk, backLabel = null, onBack } = {}) {
+  document.getElementById("instructions-title").textContent = title;
+  document.getElementById("instructions-text").textContent = text;
+  showScreen("instructions");
+  const okBtn = document.getElementById("okBtn");
+  const backBtn = document.getElementById("backBtn");
+  okBtn.textContent = okLabel;
+  backBtn.textContent = backLabel || "Back";
+  backBtn.style.display = backLabel ? "" : "none";
+  const clear = () => { okBtn.onclick = null; backBtn.onclick = null; };
+  okBtn.onclick = () => { clear(); (onOk || (() => showScreen("intro")))(); };
+  backBtn.onclick = () => { clear(); (onBack || (() => showScreen("intro")))(); };
+}
+
+// Break-screen encouragement: a different line at each break, plus a halfway
+// and a nearly-there message. Starts at a random point so participants who
+// sit both modes don't see the same order twice.
+const BREAK_LINES = [
+  ["You're doing a great job!", "Let's take a break."],
+  ["Nice work!", "Take a moment to rest your ears."],
+  ["Great listening!", "Time for a short break."],
+  ["Keep it up!", "Have a stretch before the next set."],
+  ["Well done so far!", "Take a breather, then carry on when you're ready."],
+  ["Thanks for concentrating so hard!", "Have a little rest."],
+  ["Excellent effort!", "Relax for a moment."],
+  ["You're making good progress!", "Rest for a bit, then press OK to keep going."]
+];
+let breakLineAt = Math.floor(Math.random() * BREAK_LINES.length);
+let halfwayShown = false, lastBreakDone = Infinity;
+function setBreakMessage(done, total) {
+  const pct = total > 0 ? done / total : 0;
+  if (done <= lastBreakDone) halfwayShown = false;          // a new run (or the first break)
+  lastBreakDone = done;
+  let title, text;
+  if (!halfwayShown && pct >= 0.45 && pct <= 0.6) {
+    halfwayShown = true;
+    [title, text] = ["You're halfway there!", "Brilliant work. Take a short break."];
+  } else if (pct >= 0.85) {
+    [title, text] = ["Nearly finished!", "Not long to go now. Rest for a moment first."];
+  } else {
+    [title, text] = BREAK_LINES[breakLineAt % BREAK_LINES.length];
+    breakLineAt++;
+  }
+  const t = document.getElementById("breakTitle"), x = document.getElementById("breakText");
+  if (t) t.textContent = title;
+  if (x) x.textContent = text;
 }
 
 
@@ -2401,6 +2509,9 @@ function setImage(imgElement, name, useArrows = true) {
 
 
 let trainingAborted = false;
+// Lists trained so far in this sitting (training can run List 1 then List 2
+// without going back to the start screen).
+let trainingListsDone = [];
 
 // Active adaptive track (test phase only). null => no adaptive tracking (plays
 // unfiltered at a fixed level, e.g. training or a non-adaptive run).
@@ -2432,7 +2543,9 @@ function shuffle(arr) {
 
 let nextImagesToPreload = [];
 
-function beginPhase(p) {
+// opts.list: run this list instead of the start screen's choice, without
+// changing that choice (used to go straight on to the other training list).
+function beginPhase(p, opts = {}) {
   phase = p;
   trainingAborted = false;
   awaitingResponse = false;
@@ -2443,8 +2556,18 @@ function beginPhase(p) {
 
   // Which word list (1 or 2) this Training/Start run uses, from the start screen.
   const sel = document.getElementById("listSelect");
-  listId = (sel && (sel.value === "1" || sel.value === "2")) ? sel.value : "1";
-  try { localStorage.setItem("uc4afc_list", listId); } catch (_) {}
+  if (opts.list === "1" || opts.list === "2") {
+    listId = opts.list;
+  } else {
+    listId = (sel && (sel.value === "1" || sel.value === "2")) ? sel.value : "1";
+    try { localStorage.setItem("uc4afc_list", listId); } catch (_) {}
+    if (p === "training") trainingListsDone = [];
+  }
+  // Nothing from an earlier list may show before this list's first picture.
+  if (p === "training" && trainingImg) {
+    trainingImg.style.visibility = "hidden";
+    trainingImg.removeAttribute("src");
+  }
 
   loadList(listId).then(() => {
     shuffle(list);
@@ -2483,10 +2606,8 @@ function beginPhase(p) {
 }
 
 function showTrainingItem() {
-  if (trainingAborted || trialIndex >= list.length || phase !== "training") {
-    showScreen("instructions");
-    return;
-  }
+  if (trainingAborted || phase !== "training") return;   // ended elsewhere (abort)
+  if (trialIndex >= list.length) { trainingComplete(); return; }
 
 const item = list[trialIndex];
   if (!item || !isNonEmpty(item.correct) || !isNonEmpty(item.audioFile)) {
@@ -2513,6 +2634,7 @@ const item = list[trialIndex];
       setTimeout(() => {
         if (trainingAborted || phase !== "training") return;
         setImage(trainingImg, item.correct, config.arrows);
+        trainingImg.style.visibility = "visible";
       }, revealMs);
     }
   }).then(() => {
@@ -2527,6 +2649,32 @@ const item = list[trialIndex];
   }).catch(err => {
     console.error("[!] Training audio failed to play:", err);
   });
+}
+
+// End of a training list: offer the other list straight away, or finish.
+function trainingComplete() {
+  phase = "trainingDone";
+  if (typeof AudioEngine !== "undefined") AudioEngine.stop();
+  const abortBtn = document.getElementById("abortBtn");
+  if (abortBtn) abortBtn.style.display = "none";
+  if (!trainingListsDone.includes(listId)) trainingListsDone.push(listId);
+  const other = listId === "1" ? "2" : "1";
+  const finish = () => showScreen("intro");
+  if (trainingListsDone.includes(other)) {
+    showMessage("Training complete", "That's the end of training on both lists.", { okLabel: "Finish", onOk: finish });
+    return;
+  }
+  showMessage("Training complete",
+    `That's all the words in List ${listId}. You can go straight on to List ${other}, or finish here.`,
+    {
+      okLabel: `Train List ${other}`,
+      onOk: () => {
+        if (abortBtn && config.showAbortXOnTouchDevices !== false) abortBtn.style.display = "block";
+        beginPhase("training", { list: other });
+      },
+      backLabel: "Finish",
+      onBack: finish
+    });
 }
 
 function nextTrial() {
@@ -2553,6 +2701,7 @@ if (phase === "test") {
     if (bar) bar.style.width = `${pct}%`;
 
     // Show break screen and wait for the user
+    if (typeof setBreakMessage === "function") setBreakMessage(done, total);
     showScreen("break");
     const btn = document.getElementById("breakOkBtn");
     if (btn) {
@@ -3975,6 +4124,7 @@ function csNextTrial() {
     const bar = document.getElementById("breakProgressBar");
     if (txt) txt.textContent = `Done ${done} / ${total}  (${pct}%)`;
     if (bar) bar.style.width = `${pct}%`;
+    if (typeof setBreakMessage === "function") setBreakMessage(done, total);
     showScreen("break");
     const btn = document.getElementById("breakOkBtn");
     if (btn) btn.onclick = () => { showScreen("test"); csNextTrial(); };
@@ -5874,6 +6024,8 @@ function renderCalMethodUI() {
   const showTestUI = (!isAud && calibrated);
   const testRow = document.getElementById("calTestRow");
   if (testRow) testRow.style.display = showTestUI ? "flex" : "none";
+  const testCalBtn = document.getElementById("testCalBtn");
+  if (testCalBtn) testCalBtn.hidden = false;   // the row decides visibility (Clear used to hide it for good)
 
   // Play-button label follows the method.
   const toggleBtn = document.getElementById("calToneToggleBtn");
@@ -6071,7 +6223,7 @@ function setupCalibrationScreen() {
     playing = testOn = false;
     toggleBtn.textContent = calPlayLabel(false);
     toggleBtn.classList.remove("active");
-    if (testBtn) { testBtn.hidden = true; testBtn.textContent = "Test level"; }
+    if (testBtn) testBtn.textContent = "Test level";
     setupCalibrationSlider();
     renderCalMethodUI();
     refreshCalStatus();

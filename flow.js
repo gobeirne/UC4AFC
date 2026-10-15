@@ -16,13 +16,16 @@ import {
   runId
 } from "./global.js";
 
-import { showScreen, setImage } from "./ui.js";
+import { showScreen, setImage, showMessage } from "./ui.js";
 import { loadList } from "./list.js";
 import { saveResults, autosaveAdaptive } from "./results.js";
 import { AudioEngine } from "./audioEngine.js";
 import { createTrack, resolveTrackConfig } from "./adaptive.js";
 
 let trainingAborted = false;
+// Lists trained so far in this sitting (training can run List 1 then List 2
+// without going back to the start screen).
+let trainingListsDone = [];
 
 // Active adaptive track (test phase only). null => no adaptive tracking (plays
 // unfiltered at a fixed level, e.g. training or a non-adaptive run).
@@ -54,7 +57,9 @@ export function shuffle(arr) {
 
 let nextImagesToPreload = [];
 
-export function beginPhase(p) {
+// opts.list: run this list instead of the start screen's choice, without
+// changing that choice (used to go straight on to the other training list).
+export function beginPhase(p, opts = {}) {
   phase = p;
   trainingAborted = false;
   awaitingResponse = false;
@@ -65,8 +70,18 @@ export function beginPhase(p) {
 
   // Which word list (1 or 2) this Training/Start run uses, from the start screen.
   const sel = document.getElementById("listSelect");
-  listId = (sel && (sel.value === "1" || sel.value === "2")) ? sel.value : "1";
-  try { localStorage.setItem("uc4afc_list", listId); } catch (_) {}
+  if (opts.list === "1" || opts.list === "2") {
+    listId = opts.list;
+  } else {
+    listId = (sel && (sel.value === "1" || sel.value === "2")) ? sel.value : "1";
+    try { localStorage.setItem("uc4afc_list", listId); } catch (_) {}
+    if (p === "training") trainingListsDone = [];
+  }
+  // Nothing from an earlier list may show before this list's first picture.
+  if (p === "training" && trainingImg) {
+    trainingImg.style.visibility = "hidden";
+    trainingImg.removeAttribute("src");
+  }
 
   loadList(listId).then(() => {
     shuffle(list);
@@ -105,10 +120,8 @@ export function beginPhase(p) {
 }
 
 export function showTrainingItem() {
-  if (trainingAborted || trialIndex >= list.length || phase !== "training") {
-    showScreen("instructions");
-    return;
-  }
+  if (trainingAborted || phase !== "training") return;   // ended elsewhere (abort)
+  if (trialIndex >= list.length) { trainingComplete(); return; }
 
 const item = list[trialIndex];
   if (!item || !isNonEmpty(item.correct) || !isNonEmpty(item.audioFile)) {
@@ -135,6 +148,7 @@ const item = list[trialIndex];
       setTimeout(() => {
         if (trainingAborted || phase !== "training") return;
         setImage(trainingImg, item.correct, config.arrows);
+        trainingImg.style.visibility = "visible";
       }, revealMs);
     }
   }).then(() => {
@@ -149,6 +163,32 @@ const item = list[trialIndex];
   }).catch(err => {
     console.error("[!] Training audio failed to play:", err);
   });
+}
+
+// End of a training list: offer the other list straight away, or finish.
+function trainingComplete() {
+  phase = "trainingDone";
+  if (typeof AudioEngine !== "undefined") AudioEngine.stop();
+  const abortBtn = document.getElementById("abortBtn");
+  if (abortBtn) abortBtn.style.display = "none";
+  if (!trainingListsDone.includes(listId)) trainingListsDone.push(listId);
+  const other = listId === "1" ? "2" : "1";
+  const finish = () => showScreen("intro");
+  if (trainingListsDone.includes(other)) {
+    showMessage("Training complete", "That's the end of training on both lists.", { okLabel: "Finish", onOk: finish });
+    return;
+  }
+  showMessage("Training complete",
+    `That's all the words in List ${listId}. You can go straight on to List ${other}, or finish here.`,
+    {
+      okLabel: `Train List ${other}`,
+      onOk: () => {
+        if (abortBtn && config.showAbortXOnTouchDevices !== false) abortBtn.style.display = "block";
+        beginPhase("training", { list: other });
+      },
+      backLabel: "Finish",
+      onBack: finish
+    });
 }
 
 export function nextTrial() {
@@ -175,6 +215,7 @@ if (phase === "test") {
     if (bar) bar.style.width = `${pct}%`;
 
     // Show break screen and wait for the user
+    if (typeof setBreakMessage === "function") setBreakMessage(done, total);
     showScreen("break");
     const btn = document.getElementById("breakOkBtn");
     if (btn) {

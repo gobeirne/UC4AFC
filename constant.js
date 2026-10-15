@@ -773,6 +773,7 @@ function csNextTrial() {
     const bar = document.getElementById("breakProgressBar");
     if (txt) txt.textContent = `Done ${done} / ${total}  (${pct}%)`;
     if (bar) bar.style.width = `${pct}%`;
+    if (typeof setBreakMessage === "function") setBreakMessage(done, total);
     showScreen("break");
     const btn = document.getElementById("breakOkBtn");
     if (btn) btn.onclick = () => { showScreen("test"); csNextTrial(); };

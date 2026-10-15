@@ -493,6 +493,8 @@ function renderCalMethodUI() {
   const showTestUI = (!isAud && calibrated);
   const testRow = document.getElementById("calTestRow");
   if (testRow) testRow.style.display = showTestUI ? "flex" : "none";
+  const testCalBtn = document.getElementById("testCalBtn");
+  if (testCalBtn) testCalBtn.hidden = false;   // the row decides visibility (Clear used to hide it for good)
 
   // Play-button label follows the method.
   const toggleBtn = document.getElementById("calToneToggleBtn");
@@ -690,7 +692,7 @@ function setupCalibrationScreen() {
     playing = testOn = false;
     toggleBtn.textContent = calPlayLabel(false);
     toggleBtn.classList.remove("active");
-    if (testBtn) { testBtn.hidden = true; testBtn.textContent = "Test level"; }
+    if (testBtn) testBtn.textContent = "Test level";
     setupCalibrationSlider();
     renderCalMethodUI();
     refreshCalStatus();

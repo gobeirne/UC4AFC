@@ -331,3 +331,16 @@ img.disabled {
 #conststim input[type="text"], #conststim input[type="number"] { box-sizing: border-box; max-width: 100%; }
 @media (max-width: 400px) { .cs-source .seg-btn { padding: 0.45rem 0.55rem; font-size: 0.85rem; } }
 @media (max-width: 360px) { .cs-source .seg-btn { white-space: normal; } }
+
+/* Form fields never stick out of their boxes (width: 100% now includes the
+   padding and border), on every screen and at any width. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+canvas { max-width: 100%; }
+.segmented { max-width: 100%; flex-wrap: wrap; justify-content: center; }
+label > input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), label > select {
+  margin-left: 0;
+  margin-right: 0;
+}

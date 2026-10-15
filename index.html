@@ -398,11 +398,11 @@
     <!-- Slider is a 0..1000 log-position index over [fMin,fMax] (shared with the
          plot x-axis); the number box above holds the exact frequency. -->
     <input id="vfCutoff" type="range" min="0" max="1000" step="1" value="500"
-           style="width:min(560px,90vw); margin-top:0.4rem;">
+           style="width:min(560px,100%); box-sizing:border-box; margin:0.4rem 0 0;">
   </div>
 
   <div style="max-width:44rem; margin:0.5rem auto;">
-    <canvas id="vfCanvas" width="880" height="440" style="width:100%; max-width:880px; border:1px solid #ccc; background:#fff;"></canvas>
+    <canvas id="vfCanvas" width="880" height="440" style="width:100%; max-width:880px; box-sizing:border-box; border:1px solid #ccc; background:#fff;"></canvas>
     <p id="vfReadout" class="small" style="margin:0.35rem 0;"></p>
   </div>
 
@@ -423,8 +423,8 @@
 
 <!-- Break screen -->
 <div id="break" class="screen" style="display:none;">
-  <h2>You're doing a great job!</h2>
-  <p>Let's take a break.</p>
+  <h2 id="breakTitle">You're doing a great job!</h2>
+  <p id="breakText">Let's take a break.</p>
   <div id="breakProgressWrap" style="max-width:28rem; margin:1rem auto;">
     <div id="breakProgressText" class="small" style="margin-bottom:0.4rem; color:#333;">Done 0 / 0</div>
     <div style="height:1.1rem; border:1px solid #b31b1b; border-radius:0.6rem; overflow:hidden; background:#f3e6e8;">
