@@ -1,10 +1,10 @@
 # UC4AFC level plan
 # Mode	SNR
-# Name	SNR · per word · 6 levels, 3 dB steps · 2026-10-15 · from 14 naive runs
+# Name	SNR · per word · 6 levels, 3 dB steps · 2026-10-18 · from 21 runs
 # Common	-22, -18, -14, -10, -6, -2, 2
-# Wide	cat (curve too flat); road (curve too flat)
+# Wide	cat (curve too flat); goat (curve too flat); road (curve too flat)
 Word	Band	Levels (dB SNR)
-back	word	-21, -18, -15, -12, -9, -6
+back	word	-24, -21, -18, -15, -12, -9
 bag	word	-15, -12, -9, -6, -3, 0
 bat	word	-24, -21, -18, -15, -12, -9
 bike	word	-15, -12, -9, -6, -3, 0
@@ -18,32 +18,32 @@ bug	word	-18, -15, -12, -9, -6, -3
 bus	word	-27, -24, -21, -18, -15, -12
 cake	word	-18, -15, -12, -9, -6, -3
 card	word	-21, -18, -15, -12, -9, -6
-cat	wide	-27, -21, -15, -9, -3, 3
+cat	wide	-24, -18, -12, -6, 0, 6
 chalk	word	-18, -15, -12, -9, -6, -3
 chin	word	-15, -12, -9, -6, -3, 0
 chip	word	-21, -18, -15, -12, -9, -6
 coat	word	-18, -15, -12, -9, -6, -3
 cot	word	-27, -24, -21, -18, -15, -12
 dad	word	-12, -9, -6, -3, 0, 3
-dirt	word	-15, -12, -9, -6, -3, 0
+dirt	word	-18, -15, -12, -9, -6, -3
 dog	word	-18, -15, -12, -9, -6, -3
-duck	word	-24, -21, -18, -15, -12, -9
+duck	word	-21, -18, -15, -12, -9, -6
 feet	word	-21, -18, -15, -12, -9, -6
 fork	word	-15, -12, -9, -6, -3, 0
 gate	word	-21, -18, -15, -12, -9, -6
-goat	word	-9, -6, -3, 0, 3, 6
+goat	wide	-21, -15, -9, -3, 3, 9
 hat	word	-24, -21, -18, -15, -12, -9
-head	word	-15, -12, -9, -6, -3, 0
-heart	word	-9, -6, -3, 0, 3, 6
+head	word	-12, -9, -6, -3, 0, 3
+heart	word	-12, -9, -6, -3, 0, 3
 hood	word	-15, -12, -9, -6, -3, 0
 house	word	-24, -21, -18, -15, -12, -9
-hug	word	-21, -18, -15, -12, -9, -6
+hug	word	-18, -15, -12, -9, -6, -3
 keys	word	-15, -12, -9, -6, -3, 0
 king	word	-12, -9, -6, -3, 0, 3
 kite	word	-24, -21, -18, -15, -12, -9
 knees	word	-9, -6, -3, 0, 3, 6
 knife	word	-12, -9, -6, -3, 0, 3
-leaf	word	-6, -3, 0, 3, 6, 9
+leaf	word	-9, -6, -3, 0, 3, 6
 leg	word	-12, -9, -6, -3, 0, 3
 lick	word	-15, -12, -9, -6, -3, 0
 light	word	-18, -15, -12, -9, -6, -3
@@ -63,7 +63,7 @@ sad	word	-24, -21, -18, -15, -12, -9
 seed	word	-21, -18, -15, -12, -9, -6
 shark	word	-24, -21, -18, -15, -12, -9
 sheep	word	-24, -21, -18, -15, -12, -9
-ship	word	-24, -21, -18, -15, -12, -9
+ship	word	-27, -24, -21, -18, -15, -12
 shirt	word	-21, -18, -15, -12, -9, -6
 shop	word	-24, -21, -18, -15, -12, -9
 sock	word	-27, -24, -21, -18, -15, -12
