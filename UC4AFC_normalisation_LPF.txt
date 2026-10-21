@@ -1,0 +1,79 @@
+# UC4AFC word normalisation table
+# Format	1
+# Name	LPF · O'Beirne/Gibbins · cap ×3 · limit none · ceiling fixed · 24 runs · 2026-10-21
+# Mode	LPF
+# Method	O'Beirne/Gibbins
+# Slope ratio cap	3
+# Adjustment limit	none
+# Ceiling	fixed at 100%
+# Words left out of the target	adjusted
+# Data	24 runs, 24 participants, 2026-10-21
+# Target midpoint (Hz)	308.3
+# Target slope	34.02 %/oct	113.0 %/decade
+Word	In target	Reason	Trials	Midpoint (Hz)	Slope (%/oct)	Slope (%/decade)	Ceiling	Slope ratio used	Shift at target midpoint (oct)
+back	yes		145	492.7	220.95	734.0	1.000	0.333	0.676
+bag	yes		145	241.6	27.31	90.7	1.000	1.246	-0.352
+bat	no	errors mostly to “back” (70% of 87)	145	2029.0	833.33	2768.3	1.000	0.333	2.719
+bike	no	errors mostly to “book” (69% of 52)	145	654.2	833.33	2768.3	1.000	0.333	1.086
+bin	yes		145	167.6	16.66	55.3	1.000	2.042	-0.879
+bird	yes		145	154.3	39.08	129.8	1.000	0.871	-0.999
+boat	yes		145	1034.1	831.84	2763.3	1.000	0.333	1.746
+bone	yes		145	116.7	40.41	134.2	1.000	0.842	-1.402
+book	yes		145	207.4	20.69	68.7	1.000	1.645	-0.571
+boot	no	errors mostly to “feet” (93% of 68)	145	1123.9	189.45	629.3	1.000	0.333	1.866
+bug	yes		145	657.5	75.18	249.7	1.000	0.453	1.093
+bus	yes		145	231.7	31.30	104.0	1.000	1.087	-0.412
+cake	yes		145	350.0	40.54	134.7	1.000	0.839	0.183
+card	yes		145	491.1	58.95	195.8	1.000	0.577	0.672
+cat	yes		145	434.4	22.44	74.6	1.000	1.516	0.495
+chalk	yes		145	549.1	34.01	113.0	1.000	1.000	0.833
+chin	yes		145	268.8	50.96	169.3	1.000	0.668	-0.197
+chip	yes		145	91.5	19.54	64.9	1.000	1.741	-1.752
+coat	yes		145	596.7	55.96	185.9	1.000	0.608	0.953
+cot	no	errors mostly to “cat” (89% of 63)	145	966.7	822.76	2733.1	1.000	0.333	1.649
+dad	yes		145	313.8	35.02	116.3	1.000	0.972	0.026
+dirt	yes		145	239.7	18.17	60.3	1.000	1.873	-0.363
+dog	no	below chance where it should be guessing (11% of 98); errors mostly to “dad” (83% of 87)	145	827.8	833.33	2768.3	1.000	0.333	1.425
+duck	no	errors mostly to “feet” (77% of 48)	145	529.8	171.88	571.0	1.000	0.333	0.781
+feet	yes		145	188.3	34.53	114.7	1.000	0.985	-0.711
+fork	no	below chance where it should be guessing (8% of 65); errors mostly to “feet” (93% of 60)	145	769.5	67.96	225.7	1.000	0.501	1.320
+gate	yes		145	757.6	12.46	41.4	1.000	2.730	1.297
+goat	yes		145	1283.3	161.72	537.2	1.000	0.333	2.058
+hat	no	errors mostly to “lick” (70% of 47)	145	557.3	134.44	446.6	1.000	0.333	0.854
+head	yes		145	166.5	34.04	113.1	1.000	1.000	-0.888
+heart	yes		145	427.9	35.98	119.5	1.000	0.946	0.473
+hood	yes		145	179.5	30.93	102.8	1.000	1.100	-0.780
+house	no	errors mostly to “head” (68% of 40)	145	484.7	202.25	671.9	1.000	0.333	0.653
+hug	yes		145	478.4	101.04	335.6	1.000	0.337	0.634
+keys	yes		145	184.2	22.46	74.6	1.000	1.515	-0.743
+king	yes		145	310.9	8.33	27.7	1.000	3.000	0.012
+kite	yes		145	604.2	119.12	395.7	1.000	0.333	0.971
+knees	yes		145	1827.9	8.33	27.7	1.000	3.000	2.568
+knife	yes		145	326.6	27.71	92.1	1.000	1.228	0.083
+leaf	yes		145	267.0	51.90	172.4	1.000	0.656	-0.207
+leg	yes		145	235.6	51.30	170.4	1.000	0.663	-0.388
+lick	yes		145	305.7	29.04	96.5	1.000	1.171	-0.012
+light	no	errors mostly to “leg” (80% of 45)	145	549.3	213.60	709.6	1.000	0.333	0.834
+lock	no	below chance where it should be guessing (13% of 98); errors mostly to “lick” (60% of 85)	145	825.8	833.33	2768.3	1.000	0.333	1.422
+man	yes		145	186.6	31.98	106.2	1.000	1.064	-0.724
+meat	yes		145	298.7	79.84	265.2	1.000	0.426	-0.045
+mouse	yes		145	304.3	34.08	113.2	1.000	0.998	-0.019
+mum	yes		145	178.2	26.71	88.7	1.000	1.274	-0.791
+night	no	errors mostly to “leaf” (68% of 40)	145	614.9	87.43	290.4	1.000	0.389	0.996
+nose	yes		145	437.0	98.89	328.5	1.000	0.344	0.503
+nurse	yes		145	344.7	63.18	209.9	1.000	0.538	0.161
+pen	yes		145	175.6	49.55	164.6	1.000	0.687	-0.812
+pig	yes		145	139.6	23.37	77.6	1.000	1.456	-1.143
+road	no	errors mostly to “sword” (70% of 46)	145	495.5	322.37	1070.9	1.000	0.333	0.685
+rock	no	errors mostly to “boot” (77% of 64)	145	577.3	292.69	972.3	1.000	0.333	0.905
+sad	yes		145	313.4	25.45	84.6	1.000	1.337	0.024
+seed	yes		145	328.1	24.90	82.7	1.000	1.366	0.090
+shark	no	errors mostly to “heart” (75% of 36)	145	656.7	50.41	167.5	1.000	0.675	1.091
+sheep	yes		145	246.8	20.95	69.6	1.000	1.624	-0.321
+ship	yes		145	713.7	8.33	27.7	1.000	3.000	1.211
+shirt	yes		145	398.4	16.02	53.2	1.000	2.123	0.370
+shop	no	below chance where it should be guessing (12% of 98); errors mostly to “ship” (70% of 86)	145	942.7	831.76	2763.0	1.000	0.333	1.613
+sock	yes		145	525.6	106.31	353.1	1.000	0.333	0.770
+sword	no	errors mostly to “sad” (63% of 30)	145	544.2	67.12	223.0	1.000	0.507	0.820
+tap	yes		145	253.7	33.90	112.6	1.000	1.004	-0.281
+tongue	no	errors mostly to “king” (87% of 53)	145	721.1	289.54	961.8	1.000	0.333	1.226
