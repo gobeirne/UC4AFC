@@ -217,7 +217,7 @@ tr.off td { color: var(--fg-3); }
           <select id="methodSel"><option value="basic">Basic (shift only)</option><option value="gibbins">O’Beirne/Gibbins</option></select>
         </label>
         <label class="f" for="srcSel">Adjustments from
-          <select id="srcSel"><option value="lopo">Other participants (leave-one-out)</option><option value="in">All participants (in-sample)</option></select>
+          <select id="srcSel"><option value="lopo">Other participants (leave-one-out, pooled)</option><option value="in">All participants (in-sample)</option></select>
         </label>
         <label class="f" for="axisSel" id="axisWrap" hidden>Levels in runs with normalisation
           <select id="axisSel"><option value="played">Played (each word’s own level)</option><option value="requested">Requested (what the procedure asked for)</option></select>
@@ -257,6 +257,9 @@ tr.off td { color: var(--fg-3); }
       <div class="stats" id="targetFacts"></div>
       <div class="tablewrap"><table id="spreadTable"></table></div>
       <p class="small muted" id="spreadNote"></p>
+      <h3 style="margin-top:6px">Held-out check</h3>
+      <div class="tablewrap"><table id="heldOut"></table></div>
+      <p class="small muted" id="heldOutNote" aria-live="polite"></p>
     </section>
 
     <section class="panel" aria-labelledby="clusterH">
@@ -359,6 +362,7 @@ tr.off td { color: var(--fg-3); }
       <p><b>Adjustment.</b> For a requested level N, a word is played at the level where its own rise is as far along as the target’s rise is at N. With the Kollmeier form used by Gibbins this is a straight line on the fitting axis, whatever the number of alternatives: played = midpoint<sub>word</sub> + (s<sub>word</sub>/s<sub>target</sub>)(N − midpoint<sub>target</sub>), where s is the width of each rise. The basic method sets the ratio to 1, so every word is shifted by the gap between its midpoint and the target’s and keeps its own slope. The O’Beirne/Gibbins method also matches the slope, which makes the adjustment depend on the level: a shallow word gets a larger adjustment the further the request is from the midpoint. The ratio is capped (default ×3) because very steep or very shallow fits would otherwise ask for extreme levels. The ceiling is left out of the match so that every request has an answer; words with a low ceiling are flagged rather than forced. Played cutoffs stay within the filter’s 75 Hz–20 kHz, and every played level stays within the optional limit, which keeps large changes in speech level from becoming a loudness cue in the noise condition.</p>
       <p><b>Runs recorded with normalisation.</b> The test software records both the level the procedure asked for and the level each word was played at. Fits normally use the played level, so these runs add to the word estimates like any other. Choosing <b>Requested</b> levels instead, with only those runs in use, shows how centred the words really were with the table in place; the simulation is switched off then, because it applies to played levels.</p>
       <p><b>The whole test.</b> Its function is the point-by-point average of every word’s fitted function, and its slope is taken at the average’s 62.5% point and expressed in the same rise units as a single word. This does not depend on which words happened to be played at which levels, which the level plans varied from word to word.</p>
+      <p><b>Held-out check.</b> Pooling every participant’s leave-one-out adjustment and refitting largely cancels the hold-out: averaged over participants, the leave-one-out estimates come back to the all-participant estimate (exactly so for means). The held-out check avoids this. The participants are split at random into two halves, ten times. One half’s data gives a table, and the other half’s trials are adjusted with that single table and judged on their own, never pooled with another table. The check reports the spread of midpoints before and after, the slope of the whole test, and the log loss of each held-out response against the target function: the average of −ln p for correct and −ln(1 − p) for incorrect responses, where p is the target’s predicted score at the requested level. Every figure comes from half the participants, so it includes the noise of fitting half the data. For reference, if every word were truly identical, sampling noise alone would leave a midpoint interquartile range of about 0.5 octaves (LPF) or 1.9 dB (SNR) with 8 participants at the current six common levels.</p>
       <p><b>Simulation.</b> Every recorded trial is moved to the requested level that would have produced the level it was played at, and each word is then refitted at those requested levels. Applying adjustments to the same data they were estimated from makes every word line up almost by construction, so by default each participant’s trials are adjusted using fits from all the other participants (leave-one-out). That is the fairer preview of how new listeners will do. The word cards and the normalisation table always show the all-participant adjustment, as the test software would use it.</p>
       <p><b>Anderson’s functions.</b> From her thesis (low-pass only; closed set with a 25% floor, open set with a 0% floor), drawn from her SRTs and slopes with the slope read as 100 × k per decade. Her thesis labels these slopes %/octave, but only the per-decade reading reproduces her own average curves. A few closed-set slopes of 1000 %/decade or more are fits that ran to a limit, and are marked as such. Her recordings and listeners differ from these, so the comparison is of shape and spread, not of exact values.</p>
     </div>
@@ -676,7 +680,7 @@ const CORE = (() => {
 
   // o: { method: "basic"|"gibbins", cap, lim (0 = none), xlim: [lo, hi] }
   function makeMap(P, T, o) {
-    if (!P || !T) return { r: 1, id: true, lin: N => N, fwd: N => N, inv: x => x, limited: () => false };
+    if (!P || !T) return { r: 1, id: true, lin: N => N, fwd: N => N, inv: x => x, flatAt: () => false, limited: () => false };
     const r = o.method === "basic" ? 1 : Math.min(o.cap, Math.max(1 / o.cap, P.s / T.s));
     const rawR = P.s / T.s;
     const lin = N => P.m + r * (N - T.m);
@@ -686,13 +690,26 @@ const CORE = (() => {
       return Math.min(o.xlim[1], Math.max(o.xlim[0], x));
     };
     // fwd is non-decreasing in N, so invert by bisection
+    // fwd is flat where the played level is clamped (LPF 75 Hz / 20 kHz), so a
+    // played level there has no unique request: take the edge of the flat part
+    // that meets the sloping part (relabel uses the recorded request instead
+    // when the run has one).
+    const LO = -200, HI = 200;
     const inv = x => {
-      let lo = x - 200, hi = x + 200;
+      let lo = x + LO, hi = x + HI;
       for (let i = 0; i < 64; i++) { const mid = (lo + hi) / 2; if (fwd(mid) < x) lo = mid; else hi = mid; }
-      return (lo + hi) / 2;
+      const a = (lo + hi) / 2;                         // smallest N with fwd(N) >= x
+      lo = x + LO; hi = x + HI;
+      for (let i = 0; i < 64; i++) { const mid = (lo + hi) / 2; if (fwd(mid) <= x) lo = mid; else hi = mid; }
+      const b = (lo + hi) / 2;                         // largest N with fwd(N) <= x
+      if (b - a < 1e-6) return a;
+      if (a <= x + LO + 1e-3) return b;               // flat to the left (floor)
+      if (b >= x + HI - 1e-3) return a;               // flat to the right (ceiling)
+      return (a + b) / 2;
     };
+    const flatAt = x => x <= o.xlim[0] + 1e-6 || x >= o.xlim[1] - 1e-6;
     const limited = N => Math.abs(fwd(N) - lin(N)) > 1e-9;
-    return { r, rawR, capped: o.method !== "basic" && Math.abs(r - rawR) > 1e-9, id: false, lin, fwd, inv, limited, P, T };
+    return { r, rawR, capped: o.method !== "basic" && Math.abs(r - rawR) > 1e-9, id: false, lin, fwd, inv, flatAt, limited, P, T };
   }
 
   // Re-express every trial on the nominal axis. mapsFor(run) -> Map word -> map
@@ -701,7 +718,8 @@ const CORE = (() => {
     for (const run of runs) {
       const maps = mapsFor(run);
       for (const t of run.trials) {
-        const mp = maps.get(t.word), x0 = ax.toX(t.level), N = mp ? mp.inv(x0) : x0;
+        const mp = maps.get(t.word), x0 = ax.toX(t.level);
+        const N = !mp ? x0 : (mp.flatAt(x0) && Number.isFinite(t.req)) ? ax.toX(t.req) : mp.inv(x0);
         const key = Math.round(N * res) / res;
         if (!groups.has(t.word)) { groups.set(t.word, new Map()); points.set(t.word, new Map()); limitedN.set(t.word, 0); }
         const g = groups.get(t.word), c = g.get(key) || { x: key, n: 0, k: 0 };
@@ -778,6 +796,55 @@ const CORE = (() => {
     };
   }
 
+  // ---- Repeated split-half validation, by participant ----
+  // Half A's runs give one table; half B's trials are adjusted with it and
+  // judged on their own (and vice versa). Results are never pooled across
+  // tables: pooling leave-one-out adjustments mostly cancels the hold-out.
+  function makeSplits(runs, nSplits, seed) {
+    const parts = [...new Set(runs.map(r => r.participant))].sort();
+    let s = (seed >>> 0) || 1;
+    const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+    const out = [];
+    for (let i = 0; i < nSplits; i++) {
+      const p = parts.slice();
+      for (let j = p.length - 1; j > 0; j--) { const k = Math.floor(rnd() * (j + 1)); [p[j], p[k]] = [p[k], p[j]]; }
+      const A = new Set(p.slice(0, Math.floor(p.length / 2)));
+      out.push([runs.filter(r => A.has(r.participant)), runs.filter(r => !A.has(r.participant))]);
+    }
+    return out;
+  }
+  function* splitFits(splits, ax, words) {
+    const out = [];
+    for (const [A, B] of splits) {
+      const fa = fitWords(A, ax, words); yield;
+      const fb = fitWords(B, ax, words); yield;
+      const f = rows => new Map([...rows].map(([w, r]) => [w, r.status === "thin" ? null : r.fit]));
+      out.push([{ runs: A, fits: f(fa) }, { runs: B, fits: f(fb) }]);
+    }
+    return out;
+  }
+  // One direction: table from `train`, judged on `test`.
+  function evalHalf(train, test, ax, mode, words, targetWords, o, adjustable) {
+    const T = target(train.fits, targetWords);
+    if (!T) return null;
+    const maps = new Map(words.map(w => [w, adjustable(w) && train.fits.get(w) ? makeMap(train.fits.get(w), T, o) : null]));
+    const tp = x => Math.min(1 - 1e-6, Math.max(1e-6, FLOOR + (1 - FLOOR) / (1 + Math.exp(-(x - T.m) / T.s))));
+    let llRaw = 0, llNorm = 0, n = 0;
+    for (const r of test.runs) for (const t of r.trials) {
+      const mp = maps.get(t.word), x0 = ax.toX(t.level);
+      const N = !mp ? x0 : (mp.flatAt(x0) && Number.isFinite(t.req)) ? ax.toX(t.req) : mp.inv(x0);
+      const pr = tp(x0), pn = tp(N);
+      llRaw -= t.correct ? Math.log(pr) : Math.log(1 - pr);
+      llNorm -= t.correct ? Math.log(pn) : Math.log(1 - pn);
+      n++;
+    }
+    const rl = relabel(test.runs, ax, mode, () => maps);
+    const list = words.filter(w => test.fits.get(w) && train.fits.get(w) && rl.has(w));
+    const nf = list.map(w => fitWord(rl.get(w).groups, ax));
+    const rawF = list.map(w => test.fits.get(w));
+    return { raw: spread(rawF), norm: spread(nf), wRaw: avgCurve(rawF), wNorm: avgCurve(nf), llRaw: llRaw / n, llNorm: llNorm / n, n };
+  }
+
   // Slope of the rise at its midpoint: %/axis unit; LPF also in %/decade (Gibbins/Anderson units, = 100k).
   const riseSlope = s => 25 / s;
   const perDecade = s => 25 / (s * LOG10_2);
@@ -785,7 +852,7 @@ const CORE = (() => {
   const fromGibbins = (srtHz, S) => ({ m: Math.log2(srtHz), s: 25 / (S * LOG10_2) });
 
   const setFixedCeiling = on => { OPT.fixedCeiling = !!on; };
-  return { confusions, binomCdf, setFixedCeiling, AXES, FLOOR, LPF_FLOOR_X, XLIM, REASONS, parseFile, dedupe, aggregate, fitWord, classify, rise, xAtRise, pAt,
+  return { makeSplits, splitFits, evalHalf, confusions, binomCdf, setFixedCeiling, AXES, FLOOR, LPF_FLOOR_X, XLIM, REASONS, parseFile, dedupe, aggregate, fitWord, classify, rise, xAtRise, pAt,
     fmtLevel, fmtX, runKey, runStep, pctl, median, wordGroups, fitWords, autoReasons, target, makeMap, relabel, foldFits,
     avgCurve, spread, riseSlope, perDecade, fromGibbins };
 })();
@@ -852,7 +919,7 @@ const anyNormRuns = () => state.all.some(r => r.norm);
 const useRequested = () => state.axis === "requested" && anyNormRuns();
 function onAxis(r) {
   if (!r.norm || useRequested()) return r;
-  if (!r._played) r._played = { ...r, trials: r.trials.map(t => ({ ...t, level: t.played ?? t.level })) };
+  if (!r._played) r._played = { ...r, trials: r.trials.map(t => ({ ...t, level: t.played ?? t.level, req: t.level })) };
   return r._played;
 }
 function runsFor(mode) { return state.all.filter(r => r.mode === mode && !state.excludedRuns.has(r.id)).map(onAxis); }
@@ -870,6 +937,8 @@ function baseFor(mode) {
   const b = { sig, mode, ax, runs, words, rows, full, tested, nParts: parts.size, folds: null, progress: 0, fixedCeiling: state.fixedCeiling };
   state.base[mode] = b;
   if (parts.size >= 3) startFolds(b); else b.folds = "few";
+  b.splits = null;
+  if (parts.size >= 6) startSplits(b); else b.splits = "few";
   return b;
 }
 function startFolds(b) {
@@ -885,6 +954,64 @@ function startFolds(b) {
   };
   setTimeout(step, 0);
 }
+// ---------- held-out check: repeated split-half by participant ----------
+const SPLITS = 10, SPLIT_SEED = 20261022;
+function startSplits(b) {
+  const gen = C.splitFits(C.makeSplits(b.runs, SPLITS, SPLIT_SEED), b.ax, b.words);
+  const step = () => {
+    if (state.base[b.mode] !== b || b.fixedCeiling !== state.fixedCeiling) return;
+    C.setFixedCeiling(b.fixedCeiling);
+    const t0 = performance.now(); let r;
+    while (performance.now() - t0 < 25) { r = gen.next(); if (r.done) break; }
+    if (r.done) { b.splits = r.value; if (state.mode === b.mode) startHeldOut(); return; }
+    setTimeout(step, 0);
+  };
+  setTimeout(step, 30);
+}
+let hoJob = 0;
+function startHeldOut() {
+  const res = state.res; if (!res) return;
+  const b = res.b, note = $("heldOutNote");
+  const job = ++hoJob;
+  $("heldOut").textContent = "";
+  if (b.splits === "few") { note.textContent = "The held-out check needs at least 6 participants."; return; }
+  if (!Array.isArray(b.splits)) { note.textContent = "Preparing the held-out check…"; return; }
+  const tasks = []; b.splits.forEach(([A, B]) => { tasks.push([A, B], [B, A]); });
+  const out = []; let i = 0;
+  const step = () => {
+    if (job !== hoJob) return;
+    C.setFixedCeiling(state.fixedCeiling);
+    const t0 = performance.now();
+    while (i < tasks.length && performance.now() - t0 < 40) {
+      const [tr, te] = tasks[i++];
+      const r = C.evalHalf(tr, te, res.ax, res.mode, b.words, res.targetWords, res.o, res.adjustable);
+      if (r && r.raw && r.norm) out.push(r);
+    }
+    if (i < tasks.length) { note.textContent = `Running the held-out check… ${Math.round(100 * i / tasks.length)}%`; setTimeout(step, 0); return; }
+    renderHeldOut(res, out);
+  };
+  setTimeout(step, 0);
+}
+function renderHeldOut(res, out) {
+  const m = res.mode, tb = $("heldOut"); tb.textContent = "";
+  if (!out.length) { $("heldOutNote").textContent = "The held-out check couldn't be run."; return; }
+  const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+  const rng = a => { const s = a.slice().sort((x, y) => x - y); return `${C.pctl(s, 0.05).toFixed(2)}–${C.pctl(s, 0.95).toFixed(2)}`; };
+  const head = tb.insertRow(); ["", "As recorded", "Normalised"].forEach(t => { const th = document.createElement("th"); th.textContent = t; head.appendChild(th); });
+  const row = (k, a, b) => { const r = tb.insertRow(); r.insertCell().textContent = k; for (const v of [a, b]) { const c = r.insertCell(); c.className = "num"; c.textContent = v; } };
+  const u = m === "LPF" ? "oct" : "dB";
+  const pick = (f) => [out.map(o => f(o.raw)), out.map(o => f(o.norm))];
+  let [a, b] = pick(s => s.mIQR);
+  row("Midpoints: interquartile range", `${mean(a).toFixed(2)} ${u} (${rng(a)})`, `${mean(b).toFixed(2)} ${u} (${rng(b)})`);
+  [a, b] = pick(s => s.mSD);
+  row("Midpoints: SD", `${mean(a).toFixed(2)} ${u} (${rng(a)})`, `${mean(b).toFixed(2)} ${u} (${rng(b)})`);
+  const wr = out.map(o => o.wRaw && Number.isFinite(o.wRaw.s) ? C.riseSlope(o.wRaw.s) : NaN).filter(Number.isFinite);
+  const wn = out.map(o => o.wNorm && Number.isFinite(o.wNorm.s) ? C.riseSlope(o.wNorm.s) : NaN).filter(Number.isFinite);
+  if (wr.length && wn.length) row("Whole test: slope", `${mean(wr).toFixed(m === "LPF" ? 0 : 1)} ${slopeUnit(m)}`, `${mean(wn).toFixed(m === "LPF" ? 0 : 1)} ${slopeUnit(m)}`);
+  row("Log loss against the target (lower is better)", mean(out.map(o => o.llRaw)).toFixed(4), mean(out.map(o => o.llNorm)).toFixed(4));
+  $("heldOutNote").textContent = `${SPLITS} random splits of the participants into halves, each half judged with the table from the other half (${out.length} judgements; mean, with 5th–95th percentile across them). Every figure comes from half the participants, so the spreads include the noise of fitting half the data, in both columns. This is the honest preview of new listeners.`;
+}
+
 function showProgress() {
   const b = state.base[state.mode], el = $("progress");
   if (!b || state.source !== "lopo") { el.textContent = ""; return; }
@@ -1167,7 +1294,7 @@ function renderSummary(res) {
     row("Whole test: slope", fmtSlope(m, p0.s), fmtSlope(m, p1.s));
     row("Whole test: 62.5% point", fmtMid(m, p0.T), fmtMid(m, p1.T));
   }
-  $("spreadNote").textContent = `${res.list.length} words with a fit, ${res.b.runs.length} runs from ${res.b.nParts} participants. Ceiling ${state.fixedCeiling ? "fixed at 100%" : "free (70–100%)"}. Normalised column: ${res.lopo ? "each participant’s trials adjusted with fits from everyone else (leave-one-out)" : "adjustments from all participants’ data (in-sample, so partly circular)"}. ${m === "LPF" ? "O’Beirne/Gibbins" : METHOD_LABEL[res.o.method]}${res.o.method === "gibbins" ? `, slope ratio capped at ×${res.o.cap}` : ""}${res.o.lim ? `, adjustment limited to ±${res.o.lim} ${m === "LPF" ? "oct" : "dB"}` : ""}.`;
+  $("spreadNote").textContent = `${res.list.length} words with a fit, ${res.b.runs.length} runs from ${res.b.nParts} participants. Ceiling ${state.fixedCeiling ? "fixed at 100%" : "free (70–100%)"}. Normalised column: ${res.lopo ? "each participant’s trials adjusted with fits from everyone else (leave-one-out), then pooled. Pooling 24 such adjustments largely cancels the hold-out, so read this column as close to in-sample; the held-out check below is the honest preview" : "adjustments from all participants’ data (in-sample, so circular)"}. ${m === "LPF" ? "O’Beirne/Gibbins" : METHOD_LABEL[res.o.method]}${res.o.method === "gibbins" ? `, slope ratio capped at ×${res.o.cap}` : ""}${res.o.lim ? `, adjustment limited to ±${res.o.lim} ${m === "LPF" ? "oct" : "dB"}` : ""}.`;
 
   const lo = $("leftOut"); lo.textContent = "";
   const outs = res.list.filter(w => !res.inTarget(w)).concat(res.b.words.filter(w => !res.usable(w)));
@@ -1376,6 +1503,7 @@ function render() {
   $("main").hidden = false; $("noData").hidden = true;
   const res = analyse(state.mode); state.res = res;
   renderSummary(res); renderCluster(res); renderStrips(res); renderAdjust(res); renderPool(res); renderParts(); renderCards(res);
+  startHeldOut();
   showProgress();
 }
 function scheduleRender(ms = 120) { clearTimeout(state.renderTimer); state.renderTimer = setTimeout(render, ms); }
