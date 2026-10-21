@@ -71,10 +71,28 @@ select:disabled, input:disabled { opacity: 0.45; }
 details.panel > summary { cursor: pointer; font-weight: 700; }
 
 /* The control strip: the normalisation switch leads; everything else sits beside it. */
-.controls { display: grid; grid-template-columns: auto 1fr; gap: 14px 22px; align-items: start; }
-@media (max-width: 760px) { .controls { grid-template-columns: 1fr; } }
-.switch { display: grid; gap: 8px; align-content: start; padding-right: 22px; border-right: 1px solid var(--line); }
-@media (max-width: 760px) { .switch { border-right: 0; padding-right: 0; } }
+/* Mode and the normalisation switch stay at the top of the screen while you scroll. */
+html { scroll-padding-top: calc(env(safe-area-inset-top, 0px) + 72px); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); background: var(--bg); z-index: 21; }
+.stickybar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+  margin: -8px -16px -6px; padding: 8px 16px;
+  background: color-mix(in srgb, var(--bg) 97%, transparent);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+.stickybar .short { display: none; }
+.stickybar .seg button { white-space: nowrap; }
+.stickyinfo { font-size: 0.82rem; color: var(--fg-2); margin-left: auto; text-align: right; }
+@media (max-width: 560px) {
+  .stickybar { gap: 8px; flex-wrap: nowrap; }
+  .stickybar .seg button { padding: 5px 11px; }
+  .stickybar .cnt, .stickybar .long, .stickyinfo { display: none; }
+  .stickybar .short { display: inline; }
+  .stickybar .normsw { padding: 7px 10px 7px 7px; font-size: 0.98rem; gap: 9px; }
+}
+.controls { display: grid; gap: 12px; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 3px; background: var(--sunk); }
 .seg button { border: 0; border-radius: 999px; min-height: 34px; padding: 5px 14px; background: transparent; }
 .seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
@@ -183,14 +201,16 @@ tr.off td { color: var(--fg-3); }
     <p class="lede">Joel and Barend’s normative runs are built in. Switch normalisation on to see each word’s trials as they would have come out had every word been played at its adjusted level, so you can judge the method before the next participants are tested.</p>
   </header>
 
-  <section class="panel controls" aria-label="Settings">
-    <div class="switch">
-      <div class="seg" role="group" aria-label="Mode">
-        <button id="modeLPF" type="button" aria-pressed="true">Low-pass <span class="num" id="cntLPF"></span></button>
-        <button id="modeSNR" type="button" aria-pressed="false">Noise <span class="num" id="cntSNR"></span></button>
-      </div>
-      <label class="normsw"><input type="checkbox" id="normToggle"><span class="track" aria-hidden="true"></span>Apply normalisation</label>
+  <div class="stickybar" role="region" aria-label="Mode and normalisation">
+    <div class="seg" role="group" aria-label="Mode">
+      <button id="modeLPF" type="button" aria-pressed="true">Low-pass <span class="num cnt" id="cntLPF"></span></button>
+      <button id="modeSNR" type="button" aria-pressed="false">Noise <span class="num cnt" id="cntSNR"></span></button>
     </div>
+    <label class="normsw"><input type="checkbox" id="normToggle"><span class="track" aria-hidden="true"></span><span class="long">Apply normalisation</span><span class="short">Normalise</span></label>
+    <span class="stickyinfo" id="stickyInfo"></span>
+  </div>
+
+  <section class="panel controls" aria-label="Settings">
     <div style="display:grid; gap:12px; min-width:0">
       <div class="opts">
         <label class="f" for="methodSel">Method
@@ -198,6 +218,9 @@ tr.off td { color: var(--fg-3); }
         </label>
         <label class="f" for="srcSel">Adjustments from
           <select id="srcSel"><option value="lopo">Other participants (leave-one-out)</option><option value="in">All participants (in-sample)</option></select>
+        </label>
+        <label class="f" for="ceilSel">Ceiling
+          <select id="ceilSel"><option value="free">Free (70–100%)</option><option value="fixed">Fixed at 100%</option></select>
         </label>
         <label class="f" for="capIn">Slope ratio cap
           <span class="inl">× <input id="capIn" type="number" min="1" step="0.5" value="3" inputmode="decimal"></span>
@@ -272,7 +295,7 @@ tr.off td { color: var(--fg-3); }
       <p class="small muted">These words don’t count towards the target’s median midpoint and slope. Tick or untick <b>In target</b> on any word card to change it.</p>
       <div class="checks" role="group" aria-label="Reasons to leave a word out">
         <span class="muted">Leave out words with:</span>
-        <label><input type="checkbox" id="crit-ceiling"> a low ceiling</label>
+        <label><input type="checkbox" id="crit-ceiling"> a low ceiling</label><span class="small muted" id="ceilHint" hidden>(not applicable with the ceiling fixed at 100%)</span>
         <label><input type="checkbox" id="crit-outside"> a midpoint outside the levels tested</label>
         <label><input type="checkbox" id="crit-steep"> a far steeper slope</label>
         <label><input type="checkbox" id="crit-flat"> a far shallower slope</label>
@@ -324,7 +347,7 @@ tr.off td { color: var(--fg-3); }
   <details class="panel">
     <summary>How the simulation works</summary>
     <div class="method">
-      <p><b>Fits.</b> Each word’s trials are pooled across participants and fitted by maximum likelihood with a 4AFC logistic: chance fixed at 25%, the upper limit free between 70% and 100%. Cutoffs are fitted in octaves (log₂ Hz), SNR in dB. A word’s <b>midpoint</b> is the centre of its rise from chance to its ceiling (62.5% correct when the ceiling is 100%), and its <b>slope</b> is the slope of that rise at the midpoint, from 0% to 100% of the way up. In %/octave this is the 4AFC slope divided by 0.75; it converts to Gibbins’ and Anderson’s units (100 × k per decade, where k is the Kollmeier slope coefficient) by dividing by log₁₀2 = 0.301. The fit cannot resolve a slope steeper than 833 %/octave (shown as “≥ 833”): such words go from chance to ceiling between two adjacent levels tested.</p>
+      <p><b>Fits.</b> Each word’s trials are pooled across participants and fitted by maximum likelihood with a 4AFC logistic: chance fixed at 25%, and the upper limit either free between 70% and 100% or fixed at 100% (the Gibbins form). With the ceiling fixed, a word that levels off below 100% is fitted with a shallower slope instead, so it tends to be caught by the shallow-slope criterion rather than the low-ceiling one. Cutoffs are fitted in octaves (log₂ Hz), SNR in dB. A word’s <b>midpoint</b> is the centre of its rise from chance to its ceiling (62.5% correct when the ceiling is 100%), and its <b>slope</b> is the slope of that rise at the midpoint, from 0% to 100% of the way up. In %/octave this is the 4AFC slope divided by 0.75; it converts to Gibbins’ and Anderson’s units (100 × k per decade, where k is the Kollmeier slope coefficient) by dividing by log₁₀2 = 0.301. The fit cannot resolve a slope steeper than 833 %/octave (shown as “≥ 833”): such words go from chance to ceiling between two adjacent levels tested.</p>
       <p><b>Target.</b> The target function has the median midpoint and the median slope of the words in the target. Medians are used because several words’ slopes are only known to be very steep, and a median stays correct when fewer than half of the values are bounded like this. By default a word is left out when its ceiling is low (below 86%, levelled off within the levels tested), its midpoint lies outside the levels it was tested at, its slope or midpoint is far outside the others (slope beyond 1.5 interquartile ranges of the log slopes; midpoint beyond 3 interquartile ranges), or it has fewer than 30 trials.</p>
       <p><b>Adjustment.</b> For a requested level N, a word is played at the level where its own rise is as far along as the target’s rise is at N. With the Kollmeier form used by Gibbins this is a straight line on the fitting axis, whatever the number of alternatives: played = midpoint<sub>word</sub> + (s<sub>word</sub>/s<sub>target</sub>)(N − midpoint<sub>target</sub>), where s is the width of each rise. The basic method sets the ratio to 1, so every word is shifted by the gap between its midpoint and the target’s and keeps its own slope. The O’Beirne/Gibbins method also matches the slope, which makes the adjustment depend on the level: a shallow word gets a larger adjustment the further the request is from the midpoint. The ratio is capped (default ×3) because very steep or very shallow fits would otherwise ask for extreme levels. The ceiling is left out of the match so that every request has an answer; words with a low ceiling are flagged rather than forced. Played levels stay within 75 Hz–20 kHz and −40 to +15 dB SNR, and within the optional limit, which keeps large changes in speech level from becoming a loudness cue in the noise condition.</p>
       <p><b>The whole test.</b> Its function is the point-by-point average of every word’s fitted function, and its slope is taken at the average’s 62.5% point and expressed in the same rise units as a single word. This does not depend on which words happened to be played at which levels, which the level plans varied from word to word.</p>
@@ -337,6 +360,8 @@ tr.off td { color: var(--fg-3); }
 <script id="core">
 const CORE = (() => {
   const FLOOR = 0.25, LAM_MAX = 0.3, LOW_CEILING = 0.86;
+  // Ceiling: free (upper limit 70–100%) or fixed at 100% (no lapse).
+  const OPT = { fixedCeiling: false };
   const AXES = {
     SNR: { unit: "dB SNR", slopeUnit: "%/dB", sMin: 0.3, sMax: 12, toX: v => v, fromX: x => x, step: "dB" },
     LPF: { unit: "Hz", slopeUnit: "%/oct", sMin: 0.03, sMax: 3, toX: v => Math.log2(v), fromX: x => Math.pow(2, x), step: "oct" }
@@ -438,7 +463,7 @@ const CORE = (() => {
   // ---- psychometric fit ----
   const sig = z => 1 / (1 + Math.exp(-z));
   function unpack(q, ax) {
-    return { m: q[0], s: ax.sMin + (ax.sMax - ax.sMin) * sig(q[1]), lam: LAM_MAX * sig(q[2]) };
+    return { m: q[0], s: ax.sMin + (ax.sMax - ax.sMin) * sig(q[1]), lam: OPT.fixedCeiling ? 0 : LAM_MAX * sig(q[2]) };
   }
   function pAt(x, P) { return FLOOR + (1 - FLOOR - P.lam) * sig((x - P.m) / P.s); }
   function nll(q, groups, ax, xlo, xhi) {
@@ -711,7 +736,8 @@ const CORE = (() => {
   // Anderson's closed- and open-set parameters (SRT in Hz, slope = 100k per decade) on our axis.
   const fromGibbins = (srtHz, S) => ({ m: Math.log2(srtHz), s: 25 / (S * LOG10_2) });
 
-  return { AXES, FLOOR, LPF_FLOOR_X, XLIM, REASONS, parseFile, dedupe, aggregate, fitWord, classify, rise, xAtRise, pAt,
+  const setFixedCeiling = on => { OPT.fixedCeiling = !!on; };
+  return { setFixedCeiling, AXES, FLOOR, LPF_FLOOR_X, XLIM, REASONS, parseFile, dedupe, aggregate, fitWord, classify, rise, xAtRise, pAt,
     fmtLevel, fmtX, runKey, runStep, pctl, median, wordGroups, fitWords, autoReasons, target, makeMap, relabel, foldFits,
     avgCurve, spread, riseSlope, perDecade, fromGibbins };
 })();
@@ -733,7 +759,7 @@ const METHOD_LABEL = { basic: "Basic (shift only)", gibbins: "O’Beirne/Gibbins
 const state = {
   all: [], excludedRuns: new Set(), mode: "LPF", norm: false,
   method: "basic",                         // SNR only; LPF is always O’Beirne/Gibbins
-  source: "lopo", cap: 3, lim: { SNR: 6, LPF: 0 }, adjustOut: true,
+  source: "lopo", fixedCeiling: false, cap: 3, lim: { SNR: 6, LPF: 0 }, adjustOut: true,
   crit: { ceiling: true, outside: true, steep: true, flat: true, midpoint: true },
   override: { SNR: new Map(), LPF: new Map() },
   anderson: { open: false, closed: false }, slopeUnit: "oct",
@@ -771,7 +797,8 @@ const andersonP = (x, a) => a.floor + (1 - a.floor) / (1 + Math.exp(-(x - a.m) /
 // ---------- per-mode base: full fits plus leave-one-out fits (in the background) ----------
 function runsFor(mode) { return state.all.filter(r => r.mode === mode && !state.excludedRuns.has(r.id)); }
 function baseFor(mode) {
-  const runs = runsFor(mode), sig = runs.map(r => r.id).join("|");
+  const runs = runsFor(mode), sig = (state.fixedCeiling ? "fixed|" : "free|") + runs.map(r => r.id).join("|");
+  C.setFixedCeiling(state.fixedCeiling);
   const old = state.base[mode];
   if (old && old.sig === sig) return old;
   const ax = C.AXES[mode];
@@ -780,7 +807,7 @@ function baseFor(mode) {
   const full = new Map([...rows].map(([w, r]) => [w, r.fit]));
   const tested = [...new Set(runs.flatMap(r => r.trials.map(t => t.level)))].sort((a, b) => a - b);
   const parts = new Set(runs.map(r => r.participant));
-  const b = { sig, mode, ax, runs, words, rows, full, tested, nParts: parts.size, folds: null, progress: 0 };
+  const b = { sig, mode, ax, runs, words, rows, full, tested, nParts: parts.size, folds: null, progress: 0, fixedCeiling: state.fixedCeiling };
   state.base[mode] = b;
   if (parts.size >= 3) startFolds(b); else b.folds = "few";
   return b;
@@ -789,6 +816,8 @@ function startFolds(b) {
   const gen = C.foldFits(b.runs, b.ax, b.words, b.full);
   const step = () => {
     if (state.base[b.mode] !== b) return;
+    if (b.fixedCeiling !== state.fixedCeiling) return;
+    C.setFixedCeiling(b.fixedCeiling);
     const t0 = performance.now(); let r;
     while (performance.now() - t0 < 25) { r = gen.next(); if (r.done) break; }
     if (r.done) { b.folds = r.value; b.progress = 1; if (state.mode === b.mode && state.source === "lopo") scheduleRender(0); else showProgress(); return; }
@@ -810,6 +839,7 @@ function settingsFor(mode) {
 }
 function analyse(mode) {
   const b = baseFor(mode), ax = b.ax;
+  C.setFixedCeiling(state.fixedCeiling);
   const reasons = C.autoReasons(b.rows, { slopeFence: 1.5, midFence: 3, on: state.crit });
   const ov = state.override[mode];
   const usable = w => !!b.full.get(w) && b.rows.get(w).status !== "thin";
@@ -1068,7 +1098,7 @@ function renderSummary(res) {
     row("Whole test: slope", fmtSlope(m, p0.s), fmtSlope(m, p1.s));
     row("Whole test: 62.5% point", fmtMid(m, p0.T), fmtMid(m, p1.T));
   }
-  $("spreadNote").textContent = `${res.list.length} words with a fit, ${res.b.runs.length} runs from ${res.b.nParts} participants. Normalised column: ${res.lopo ? "each participant’s trials adjusted with fits from everyone else (leave-one-out)" : "adjustments from all participants’ data (in-sample, so partly circular)"}. ${m === "LPF" ? "O’Beirne/Gibbins" : METHOD_LABEL[res.o.method]}${res.o.method === "gibbins" ? `, slope ratio capped at ×${res.o.cap}` : ""}${res.o.lim ? `, adjustment limited to ±${res.o.lim} ${m === "LPF" ? "oct" : "dB"}` : ""}.`;
+  $("spreadNote").textContent = `${res.list.length} words with a fit, ${res.b.runs.length} runs from ${res.b.nParts} participants. Ceiling ${state.fixedCeiling ? "fixed at 100%" : "free (70–100%)"}. Normalised column: ${res.lopo ? "each participant’s trials adjusted with fits from everyone else (leave-one-out)" : "adjustments from all participants’ data (in-sample, so partly circular)"}. ${m === "LPF" ? "O’Beirne/Gibbins" : METHOD_LABEL[res.o.method]}${res.o.method === "gibbins" ? `, slope ratio capped at ×${res.o.cap}` : ""}${res.o.lim ? `, adjustment limited to ±${res.o.lim} ${m === "LPF" ? "oct" : "dB"}` : ""}.`;
 
   const lo = $("leftOut"); lo.textContent = "";
   const outs = res.list.filter(w => !res.inTarget(w)).concat(res.b.words.filter(w => !res.usable(w)));
@@ -1200,6 +1230,7 @@ function tableText(res) {
   L.push(`# Method\t${m === "LPF" ? "O'Beirne/Gibbins" : METHOD_LABEL[res.o.method].replace("’", "'")}`);
   if (res.o.method === "gibbins") L.push(`# Slope ratio cap\t${res.o.cap}`);
   L.push(`# Adjustment limit\t${res.o.lim ? `±${res.o.lim} ${m === "LPF" ? "oct" : "dB"}` : "none"}`);
+  L.push(`# Ceiling\t${state.fixedCeiling ? "fixed at 100%" : "free (70–100%)"}`);
   L.push(`# Words left out of the target\t${state.adjustOut ? "adjusted" : "not adjusted"}`);
   L.push(`# Data\t${res.b.runs.length} runs, ${res.b.nParts} participants, ${new Date().toISOString().slice(0, 10)}`);
   if (T) {
@@ -1235,6 +1266,7 @@ function syncControls() {
     $("mode" + k).setAttribute("aria-pressed", String(m === k)); $("cnt" + k).textContent = n ? `(${n})` : "";
   }
   $("normToggle").checked = state.norm;
+  $("stickyInfo").textContent = `${m === "LPF" ? "O’Beirne/Gibbins" : METHOD_LABEL[state.method]}, ${state.source === "lopo" ? "leave-one-out" : "in-sample"}, ceiling ${state.fixedCeiling ? "fixed" : "free"}`;
   $("methodSel").disabled = m === "LPF";
   $("methodSel").value = m === "LPF" ? "gibbins" : state.method;
   $("methodHint").textContent = m === "LPF" ? "Low-pass uses O’Beirne/Gibbins." : "";
@@ -1243,6 +1275,9 @@ function syncControls() {
   $("limUnit").textContent = m === "LPF" ? "oct" : "dB";
   $("limIn").value = state.lim[m] || ""; $("limIn").step = m === "LPF" ? "0.25" : "1";
   $("srcSel").value = state.source;
+  $("ceilSel").value = state.fixedCeiling ? "fixed" : "free";
+  $("crit-ceiling").disabled = state.fixedCeiling;
+  $("ceilHint").hidden = !state.fixedCeiling;
   $("adjOutSel").value = state.adjustOut ? "yes" : "no";
   for (const k of Object.keys(state.crit)) $("crit-" + k).checked = state.crit[k];
   const lpf = m === "LPF";
@@ -1333,6 +1368,12 @@ for (const k of MODES) $("mode" + k).addEventListener("click", () => { state.mod
 $("normToggle").addEventListener("change", e => { state.norm = e.target.checked; scheduleRender(0); });
 $("methodSel").addEventListener("change", e => { state.method = e.target.value; scheduleRender(0); });
 $("srcSel").addEventListener("change", e => { state.source = e.target.value; scheduleRender(0); });
+$("ceilSel").addEventListener("change", e => {
+  state.fixedCeiling = e.target.value === "fixed";
+  // refit both modes; the leave-one-out fits restart in the background
+  scheduleRender(0);
+  setTimeout(() => { for (const k of MODES) if (k !== state.mode) baseFor(k); }, 400);
+});
 $("capIn").addEventListener("input", e => { const v = Number(e.target.value); if (v >= 1) { state.cap = v; scheduleRender(); } });
 $("limIn").addEventListener("input", e => { const v = Number(e.target.value); state.lim[state.mode] = v > 0 ? v : 0; scheduleRender(); });
 $("adjOutSel").addEventListener("change", e => { state.adjustOut = e.target.value === "yes"; scheduleRender(0); });
