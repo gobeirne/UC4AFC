@@ -1,6 +1,8 @@
 // File: results.js
 import { responseLog, participant, config, testStartedAt, listId, runId } from "./global.js";
 import { showScreen } from "./ui.js";
+import { activeNorm } from "./flow.js";
+import { normHeaderLines, normJson } from "./normalise.js";
 
 export function buildAdaptiveResults(optionalNote = "") {
   const now = new Date();
@@ -43,6 +45,10 @@ export function buildAdaptiveResults(optionalNote = "") {
       : undefined,
     note: optionalNote || undefined
   };
+  // Word normalisation used for this run (LPF/SNR adaptive runs).
+  const runNorm = (typeof activeNorm === "function") ? activeNorm() : null;
+  const normMode = (config && config.adaptive && config.adaptive.mode) || "lpf";
+  if (jsonData.adaptive && normMode !== "quiet" && typeof normJson === "function") jsonData.normalisation = normJson(runNorm);
 
   // Detect an adaptive run (rows carry a value) and build a self-documenting
   // settings + threshold header, mirroring the Monte-Carlo export style.
@@ -95,6 +101,9 @@ export function buildAdaptiveResults(optionalNote = "") {
         `${Calibration.presentationLevel()} ${lvlUnit}`);
     }
     if (mode === "snr") txtLines.push(`# SNR step multiplier\t${adaptiveCfg.stepMult ?? "n/a"}`);
+    // Word normalisation: the track and the estimate are on the requested
+    // scale; each word was played at its adjusted level (last column).
+    if (typeof normHeaderLines === "function") txtLines.push(...normHeaderLines(runNorm, mode));
   }
   if (typeof Calibration !== "undefined" && Calibration.calibrationHeader) {
     txtLines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
@@ -105,11 +114,14 @@ export function buildAdaptiveResults(optionalNote = "") {
   if (isAdaptive) {
     const valCol = (mode === "snr") ? "SNR_dB" : (mode === "quiet") ? "Level_dB" : "Cutoff_Hz";
     const estCol = (mode === "snr") ? "EstimateSNR_dB" : (mode === "quiet") ? "Estimate_dB" : "Estimate_Hz";
-    txtLines.push(`Trial\tSound\tCorrect\tChosen\tCorrect?\t${valCol}\tProcedure\t${estCol}\tTime_ms`);
+    // With normalisation, a last column gives the level each word was played at.
+    const playedCol = runNorm ? `\t${mode === "snr" ? "Played_SNR_dB" : "Played_Hz"}` : "";
+    txtLines.push(`Trial\tSound\tCorrect\tChosen\tCorrect?\t${valCol}\tProcedure\t${estCol}\tTime_ms${playedCol}`);
     for (const r of responseLog) {
       txtLines.push(
         `${r.index}\t${r.sound}\t${r.correct}\t${r.chosen}\t` +
-        `${r.isCorrect ? 1 : 0}\t${valOf(r) ?? ""}\t${r.procedure ?? ""}\t${estOf(r) ?? ""}\t${r.timeMs}`
+        `${r.isCorrect ? 1 : 0}\t${valOf(r) ?? ""}\t${r.procedure ?? ""}\t${estOf(r) ?? ""}\t${r.timeMs}` +
+        (runNorm ? `\t${r.played ?? ""}` : "")
       );
     }
   } else {
@@ -212,4 +224,4 @@ if (saveAgainBtn) {
       emailBtn.title = "";
     }
   }
-}
+}

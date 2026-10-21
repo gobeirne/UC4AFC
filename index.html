@@ -37,6 +37,7 @@
   <label for="levelInput" style="font-weight:600;"><span id="levelLabel">Level (dB A)</span></label>
   <input id="levelInput" type="number" step="1" style="width:5em;">
   <div id="levelHint" class="small" style="margin-top:0.1rem;"></div>
+  <div id="normHint" class="small" style="margin-top:0.1rem; font-weight:600;" hidden></div>
 
   <button id="trainBtn">Training</button>
   <button id="startBtn">Start</button><br />
@@ -291,8 +292,10 @@
     <p class="small">Applies to the stimuli for this run.</p>
   </div>
 
+  <div class="setup-block norm-block" id="normSetupBlock" data-context="setup"></div>
+
   <div class="setup-block">
-    <span class="setup-label">Normalisation</span>
+    <span class="setup-label">Normative data</span>
     <p class="small" style="margin-top:0;">Collect normalisation data using the method of constant stimuli (fixed list of SNRs or LPF cutoffs, every word at every level, repeated).</p>
     <button id="openConstBtn" type="button">Constant stimuli&hellip;</button>
   </div>
@@ -327,6 +330,8 @@
     </div>
     <p class="small" style="margin-bottom:0;">Which ear(s) the stimuli and noise are routed to.</p>
   </div>
+
+  <div class="setup-block norm-block" id="normCsBlock" data-context="cs"></div>
 
   <div class="setup-block">
     <span class="setup-label">Levels</span>

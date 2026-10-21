@@ -298,6 +298,11 @@ if (breakEveryInput) {
 
   // Start Button
   document.getElementById("startBtn").onclick = () => {
+    // Word normalisation switched on for this mode but its table isn't usable:
+    // say why rather than run without it.
+    const nMode = (config && config.adaptive && config.adaptive.mode) || "lpf";
+    const nSnap = (typeof normSnapshot === "function" && nMode !== "quiet") ? normSnapshot(nMode) : null;
+    if (nSnap && !nSnap.ok) { alert(nSnap.reason); return; }
     if (typeof AudioEngine !== "undefined") {
       AudioEngine.resume().then(() => {
         if (typeof warmDecodeCache === "function" && Array.isArray(list)) {
@@ -337,6 +342,8 @@ if (breakEveryInput) {
 
   // Constant-stimuli (normalisation) screen wiring.
   if (typeof setupConstantScreen === "function") setupConstantScreen();
+  // Word normalisation tables: fetch the central ones in use; front-page line.
+  if (typeof normInit === "function") normInit();
   if (typeof setupVerifyFilter === "function") setupVerifyFilter();
 };
 
@@ -860,6 +867,7 @@ function populateSetupForm() {
   applyModeLabels(_setupMode);
   fillFormFromCfg(cfg);
   fillSnrTimingFromConfig();
+  if (typeof normShow === "function") normShow(document.getElementById("normSetupBlock"), _setupMode);
 
   _setupDirty = false;
   updateDirtyUI();
@@ -937,6 +945,7 @@ function setupSetupScreen() {
         _setupMode = newMode;
         showModeButtons(_setupMode);
         applyModeLabels(_setupMode);
+        if (typeof normShow === "function") normShow(document.getElementById("normSetupBlock"), _setupMode);
         // Apply the preset for the new mode over the current form values.
         if (typeof AdaptiveConfig !== "undefined") {
           const current = readSetupForm();
@@ -1022,6 +1031,7 @@ function setupSetupScreen() {
       const t = e.target;
       if (!t || !/^(INPUT|SELECT)$/.test(t.tagName)) return;
       if (t.readOnly) return;                    // A / target are display-only
+      if (t.closest && t.closest(".norm-block")) return;   // saved as soon as it changes
       markDirty();
     };
     setupScreen.addEventListener("input", onEdit);

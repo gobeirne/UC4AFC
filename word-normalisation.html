@@ -219,6 +219,9 @@ tr.off td { color: var(--fg-3); }
         <label class="f" for="srcSel">Adjustments from
           <select id="srcSel"><option value="lopo">Other participants (leave-one-out)</option><option value="in">All participants (in-sample)</option></select>
         </label>
+        <label class="f" for="axisSel" id="axisWrap" hidden>Levels in runs with normalisation
+          <select id="axisSel"><option value="played">Played (each word’s own level)</option><option value="requested">Requested (what the procedure asked for)</option></select>
+        </label>
         <label class="f" for="ceilSel">Ceiling
           <select id="ceilSel"><option value="free">Free (70–100%)</option><option value="fixed">Fixed at 100%</option></select>
         </label>
@@ -321,7 +324,8 @@ tr.off td { color: var(--fg-3); }
 
     <section class="panel" aria-labelledby="tableH">
       <h2 id="tableH">Normalisation table</h2>
-      <p class="small muted">The adjustment for every word, from all participants’ data, with the current settings: what the test software would use. Tab-separated, so it pastes into Excel.</p>
+      <p class="small muted">The adjustment for every word, from all participants’ data, with the current settings: what the test software uses. Tab-separated, so it also pastes into Excel.</p>
+      <p class="small muted">To use it on every device, save it and put it in the repository next to index.html as <b>UC4AFC_normalisation_LPF.txt</b> or <b>UC4AFC_normalisation_SNR.txt</b> (Save gives it that name). Devices with Word normalisation set to <b>Central table</b> (in Setup, or on the Constant stimuli screen) pick it up when the app next starts or Setup opens. To try a table on one device first, choose <b>Table file</b> there and load the saved file. Each run records the table’s name, so change the date in its Name line if you edit it by hand.</p>
       <div class="copyrow"><button id="saveTable" type="button" class="primary">Save table</button><button id="copyTable" type="button">Copy table</button></div>
       <textarea id="copyFallback" hidden aria-label="Table text to copy" readonly></textarea>
     </section>
@@ -330,6 +334,7 @@ tr.off td { color: var(--fg-3); }
   <details class="panel">
     <summary>Participants and runs <span class="muted small" id="partCount"></span></summary>
     <p class="small muted">Untick a run to leave it out of everything, for example the researchers’ own runs.</p>
+    <div class="copyrow" id="partQuick" hidden><button type="button" id="runsAll">Use all runs</button><button type="button" id="runsWithout">Only runs without normalisation</button><button type="button" id="runsWith">Only runs with normalisation</button></div>
     <div class="tablewrap"><table id="partTable"></table></div>
   </details>
 
@@ -349,7 +354,8 @@ tr.off td { color: var(--fg-3); }
     <div class="method">
       <p><b>Fits.</b> Each word’s trials are pooled across participants and fitted by maximum likelihood with a 4AFC logistic: chance fixed at 25%, and the upper limit either free between 70% and 100% or fixed at 100% (the Gibbins form). With the ceiling fixed, a word that levels off below 100% is fitted with a shallower slope instead, so it tends to be caught by the shallow-slope criterion rather than the low-ceiling one. Cutoffs are fitted in octaves (log₂ Hz), SNR in dB. A word’s <b>midpoint</b> is the centre of its rise from chance to its ceiling (62.5% correct when the ceiling is 100%), and its <b>slope</b> is the slope of that rise at the midpoint, from 0% to 100% of the way up. In %/octave this is the 4AFC slope divided by 0.75; it converts to Gibbins’ and Anderson’s units (100 × k per decade, where k is the Kollmeier slope coefficient) by dividing by log₁₀2 = 0.301. The fit cannot resolve a slope steeper than 833 %/octave (shown as “≥ 833”): such words go from chance to ceiling between two adjacent levels tested.</p>
       <p><b>Target.</b> The target function has the median midpoint and the median slope of the words in the target. Medians are used because several words’ slopes are only known to be very steep, and a median stays correct when fewer than half of the values are bounded like this. By default a word is left out when its ceiling is low (below 86%, levelled off within the levels tested), its midpoint lies outside the levels it was tested at, its slope or midpoint is far outside the others (slope beyond 1.5 interquartile ranges of the log slopes; midpoint beyond 3 interquartile ranges), or it has fewer than 30 trials.</p>
-      <p><b>Adjustment.</b> For a requested level N, a word is played at the level where its own rise is as far along as the target’s rise is at N. With the Kollmeier form used by Gibbins this is a straight line on the fitting axis, whatever the number of alternatives: played = midpoint<sub>word</sub> + (s<sub>word</sub>/s<sub>target</sub>)(N − midpoint<sub>target</sub>), where s is the width of each rise. The basic method sets the ratio to 1, so every word is shifted by the gap between its midpoint and the target’s and keeps its own slope. The O’Beirne/Gibbins method also matches the slope, which makes the adjustment depend on the level: a shallow word gets a larger adjustment the further the request is from the midpoint. The ratio is capped (default ×3) because very steep or very shallow fits would otherwise ask for extreme levels. The ceiling is left out of the match so that every request has an answer; words with a low ceiling are flagged rather than forced. Played levels stay within 75 Hz–20 kHz and −40 to +15 dB SNR, and within the optional limit, which keeps large changes in speech level from becoming a loudness cue in the noise condition.</p>
+      <p><b>Adjustment.</b> For a requested level N, a word is played at the level where its own rise is as far along as the target’s rise is at N. With the Kollmeier form used by Gibbins this is a straight line on the fitting axis, whatever the number of alternatives: played = midpoint<sub>word</sub> + (s<sub>word</sub>/s<sub>target</sub>)(N − midpoint<sub>target</sub>), where s is the width of each rise. The basic method sets the ratio to 1, so every word is shifted by the gap between its midpoint and the target’s and keeps its own slope. The O’Beirne/Gibbins method also matches the slope, which makes the adjustment depend on the level: a shallow word gets a larger adjustment the further the request is from the midpoint. The ratio is capped (default ×3) because very steep or very shallow fits would otherwise ask for extreme levels. The ceiling is left out of the match so that every request has an answer; words with a low ceiling are flagged rather than forced. Played cutoffs stay within the filter’s 75 Hz–20 kHz, and every played level stays within the optional limit, which keeps large changes in speech level from becoming a loudness cue in the noise condition.</p>
+      <p><b>Runs recorded with normalisation.</b> The test software records both the level the procedure asked for and the level each word was played at. Fits normally use the played level, so these runs add to the word estimates like any other. Choosing <b>Requested</b> levels instead, with only those runs in use, shows how centred the words really were with the table in place; the simulation is switched off then, because it applies to played levels.</p>
       <p><b>The whole test.</b> Its function is the point-by-point average of every word’s fitted function, and its slope is taken at the average’s 62.5% point and expressed in the same rise units as a single word. This does not depend on which words happened to be played at which levels, which the level plans varied from word to word.</p>
       <p><b>Simulation.</b> Every recorded trial is moved to the requested level that would have produced the level it was played at, and each word is then refitted at those requested levels. Applying adjustments to the same data they were estimated from makes every word line up almost by construction, so by default each participant’s trials are adjusted using fits from all the other participants (leave-one-out). That is the fairer preview of how new listeners will do. The word cards and the normalisation table always show the all-participant adjustment, as the test software would use it.</p>
       <p><b>Anderson’s functions.</b> From her thesis (low-pass only; closed set with a 25% floor, open set with a 0% floor), drawn from her SRTs and slopes with the slope read as 100 × k per decade. Her thesis labels these slopes %/octave, but only the per-decade reading reproduces her own average curves. A few closed-set slopes of 1000 %/decade or more are fits that ran to a limit, and are marked as such. Her recordings and listeners differ from these, so the comparison is of shape and spread, not of exact values.</p>
@@ -380,13 +386,15 @@ const CORE = (() => {
     if (logStart < 0) return null;
     const head = (lines[logStart + 1] || "").split("\t");
     const iW = head.indexOf("Word"), iL = 2, iC = head.indexOf("Correct?"), iT = head.indexOf("Timestamp");
+    const iP = head.findIndex(c => /^Played/i.test(c));      // runs with word normalisation
     const trials = [];
     for (let i = logStart + 2; i < lines.length; i++) {
       const c = lines[i].split("\t");
       if (c.length < 5 || !c[iW]) continue;
       const level = Number(c[iL]), corr = Number(c[iC]);
       if (!Number.isFinite(level) || (corr !== 0 && corr !== 1)) continue;
-      trials.push({ word: c[iW].trim(), level, correct: corr, ts: c[iT] || "" });
+      const played = iP >= 0 ? Number(c[iP]) : NaN;
+      trials.push({ word: c[iW].trim(), level, correct: corr, ts: c[iT] || "", played: Number.isFinite(played) ? played : level });
     }
     let mode = (h["Mode"] || "").toUpperCase();
     if (mode !== "SNR" && mode !== "LPF") mode = /cutoff|hz/i.test(head[2] || "") || /_CS_LPF_/i.test(name) ? "LPF" : "SNR";
@@ -396,18 +404,21 @@ const CORE = (() => {
       file: name, source: "txt", participant: h["Participant"] || "anon", mode, levels,
       started: h["Started at"] || "", calibration: h["Calibration"] || "", headphones: h["Headphones"] || "",
       level: h["Noise level"] || h["Presentation level"] || "", note: h["Note"] || "", plan: h["Level plan"] || "",
-      planned: Number(h["Total presentations"]) || null, trials
+      planned: Number(h["Total presentations"]) || null, trials,
+      norm: h["Normalisation"] && h["Normalisation"] !== "off" ? h["Normalisation"] : ""
     };
   }
   function parseJson(name, text) {
     let d; try { d = JSON.parse(text); } catch (_) { return null; }
     if (!d || d.kind !== "constant-stimuli" || !Array.isArray(d.log)) return null;
-    const trials = d.log.map(r => ({ word: String(r.word), level: Number(r.level), correct: r.isCorrect ? 1 : 0, ts: r.ts || "" }))
+    const trials = d.log.map(r => ({ word: String(r.word), level: Number(r.level), correct: r.isCorrect ? 1 : 0, ts: r.ts || "",
+      played: Number.isFinite(Number(r.played)) && r.played !== null && r.played !== undefined ? Number(r.played) : Number(r.level) }))
       .filter(t => Number.isFinite(t.level));
     return {
       file: name, source: "json", participant: d.participant || "anon", mode: String(d.mode || "").toUpperCase() === "LPF" ? "LPF" : "SNR",
       levels: (d.levels || []).map(Number), started: d.startedAt ? new Date(d.startedAt).toLocaleString("en-NZ") : "",
-      calibration: "", headphones: "", level: "", note: d.note || "", plan: d.plan && d.plan.perWord !== false ? String(d.plan.name || "level plan") : "", planned: null, trials
+      calibration: "", headphones: "", level: "", note: d.note || "", plan: d.plan && d.plan.perWord !== false ? String(d.plan.name || "level plan") : "", planned: null, trials,
+      norm: d.normalisation && d.normalisation.on ? String(d.normalisation.name || "normalisation table") : ""
     };
   }
   function parseFile(name, text) {
@@ -426,7 +437,7 @@ const CORE = (() => {
       const keep = (r.trials.length > prev.trials.length || (r.trials.length === prev.trials.length && r.source === "txt" && prev.source !== "txt")) ? r : prev;
       const lose = keep === r ? prev : r;
       // keep the header details from the .txt if the .json wins
-      if (keep.source === "json" && lose.source === "txt") Object.assign(keep, { calibration: lose.calibration, headphones: lose.headphones, level: lose.level, started: lose.started || keep.started });
+      if (keep.source === "json" && lose.source === "txt") Object.assign(keep, { calibration: lose.calibration, headphones: lose.headphones, level: lose.level, started: lose.started || keep.started, norm: keep.norm || lose.norm });
       best.set(k, keep); dropped.push(lose.file);
     }
     const out = [...best.values()];
@@ -570,7 +581,8 @@ const CORE = (() => {
   // which is the Kollmeier-form match with A cancelling (same A on both
   // sides). The lapse is left out of the match, so it is always solvable.
   // =====================================================================
-  const XLIM = { SNR: [-40, 15], LPF: [Math.log2(75), Math.log2(20000)] };
+  // Played levels: LPF within the filter's 75 Hz–20 kHz; SNR unbounded (as in the app).
+  const XLIM = { SNR: [-Infinity, Infinity], LPF: [Math.log2(75), Math.log2(20000)] };
   const RES = { SNR: 20, LPF: 200 };             // grouping resolution: 0.05 dB, 0.005 oct
   const median = a => pctl(a, 0.5);
   const LOG10_2 = Math.log10(2);
@@ -759,7 +771,7 @@ const METHOD_LABEL = { basic: "Basic (shift only)", gibbins: "O’Beirne/Gibbins
 const state = {
   all: [], excludedRuns: new Set(), mode: "LPF", norm: false,
   method: "basic",                         // SNR only; LPF is always O’Beirne/Gibbins
-  source: "lopo", fixedCeiling: false, cap: 3, lim: { SNR: 6, LPF: 0 }, adjustOut: true,
+  source: "lopo", fixedCeiling: false, axis: "played", cap: 3, lim: { SNR: 6, LPF: 0 }, adjustOut: true,
   crit: { ceiling: true, outside: true, steep: true, flat: true, midpoint: true },
   override: { SNR: new Map(), LPF: new Map() },
   anderson: { open: false, closed: false }, slopeUnit: "oct",
@@ -774,7 +786,7 @@ function unpackBaked() {
     for (let i = 0; i < r.t.length; i += 3) trials.push({ word: W[r.t[i]], level: r.t[i + 1], correct: r.t[i + 2], ts: "" });
     if (trials.length) trials[0].ts = r.ts0;
     return { file: r.f, source: "txt", participant: r.p, mode: r.m, levels: r.lv, started: r.st, calibration: r.cal || "", headphones: r.hp || "",
-      level: r.lev || "", note: r.note || "", plan: r.pl || "", planned: r.pn || null, baked: true, trials };
+      level: r.lev || "", note: r.note || "", plan: r.pl || "", planned: r.pn || null, baked: true, norm: "", trials };
   });
 }
 // Anderson: word -> [openSRT, openSlope, openResid, closedSRT, closedSlope, closedResid]; slope = 100k per decade
@@ -795,9 +807,20 @@ const andersonMedian = (() => {
 const andersonP = (x, a) => a.floor + (1 - a.floor) / (1 + Math.exp(-(x - a.m) / a.s));
 
 // ---------- per-mode base: full fits plus leave-one-out fits (in the background) ----------
-function runsFor(mode) { return state.all.filter(r => r.mode === mode && !state.excludedRuns.has(r.id)); }
+// Runs recorded with word normalisation carry both the requested level and the
+// level each word was played at. Fits use the played level (the physical
+// stimulus) unless "Requested levels" is chosen, which shows what the
+// procedure asked for: how centred the normalised words really were.
+const anyNormRuns = () => state.all.some(r => r.norm);
+const useRequested = () => state.axis === "requested" && anyNormRuns();
+function onAxis(r) {
+  if (!r.norm || useRequested()) return r;
+  if (!r._played) r._played = { ...r, trials: r.trials.map(t => ({ ...t, level: t.played ?? t.level })) };
+  return r._played;
+}
+function runsFor(mode) { return state.all.filter(r => r.mode === mode && !state.excludedRuns.has(r.id)).map(onAxis); }
 function baseFor(mode) {
-  const runs = runsFor(mode), sig = (state.fixedCeiling ? "fixed|" : "free|") + runs.map(r => r.id).join("|");
+  const runs = runsFor(mode), sig = (state.fixedCeiling ? "fixed|" : "free|") + (useRequested() ? "req|" : "") + runs.map(r => r.id).join("|");
   C.setFixedCeiling(state.fixedCeiling);
   const old = state.base[mode];
   if (old && old.sig === sig) return old;
@@ -1084,8 +1107,10 @@ function renderSummary(res) {
   add(m === "SNR" ? "trials at the ±limit" : "trials at a limit", pct(res.limTrials, res.nTrials), `${res.limWords.length} word${res.limWords.length === 1 ? "" : "s"} affected`);
 
   const tb = $("spreadTable"); tb.textContent = "";
-  const head = tb.insertRow(); ["", "As recorded", "Normalised"].forEach(t => { const th = document.createElement("th"); th.textContent = t; head.appendChild(th); });
-  const row = (k, a, b) => { const r = tb.insertRow(); const c0 = r.insertCell(); c0.textContent = k; for (const v of [a, b]) { const c = r.insertCell(); c.className = "num"; c.textContent = v; } };
+  const head = tb.insertRow(); ["", useRequested() ? "As recorded (requested levels)" : "As recorded", useRequested() ? "Normalised (simulation off)" : "Normalised"].forEach(t => { const th = document.createElement("th"); th.textContent = t; head.appendChild(th); });
+  // With requested levels the simulation is off, so only the recorded column applies.
+  const req = useRequested();
+  const row = (k, a, b) => { const r = tb.insertRow(); const c0 = r.insertCell(); c0.textContent = k; for (const v of [a, req ? "–" : b]) { const c = r.insertCell(); c.className = "num"; c.textContent = v; } };
   if (s0 && s1) {
     row("Midpoints: interquartile range", fmtD(m, s0.mIQR), fmtD(m, s1.mIQR));
     row("Midpoints: 5th–95th percentile", fmtD(m, s0.m90), fmtD(m, s1.m90));
@@ -1118,7 +1143,7 @@ function renderSummary(res) {
 // ---------- participants ----------
 function renderParts() {
   const t = $("partTable"); t.textContent = "";
-  const head = t.insertRow(); ["Use", "Participant", "Mode", "Started", "Trials", "Levels", "Source"].forEach(h => { const th = document.createElement("th"); th.textContent = h; head.appendChild(th); });
+  const head = t.insertRow(); ["Use", "Participant", "Mode", "Started", "Trials", "Levels", "Normalisation", "Source"].forEach(h => { const th = document.createElement("th"); th.textContent = h; head.appendChild(th); });
   const runs = state.all.slice().sort((a, b) => a.mode.localeCompare(b.mode) || a.participant.localeCompare(b.participant, "en", { numeric: true }));
   for (const r of runs) {
     const tr = t.insertRow(); if (state.excludedRuns.has(r.id)) tr.className = "off";
@@ -1126,9 +1151,10 @@ function renderParts() {
     cb.setAttribute("aria-label", `Use ${r.participant} ${r.mode}`);
     cb.addEventListener("change", () => { cb.checked ? state.excludedRuns.delete(r.id) : state.excludedRuns.add(r.id); scheduleRender(0); });
     tr.insertCell().appendChild(cb);
-    [r.participant, r.mode, r.started, String(r.trials.length), r.plan ? r.plan.split("·").slice(0, 2).join("·").trim() : (r.levels || []).join(", "), r.baked ? "built in" : r.file].forEach(v => { tr.insertCell().textContent = v; });
+    [r.participant, r.mode, r.started, String(r.trials.length), r.plan ? r.plan.split("·").slice(0, 2).join("·").trim() : (r.levels || []).join(", "), r.norm || "–", r.baked ? "built in" : r.file].forEach(v => { tr.insertCell().textContent = v; });
   }
   const n = state.all.length - state.excludedRuns.size;
+  $("partQuick").hidden = !anyNormRuns();
   $("partCount").textContent = `(${n} of ${state.all.length} runs in use)`;
 }
 
@@ -1225,11 +1251,15 @@ function focusWord(w) {
 function tableText(res) {
   const m = res.mode, T = res.T, u = m === "LPF" ? "Hz" : "dB SNR";
   const L = [];
+  const method = m === "LPF" ? "O'Beirne/Gibbins" : METHOD_LABEL[res.o.method].replace("’", "'");
+  const limTxt = res.o.lim ? `±${res.o.lim} ${m === "LPF" ? "oct" : "dB"}` : "none";
   L.push(`# UC4AFC word normalisation table`);
+  L.push(`# Format\t1`);
+  L.push(`# Name\t${m} · ${method}${res.o.method === "gibbins" ? ` · cap ×${res.o.cap}` : ""} · limit ${limTxt} · ceiling ${state.fixedCeiling ? "fixed" : "free"} · ${res.b.runs.length} runs · ${new Date().toISOString().slice(0, 10)}`);
   L.push(`# Mode\t${m}`);
-  L.push(`# Method\t${m === "LPF" ? "O'Beirne/Gibbins" : METHOD_LABEL[res.o.method].replace("’", "'")}`);
+  L.push(`# Method\t${method}`);
   if (res.o.method === "gibbins") L.push(`# Slope ratio cap\t${res.o.cap}`);
-  L.push(`# Adjustment limit\t${res.o.lim ? `±${res.o.lim} ${m === "LPF" ? "oct" : "dB"}` : "none"}`);
+  L.push(`# Adjustment limit\t${limTxt}`);
   L.push(`# Ceiling\t${state.fixedCeiling ? "fixed at 100%" : "free (70–100%)"}`);
   L.push(`# Words left out of the target\t${state.adjustOut ? "adjusted" : "not adjusted"}`);
   L.push(`# Data\t${res.b.runs.length} runs, ${res.b.nParts} participants, ${new Date().toISOString().slice(0, 10)}`);
@@ -1265,7 +1295,13 @@ function syncControls() {
     const n = state.all.filter(r => r.mode === k && !state.excludedRuns.has(r.id)).length;
     $("mode" + k).setAttribute("aria-pressed", String(m === k)); $("cnt" + k).textContent = n ? `(${n})` : "";
   }
+  // Simulating normalisation only makes sense on the levels actually played.
+  const req = useRequested();
+  if (req) state.norm = false;
   $("normToggle").checked = state.norm;
+  $("normToggle").disabled = req;
+  $("axisWrap").hidden = !anyNormRuns();
+  $("axisSel").value = state.axis;
   $("stickyInfo").textContent = `${m === "LPF" ? "O’Beirne/Gibbins" : METHOD_LABEL[state.method]}, ${state.source === "lopo" ? "leave-one-out" : "in-sample"}, ceiling ${state.fixedCeiling ? "fixed" : "free"}`;
   $("methodSel").disabled = m === "LPF";
   $("methodSel").value = m === "LPF" ? "gibbins" : state.method;
@@ -1368,6 +1404,11 @@ for (const k of MODES) $("mode" + k).addEventListener("click", () => { state.mod
 $("normToggle").addEventListener("change", e => { state.norm = e.target.checked; scheduleRender(0); });
 $("methodSel").addEventListener("change", e => { state.method = e.target.value; scheduleRender(0); });
 $("srcSel").addEventListener("change", e => { state.source = e.target.value; scheduleRender(0); });
+$("axisSel").addEventListener("change", e => { state.axis = e.target.value; scheduleRender(0); setTimeout(() => { for (const k of MODES) if (k !== state.mode) baseFor(k); }, 400); });
+const pickRuns = test => { state.excludedRuns = new Set(state.all.filter(r => !test(r)).map(r => r.id)); scheduleRender(0); };
+$("runsAll").addEventListener("click", () => pickRuns(() => true));
+$("runsWith").addEventListener("click", () => pickRuns(r => !!r.norm));
+$("runsWithout").addEventListener("click", () => pickRuns(r => !r.norm));
 $("ceilSel").addEventListener("change", e => {
   state.fixedCeiling = e.target.value === "fixed";
   // refit both modes; the leave-one-out fits restart in the background

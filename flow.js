@@ -21,6 +21,7 @@ import { loadList } from "./list.js";
 import { saveResults, autosaveAdaptive } from "./results.js";
 import { AudioEngine } from "./audioEngine.js";
 import { createTrack, resolveTrackConfig } from "./adaptive.js";
+import { normSnapshot, normPlayedSnap } from "./normalise.js";
 
 let trainingAborted = false;
 // Lists trained so far in this sitting (training can run List 1 then List 2
@@ -31,6 +32,10 @@ let trainingListsDone = [];
 // unfiltered at a fixed level, e.g. training or a non-adaptive run).
 let track = null;
 let currentCutoffHz = null;   // pending trial's adaptive value (Hz LPF / dB quiet)
+// Word normalisation for this run (normalise.js snapshot; null = off) and the
+// level the pending trial's word is actually played at.
+let runNorm = null;
+let currentPlayed = null;
 // Shared presentation level (front page): dB(A) calibrated / dB re full scale
 // uncalibrated. Speech level for training/LPF, noise level for SNR, starting
 // level for quiet mode.
@@ -91,6 +96,7 @@ export function beginPhase(p, opts = {}) {
     if (phase === "training") {
       track = null;
       currentCutoffHz = null;
+      runNorm = null;
       showScreen("main");
       showTrainingItem();
     } else {
@@ -110,6 +116,9 @@ export function beginPhase(p, opts = {}) {
       const startVal = isQuiet ? presLevel()
         : isSnr ? (adaptive.startValue ?? 2)
         : (adaptive.startValue ?? adaptive.startCutoffHz ?? 1000);
+      // Word normalisation (LPF/SNR): taken once, at the start of the run.
+      runNorm = (typeof normSnapshot === "function" && !isQuiet) ? normSnapshot(adaptive.mode || "lpf") : null;
+      if (runNorm && !runNorm.ok) runNorm = null;   // Start checks this beforehand
       const trackCfg = resolveTrackConfig(adaptive, startVal);
       track = createTrack(trackCfg);
       currentCutoffHz = track.currentValue();
@@ -262,8 +271,12 @@ if (phase === "test") {
     currentCutoffHz = track.currentValue();
     const m = (config && config.adaptive && config.adaptive.mode) || "lpf";
     const u = m === "snr" ? "dB SNR" : m === "quiet" ? "dB" : "Hz";
-    console.log(`[trial ${trialIndex + 1}] list ${listId} · ${m} value = ` +
-      `${u === "Hz" ? Math.round(currentCutoffHz) : currentCutoffHz.toFixed(1)} ${u}`);
+    // With normalisation, the word is played at its adjusted level.
+    currentPlayed = (runNorm && typeof normPlayedSnap === "function")
+      ? normPlayedSnap(runNorm, item.correct, currentCutoffHz).played : currentCutoffHz;
+    const fmtV = v => u === "Hz" ? Math.round(v) : v.toFixed(1);
+    console.log(`[trial ${trialIndex + 1}] list ${listId} · ${m} value = ${fmtV(currentCutoffHz)} ${u}` +
+      (runNorm ? ` · ${item.correct} played at ${fmtV(currentPlayed)} ${u}` : ""));
   }
   const shuffled = [...item.images];
   shuffle(shuffled);
@@ -343,7 +356,7 @@ if (phase === "test") {
 
   // ---- SNR mode: dispatch to the mixed word+noise path and return early ----
   if (isSnr) {
-    const snrDb = currentCutoffHz;   // mode-neutral value; dB SNR here
+    const snrDb = currentPlayed;     // the word's SNR (normalised when on)
     // Same presentation as normalisation (constant.js csPlaySnr): the masker is
     // the SNR noise file (noise.mp3) at the Setup SNR noise level, and the word
     // sits snrDb above/below it. Previously this used config.calibFile, which is
@@ -394,7 +407,7 @@ if (phase === "test") {
     // LPF mode (or non-adaptive): filter at the cutoff; presentation level from
     // the dedicated LPF level setting. Calibrated -> dB(A) via the curve;
     // uncalibrated -> dB FS attenuation (<= 0), device volume sets absolute level.
-    cutoffHz = (phase === "test" && track) ? currentCutoffHz : null;
+    cutoffHz = (phase === "test" && track) ? currentPlayed : null;
     extraGainDb = presGainDb(presLevel(), routing);     // shared presentation level
   }
 
@@ -452,6 +465,7 @@ export function recordResponse(img) {
     const estV = est.value;
     entry.estimate = isFinite(estV) ? ((unit === "Hz") ? Math.round(estV) : +estV.toFixed(1)) : null;
     entry.estimateHz = entry.estimate; // alias
+    if (runNorm) entry.played = (unit === "Hz") ? Math.round(currentPlayed) : +currentPlayed.toFixed(2);
   }
 
   responseLog.push(entry);
@@ -482,6 +496,7 @@ export function finalEstimate() {
   return track ? track.estimate() : null;
 }
 export function activeTrack() { return track; }
+export function activeNorm() { return (phase === "test" && track) ? runNorm : null; }
 
 export function abortTraining() {
   trainingAborted = true;

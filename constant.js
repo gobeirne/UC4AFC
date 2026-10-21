@@ -84,6 +84,7 @@ const CS = {
   breakEvery: 40,
   easeIn: 20,
   plan: null,           // per-word levels for this run: { name, levels: { word: [..] } } or null
+  norm: null,           // word normalisation for this run (normalise.js snapshot) or null = off
   queue: [],            // [{ word, level, rep }] in presentation order
   pos: 0,               // index into queue of the CURRENT (pending) trial
   startedAt: null,
@@ -457,6 +458,8 @@ function csPopulateForm() {
 }
 
 function csFillLevelsField() {
+  // Word normalisation setting for this mode (shared with Setup).
+  if (typeof normShow === "function") normShow(document.getElementById("normCsBlock"), CS.mode);
   const field = document.getElementById("csLevels");
   if (field) field.value = csLoadList(CS.mode).join(", ");
   const pt = document.getElementById("csPlanText");
@@ -656,6 +659,12 @@ function csStartRun() {
   const brk = Math.max(0, Math.round(Number(document.getElementById("csBreakEvery").value) || 0));
   const easeIn = Math.max(0, Math.round(Number(document.getElementById("csEaseIn").value) || 0));
 
+  // Word normalisation: the levels above are then requested levels, and each
+  // word is played at its adjusted level. Taken once, at the start of the run.
+  const norm = (typeof normSnapshot === "function") ? normSnapshot(CS.mode) : null;
+  if (norm && !norm.ok) { csStatus(norm.reason, true); return; }
+  CS.norm = norm;
+
   // Ascending order is what the tables use; keep a sorted copy for columns.
   // With a plan, the columns are every level any word is played at.
   CS.plan = plan;
@@ -821,10 +830,17 @@ function csNextTrial() {
     ? CS.ear
     : ((config && config.routing) || "binaural");
 
+  // With normalisation, the word is played at its adjusted level; the run's
+  // tables stay on the requested levels.
+  const played = (CS.norm && typeof normPlayedSnap === "function")
+    ? normPlayedSnap(CS.norm, trial.word, trial.level).played : trial.level;
+  CS.played = played;
+  if (CS.norm) console.log(`[CS] ${trial.word}: requested ${trial.level}, played at ${CS.mode === "snr" ? played.toFixed(1) + " dB SNR" : Math.round(played) + " Hz"}`);
+
   if (CS.mode === "snr") {
-    csPlaySnr(item, trial.level, calibrated, routing, offset, revealOptions);
+    csPlaySnr(item, played, calibrated, routing, offset, revealOptions);
   } else {
-    csPlayLpf(item, trial.level, calibrated, routing, offset, revealOptions);
+    csPlayLpf(item, played, calibrated, routing, offset, revealOptions);
   }
 }
 
@@ -904,7 +920,8 @@ function csRecordResponse(img) {
     chosen: chosen || "",
     isCorrect,
     rep: trial.rep,
-    timeMs
+    timeMs,
+    ...(CS.norm ? { played: CS.mode === "snr" ? +Number(CS.played).toFixed(2) : Math.round(CS.played) } : {})
   });
   CS.nextPos = CS.pos + 1;  // first unanswered trial
   csAutosave(CS.nextPos);   // everything so far, kept on the device
@@ -1014,6 +1031,9 @@ function csBuildResults(note) {
     lines.push(`# Calibration\t${Calibration.calibrationHeader()}`);
   }
   if (typeof Headphones !== "undefined") lines.push(`# Headphones\t${Headphones.header()}`);
+  // Word normalisation: levels and tables are requested levels; the log's
+  // last column gives the level each word was played at.
+  if (typeof normHeaderLines === "function") lines.push(...normHeaderLines(CS.norm, CS.mode));
   if (note) lines.push(`# Note\t${note}`);
 
   // Per-word levels, when a plan was used.
@@ -1067,9 +1087,11 @@ function csBuildResults(note) {
   // Chronological log
   lines.push("");
   lines.push(`# LOG — chronological presentation record`);
-  lines.push(`Timestamp\tWord\t${valCol}\tChosen\tCorrect?\tRepeat\tTime_ms`);
+  const playedCol = CS.norm ? `\t${CS.mode === "snr" ? "Played_SNR" : "Played_Hz"}` : "";
+  lines.push(`Timestamp\tWord\t${valCol}\tChosen\tCorrect?\tRepeat\tTime_ms${playedCol}`);
   for (const r of CS.logRows) {
-    lines.push(`${r.ts}\t${r.word}\t${r.level}\t${r.chosen}\t${r.isCorrect ? 1 : 0}\t${r.rep}\t${r.timeMs}`);
+    lines.push(`${r.ts}\t${r.word}\t${r.level}\t${r.chosen}\t${r.isCorrect ? 1 : 0}\t${r.rep}\t${r.timeMs}` +
+      (CS.norm ? `\t${r.played ?? ""}` : ""));
   }
 
   const txt = lines.join("\n");
@@ -1103,6 +1125,7 @@ function csBuildResults(note) {
         updated: CS.plan.updated || undefined, perWord: CS.plan.perWord !== false,
         common: CS.plan.common || undefined, levels: CS.plan.levels, fromCommon: CS.plan.fromCommon || []
       } : undefined,
+      normalisation: (typeof normJson === "function") ? normJson(CS.norm) : undefined,
       repeats: CS.repeats,
       breakEvery: CS.breakEvery,
       startedAt: CS.startedAt ? CS.startedAt.toISOString() : null,
@@ -1139,7 +1162,7 @@ function csStore(r, status, resumePos) {
     rec.resume = {
       queue: CS.queue, pos: resumePos, logRows: CS.logRows,
       presented: [...CS.presented], correct: [...CS.correct],
-      levels: CS.levels, plan: CS.plan, repeats: CS.repeats, breakEvery: CS.breakEvery, easeIn: CS.easeIn,
+      levels: CS.levels, plan: CS.plan, norm: CS.norm, repeats: CS.repeats, breakEvery: CS.breakEvery, easeIn: CS.easeIn,
       mode: CS.mode, ear: CS.ear, startedAt: rec.startedAt, participant: r.who,
       level: (typeof Calibration !== "undefined" && Calibration.presentationLevel) ? Calibration.presentationLevel() : null,
       calibrated: (typeof Calibration !== "undefined" && Calibration.isCalibrated) ? Calibration.isCalibrated() : false,
@@ -1184,6 +1207,7 @@ async function csResume(rec) {
   CS.correct = new Map(R.correct || []);
   CS.levels = R.levels;
   CS.plan = R.plan || null;
+  CS.norm = R.norm || null;          // the same normalisation table as before
   CS.repeats = R.repeats;
   CS.breakEvery = R.breakEvery;
   CS.easeIn = R.easeIn;

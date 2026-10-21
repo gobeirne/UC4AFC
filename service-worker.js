@@ -1,6 +1,6 @@
 // File: service-worker.js
 // Bump CACHE_NAME whenever this file changes, so installed apps pick it up.
-const CACHE_NAME = "uc4afc-cache-v4";
+const CACHE_NAME = "uc4afc-cache-v5";
 
 // App shell: always fetched from the network first (so updates arrive at once),
 // with the cached copy used only when offline.

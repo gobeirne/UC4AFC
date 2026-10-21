@@ -327,6 +327,16 @@ img.disabled {
 .cs-plan-check .err { color: #b31b1b; }
 .cs-plan-check .warn { color: #8a5a00; }
 .cs-plan-check .ok { color: #1d6b1d; }
+/* Word normalisation table (Setup and Constant stimuli) */
+.norm-text {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 0.5rem;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.4;
+  tab-size: 9; white-space: pre; overflow-x: auto; padding: 0.5rem; border: 1px solid #c5cee0; border-radius: 6px;
+}
+.norm-pre {
+  margin: 0.4rem 0 0; max-height: 14rem; overflow: auto; padding: 0.5rem; border: 1px solid #c5cee0; border-radius: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.75rem; line-height: 1.4; tab-size: 9; white-space: pre; background: #f7f8fb;
+}
 /* Keep the normalisation screen's fields inside a phone-width screen. */
 #conststim input[type="text"], #conststim input[type="number"] { box-sizing: border-box; max-width: 100%; }
 @media (max-width: 400px) { .cs-source .seg-btn { padding: 0.45rem 0.55rem; font-size: 0.85rem; } }
