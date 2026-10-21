@@ -42,6 +42,13 @@
 }
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
+/* The page restores its own scroll position after each redraw (see keepPlace). */
+body { overflow-anchor: none; }
+#heldOut.stale { opacity: 0.45; }
+#clusterNote { display: grid; }
+#clusterNote > span { grid-area: 1 / 1; }
+#clusterNote > span.off { visibility: hidden; }
+#heldOut { min-height: 11.5em; }
 body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5; }
 .wrap { max-width: 76rem; margin: 0 auto; padding-inline: 16px; padding-block: 20px 48px; display: grid; gap: 20px; }
 h1, h2, h3 { margin: 0; text-wrap: balance; line-height: 1.2; }
@@ -97,7 +104,8 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .seg button { border: 0; border-radius: 999px; min-height: 34px; padding: 5px 14px; background: transparent; }
 .seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
 .normsw { display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 10px 14px 10px 10px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--sunk); font-weight: 700; font-size: 1.05rem; user-select: none; }
-.normsw input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.normsw { position: relative; }
+.normsw input { position: absolute; left: 0; top: 0; width: 1px; height: 1px; margin: 0; opacity: 0; }
 .normsw .track { width: 46px; height: 26px; border-radius: 13px; background: var(--fg-3); position: relative; flex: none; transition: background .15s; }
 .normsw .track::after { content: ""; position: absolute; left: 3px; top: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform .15s; }
 .normsw input:checked + .track { background: var(--accent); }
@@ -206,7 +214,7 @@ tr.off td { color: var(--fg-3); }
       <button id="modeLPF" type="button" aria-pressed="true">Low-pass <span class="num cnt" id="cntLPF"></span></button>
       <button id="modeSNR" type="button" aria-pressed="false">Noise <span class="num cnt" id="cntSNR"></span></button>
     </div>
-    <label class="normsw"><input type="checkbox" id="normToggle"><span class="track" aria-hidden="true"></span><span class="long">Apply normalisation</span><span class="short">Normalise</span></label>
+    <label class="normsw" id="normSw"><input type="checkbox" id="normToggle"><span class="track" aria-hidden="true"></span><span class="long">Apply normalisation</span><span class="short">Normalise</span></label>
     <span class="stickyinfo" id="stickyInfo"></span>
   </div>
 
@@ -259,7 +267,8 @@ tr.off td { color: var(--fg-3); }
       <p class="small muted" id="spreadNote"></p>
       <h3 style="margin-top:6px">Held-out check</h3>
       <div class="tablewrap"><table id="heldOut"></table></div>
-      <p class="small muted" id="heldOutNote" aria-live="polite"></p>
+      <p class="small muted" id="heldOutStatus" aria-live="polite" style="min-height:1.5em; margin:0"></p>
+      <p class="small muted" id="heldOutNote">Ten random splits of the participants into halves, each half judged with the table from the other half (mean, with 5th–95th percentile across the 20 judgements). Every figure comes from half the participants, so the spreads include the noise of fitting half the data, in both columns. This is the honest preview of new listeners.</p>
     </section>
 
     <section class="panel" aria-labelledby="clusterH">
@@ -968,12 +977,19 @@ function startSplits(b) {
   };
   setTimeout(step, 30);
 }
-let hoJob = 0;
+let hoJob = 0, hoKey = "", hoOut = null;
 function startHeldOut() {
   const res = state.res; if (!res) return;
-  const b = res.b, note = $("heldOutNote");
+  const b = res.b, note = $("heldOutStatus");
+  // Switching the simulation view on or off doesn't change the check, so keep
+  // the last result rather than redrawing it.
+  const key = JSON.stringify([res.mode, b.sig, res.o.method, res.o.cap, res.o.lim, state.adjustOut, res.targetWords]);
+  if (key === hoKey && hoOut && Array.isArray(b.splits)) {
+    if (!$("heldOut").rows.length || $("heldOut").classList.contains("stale")) keepPlace(() => renderHeldOut(res, hoOut));
+    return;
+  }
   const job = ++hoJob;
-  $("heldOut").textContent = "";
+  $("heldOut").classList.add("stale");
   if (b.splits === "few") { note.textContent = "The held-out check needs at least 6 participants."; return; }
   if (!Array.isArray(b.splits)) { note.textContent = "Preparing the held-out check…"; return; }
   const tasks = []; b.splits.forEach(([A, B]) => { tasks.push([A, B], [B, A]); });
@@ -987,14 +1003,16 @@ function startHeldOut() {
       const r = C.evalHalf(tr, te, res.ax, res.mode, b.words, res.targetWords, res.o, res.adjustable);
       if (r && r.raw && r.norm) out.push(r);
     }
-    if (i < tasks.length) { note.textContent = `Running the held-out check… ${Math.round(100 * i / tasks.length)}%`; setTimeout(step, 0); return; }
-    renderHeldOut(res, out);
+    if (i < tasks.length) { note.textContent = `Updating the held-out check… ${Math.round(100 * i / tasks.length)}%`; setTimeout(step, 0); return; }
+    hoKey = key; hoOut = out;
+    keepPlace(() => renderHeldOut(res, out));
   };
   setTimeout(step, 0);
 }
 function renderHeldOut(res, out) {
-  const m = res.mode, tb = $("heldOut"); tb.textContent = "";
-  if (!out.length) { $("heldOutNote").textContent = "The held-out check couldn't be run."; return; }
+  const m = res.mode, tb = $("heldOut"); tb.textContent = ""; tb.classList.remove("stale");
+  $("heldOutStatus").textContent = "";
+  if (!out.length) { $("heldOutStatus").textContent = "The held-out check couldn't be run."; return; }
   const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
   const rng = a => { const s = a.slice().sort((x, y) => x - y); return `${C.pctl(s, 0.05).toFixed(2)}–${C.pctl(s, 0.95).toFixed(2)}`; };
   const head = tb.insertRow(); ["", "As recorded", "Normalised"].forEach(t => { const th = document.createElement("th"); th.textContent = t; head.appendChild(th); });
@@ -1009,7 +1027,6 @@ function renderHeldOut(res, out) {
   const wn = out.map(o => o.wNorm && Number.isFinite(o.wNorm.s) ? C.riseSlope(o.wNorm.s) : NaN).filter(Number.isFinite);
   if (wr.length && wn.length) row("Whole test: slope", `${mean(wr).toFixed(m === "LPF" ? 0 : 1)} ${slopeUnit(m)}`, `${mean(wn).toFixed(m === "LPF" ? 0 : 1)} ${slopeUnit(m)}`);
   row("Log loss against the target (lower is better)", mean(out.map(o => o.llRaw)).toFixed(4), mean(out.map(o => o.llNorm)).toFixed(4));
-  $("heldOutNote").textContent = `${SPLITS} random splits of the participants into halves, each half judged with the table from the other half (${out.length} judgements; mean, with 5th–95th percentile across them). Every figure comes from half the participants, so the spreads include the noise of fitting half the data, in both columns. This is the honest preview of new listeners.`;
 }
 
 function showProgress() {
@@ -1170,9 +1187,12 @@ function renderCluster(res) {
   if (res.T) svgEl("path", { d: curvePath(F, x => targetP(x, res.T)), class: "c-target" }, g);
   host.appendChild(F.svg);
   $("clusterH").textContent = norm ? "Every word, after normalisation" : "Every word, as recorded";
-  $("clusterNote").textContent = norm
-    ? `Each word’s trials re-expressed at the level the procedure would have asked for, then refitted (${res.lopo ? "adjustments for each participant from the other participants’ data" : "adjustments from all participants, so the fit is partly circular"}). Tap a curve to see the word.`
-    : "Each word’s fit to the pooled trials, at the levels actually played. Tap a curve to see the word.";
+  // Both notes stay in the layout (one hidden), so switching views doesn't
+  // change the panel's height.
+  const noteNorm = `Each word’s trials re-expressed at the level the procedure would have asked for, then refitted (${res.lopo ? "adjustments for each participant from the other participants’ data" : "adjustments from all participants, so the fit is partly circular"}). Tap a curve to see the word.`;
+  const noteRaw = "Each word’s fit to the pooled trials, at the levels actually played. Tap a curve to see the word.";
+  const cn = $("clusterNote"); cn.textContent = "";
+  for (const [t, on] of [[noteRaw, !norm], [noteNorm, norm]]) { const s = document.createElement("span"); s.textContent = t; if (!on) { s.className = "off"; s.setAttribute("aria-hidden", "true"); } cn.appendChild(s); }
   const leg = $("clusterLegend"); leg.textContent = "";
   const add = (cls, txt) => { const s = document.createElement("span"); s.innerHTML = `<span class="sw line ${cls}"></span>`; s.append(txt); leg.appendChild(s); };
   add("l-word", "Word in the target"); add("l-out", "Word left out of the target"); add("l-target", "Target"); add("l-pool", "Average of all words (the whole test)");
@@ -1495,7 +1515,31 @@ function syncControls() {
   $("sortSel").value = state.sort; $("showSel").value = state.show;
   document.body.classList.toggle("is-norm", state.norm);
 }
-function render() {
+// Keep whatever is at the top of the screen in the same place while the page
+// redraws around it (redrawing replaces whole sections, which would otherwise
+// make the page jump).
+function keepPlace(fn) {
+  const bar = document.querySelector(".stickybar");
+  const top = bar ? bar.getBoundingClientRect().bottom : 0;
+  let anchor = null;
+  for (const sel of [".card[id]", ".wrap > section[id], .wrap > div > section[id], .panel[id]"]) {
+    for (const el of document.querySelectorAll(sel)) {
+      const r = el.getBoundingClientRect();
+      if (r.height && r.bottom > top + 8 && r.top < window.innerHeight) { anchor = { id: el.id, y: r.top }; break; }
+    }
+    if (anchor) break;
+  }
+  fn();
+  if (!anchor) return;
+  const el = document.getElementById(anchor.id);
+  if (!el) return;
+  const d = el.getBoundingClientRect().top - anchor.y;
+  if (Math.abs(d) > 0.5) window.scrollBy(0, d);
+}
+document.querySelectorAll(".panel").forEach((p, i) => { if (!p.id) p.id = "panel-" + i; });
+
+function render() { keepPlace(renderNow); }
+function renderNow() {
   syncControls();
   if (!state.all.some(r => r.mode === state.mode && !state.excludedRuns.has(r.id))) {
     $("main").hidden = true; $("noData").hidden = false; renderParts(); return;
@@ -1574,6 +1618,16 @@ function resetData() {
 // ---------- wiring ----------
 for (const k of MODES) $("mode" + k).addEventListener("click", () => { state.mode = k; state.show = "all"; scheduleRender(0); });
 $("normToggle").addEventListener("change", e => { state.norm = e.target.checked; scheduleRender(0); });
+// Clicking the label would focus the checkbox inside the sticky bar, and some
+// browsers then scroll the page to "show" it. Toggle it without focusing.
+$("normSw").addEventListener("click", e => {
+  if (e.target === $("normToggle")) return;          // keyboard / direct activation
+  e.preventDefault();
+  const t = $("normToggle");
+  if (t.disabled) return;
+  t.checked = !t.checked;
+  t.dispatchEvent(new Event("change"));
+});
 $("methodSel").addEventListener("change", e => { state.method = e.target.value; scheduleRender(0); });
 $("srcSel").addEventListener("change", e => { state.source = e.target.value; scheduleRender(0); });
 $("axisSel").addEventListener("change", e => { state.axis = e.target.value; scheduleRender(0); setTimeout(() => { for (const k of MODES) if (k !== state.mode) baseFor(k); }, 400); });
@@ -1595,8 +1649,8 @@ $("resetOv").addEventListener("click", () => { state.override[state.mode].clear(
 $("andClosed").addEventListener("change", e => { state.anderson.closed = e.target.checked; scheduleRender(0); });
 $("andOpen").addEventListener("change", e => { state.anderson.open = e.target.checked; scheduleRender(0); });
 $("unitSel").addEventListener("change", e => { state.slopeUnit = e.target.value; scheduleRender(0); });
-$("sortSel").addEventListener("change", e => { state.sort = e.target.value; renderCards(state.res); });
-$("showSel").addEventListener("change", e => { state.show = e.target.value; renderCards(state.res); });
+$("sortSel").addEventListener("change", e => { state.sort = e.target.value; keepPlace(() => renderCards(state.res)); });
+$("showSel").addEventListener("change", e => { state.show = e.target.value; keepPlace(() => renderCards(state.res)); });
 $("copyTable").addEventListener("click", e => copyText(e.currentTarget, tableText(state.res)));
 $("saveTable").addEventListener("click", () => saveText(`UC4AFC_normalisation_${state.mode}.txt`, tableText(state.res)));
 $("fileInput").addEventListener("change", e => { if (e.target.files.length) loadFiles([...e.target.files]); e.target.value = ""; });
