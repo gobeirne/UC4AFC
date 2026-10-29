@@ -284,7 +284,7 @@ tr.off td { color: var(--fg-3); }
       <div class="stats" id="targetFacts"></div>
       <div class="tablewrap"><table id="spreadTable"></table></div>
       <p class="small muted" id="spreadNote"></p>
-      <h3 style="margin-top:6px">Held-out check</h3>
+      <h3 style="margin-top:6px" id="heldOutH">Held-out check</h3>
       <div class="tablewrap"><table id="heldOut"></table></div>
       <p class="small muted" id="heldOutStatus" aria-live="polite" style="min-height:1.5em; margin:0"></p>
       <p class="small muted" id="heldOutNote">Ten random splits of the participants into halves, each half judged with the table from the other half (mean, with 5th–95th percentile across the 20 judgements). Every figure comes from half the participants, so the spreads include the noise of fitting half the data, in both columns. This is the honest preview of new listeners.</p>
@@ -953,7 +953,11 @@ const anyNormRuns = () => state.all.some(r => r.norm);
 // procedure asked for; otherwise runs are fitted at the levels actually played.
 const inSel = r => state.dataSel === "orig" ? !r.norm : state.dataSel === "new" ? !!r.norm : true;
 const inUseRun = r => !state.excludedRuns.has(r.id) && inSel(r);
-const useRequested = () => state.dataSel === "new" && anyNormRuns();
+// In the "With normalisation" view the runs are fitted at the levels played,
+// and their "normalised" side is the real thing: the same trials at the levels
+// the procedure asked for, not a simulation.
+const realView = () => state.dataSel === "new" && anyNormRuns();
+const useRequested = () => false;
 function onAxis(r) {
   if (!r.norm || useRequested()) return r;
   if (!r._played) r._played = { ...r, trials: r.trials.map(t => ({ ...t, level: t.played ?? t.level, req: t.level })) };
@@ -1008,6 +1012,10 @@ function startSplits(b) {
 let hoJob = 0, hoKey = "", hoOut = null;
 function startHeldOut() {
   const res = state.res; if (!res) return;
+  // The held-out check is about building a table from runs without normalisation.
+  const hide = realView();
+  $("heldOut").hidden = hide; $("heldOutNote").hidden = hide; $("heldOutH").hidden = hide;
+  if (hide) { $("heldOutStatus").textContent = ""; ++hoJob; return; }
   const b = res.b, note = $("heldOutStatus");
   // Switching the simulation view on or off doesn't change the check, so keep
   // the last result rather than redrawing it.
@@ -1220,7 +1228,7 @@ function analyse(mode) {
   const o = settingsFor(mode);
   const adjustable = w => usable(w) && (state.adjustOut || inTarget(w));
   const fullMaps = new Map(b.words.map(w => [w, adjustable(w) ? C.makeMap(b.full.get(w), T, o) : null]));
-  const lopo = state.source === "lopo" && b.folds instanceof Map;
+  const lopo = !realView() && state.source === "lopo" && b.folds instanceof Map;
   const foldMaps = new Map();
   const mapsFor = run => {
     if (!lopo) return fullMaps;
@@ -1230,7 +1238,7 @@ function analyse(mode) {
     }
     return foldMaps.get(run.participant);
   };
-  const rl = C.relabel(b.runs, ax, mode, mapsFor);
+  const rl = realView() ? requestedView(b.runs, ax, mode) : C.relabel(b.runs, ax, mode, mapsFor);
   const normFits = new Map(b.words.map(w => [w, rl.has(w) ? C.fitWord(rl.get(w).groups, ax) : null]));
   const list = b.words.filter(usable);
   const sp = { raw: C.spread(list.map(w => b.full.get(w))), norm: C.spread(list.map(w => normFits.get(w))) };
@@ -1240,6 +1248,21 @@ function analyse(mode) {
   const limWords = list.filter(w => rl.get(w).limited > 0);
   return { mode, ax, b, reasons, autoIn, inTarget, usable, adjustable, targetWords, T, o, fullMaps, lopo, rl, normFits, list, sp, pool,
     nTrials, limTrials, limWords };
+}
+
+// The trials of runs recorded with normalisation, at their requested levels,
+// in the same shape as a simulated relabelling.
+function requestedView(runs, ax, mode) {
+  const groups = new Map(), points = new Map();
+  for (const r of runs) for (const t of r.trials) {
+    const L = Number.isFinite(t.req) ? t.req : t.level, x = ax.toX(L);
+    if (!groups.has(t.word)) { groups.set(t.word, new Map()); points.set(t.word, new Map()); }
+    const g = groups.get(t.word), c = g.get(L) || { x, n: 0, k: 0 }; c.n++; c.k += t.correct; g.set(L, c);
+    const p = points.get(t.word), q = p.get(L) || { L, x0: x, x, n: 0, k: 0 }; q.n++; q.k += t.correct; p.set(L, q);
+  }
+  const out = new Map();
+  for (const [w, g] of groups) out.set(w, { groups: [...g.values()].sort((a, b) => a.x - b.x), points: [...points.get(w).values()].sort((a, b) => a.x - b.x), limited: 0 });
+  return out;
 }
 
 // ---------- formatting ----------
@@ -1351,13 +1374,22 @@ function renderCluster(res) {
   if (P) svgEl("path", { d: curvePath(F, P.P), class: "c-pool" }, g);
   if (res.T) svgEl("path", { d: curvePath(F, x => targetP(x, res.T)), class: "c-target" }, g);
   host.appendChild(F.svg);
-  $("clusterH").textContent = norm ? "Every word, after normalisation" : "Every word, as recorded";
+  const real = realView();
+  $("clusterH").textContent = real ? (norm ? "Every word, at the levels requested (normalised)" : "Every word, at the levels played")
+    : norm ? "Every word, after normalisation (simulated)" : "Every word, as recorded";
   // Both notes stay in the layout (one hidden), so switching views doesn't
   // change the panel's height.
   const noteNorm = `Each word’s trials re-expressed at the level the procedure would have asked for, then refitted (${res.lopo ? "adjustments for each participant from the other participants’ data" : "adjustments from all participants, so the fit is partly circular"}). Tap a curve to see the word.`;
   const noteRaw = "Each word’s fit to the pooled trials, at the levels actually played. Tap a curve to see the word.";
+  if (real) {
+    const cn = $("clusterNote"); cn.textContent = "";
+    const a = "Runs recorded with normalisation, fitted at the levels each word was actually played at: what these words are like without adjustment. Tap a curve to see the word.";
+    const b2 = "The same runs fitted at the levels the procedure asked for: what normalisation actually did. Real data, not a simulation. Tap a curve to see the word.";
+    for (const [t, on] of [[a, !norm], [b2, norm]]) { const s = document.createElement("span"); s.textContent = t; if (!on) { s.className = "off"; s.setAttribute("aria-hidden", "true"); } cn.appendChild(s); }
+  } else {
   const cn = $("clusterNote"); cn.textContent = "";
   for (const [t, on] of [[noteRaw, !norm], [noteNorm, norm]]) { const s = document.createElement("span"); s.textContent = t; if (!on) { s.className = "off"; s.setAttribute("aria-hidden", "true"); } cn.appendChild(s); }
+  }
   const leg = $("clusterLegend"); leg.textContent = "";
   const add = (cls, txt) => { const s = document.createElement("span"); s.innerHTML = `<span class="sw line ${cls}"></span>`; s.append(txt); leg.appendChild(s); };
   add("l-word", "Word in the target"); add("l-out", "Word left out of the target"); add("l-target", "Target"); add("l-pool", "Average of all words (the whole test)");
@@ -1369,7 +1401,7 @@ function renderCluster(res) {
 
 function stripChart(res, kind) {
   const svg = svgEl("svg", { viewBox: "0 0 420 0", class: "chart", role: "img", "aria-label": kind === "mid" ? "Spread of midpoints" : "Spread of slopes" });
-  const rows = [{ key: "raw", label: "As recorded" }, { key: "norm", label: "Normalised" }];
+  const rows = realView() ? [{ key: "raw", label: "As played" }, { key: "norm", label: "As requested" }] : [{ key: "raw", label: "As recorded" }, { key: "norm", label: "Normalised" }];
   if (res.mode === "LPF") { if (state.anderson.closed) rows.push({ key: "closed", label: "Anderson closed" }); if (state.anderson.open) rows.push({ key: "open", label: "Anderson open" }); }
   const W = 420, ml = 96, mr = 12, mt = 8, rowH = 34, mb = 26, H = mt + rows.length * rowH + mb;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
@@ -1463,7 +1495,7 @@ function renderSummary(res) {
   add(m === "SNR" ? "trials at the ±limit" : "trials at a limit", pct(res.limTrials, res.nTrials), `${res.limWords.length} word${res.limWords.length === 1 ? "" : "s"} affected`);
 
   const tb = $("spreadTable"); tb.textContent = "";
-  const head = tb.insertRow(); ["", useRequested() ? "As recorded (requested levels)" : "As recorded", useRequested() ? "Normalised (simulation off)" : "Normalised"].forEach(t => { const th = document.createElement("th"); th.textContent = t; head.appendChild(th); });
+  const head = tb.insertRow(); ["", realView() ? "As played" : "As recorded", realView() ? "As requested (real)" : "Normalised"].forEach(t => { const th = document.createElement("th"); th.textContent = t; head.appendChild(th); });
   // With requested levels the simulation is off, so only the recorded column applies.
   const req = useRequested();
   const row = (k, a, b) => { const r = tb.insertRow(); const c0 = r.insertCell(); c0.textContent = k; for (const v of [a, req ? "–" : b]) { const c = r.insertCell(); c.className = "num"; c.textContent = v; } };
@@ -1479,7 +1511,11 @@ function renderSummary(res) {
     row("Whole test: slope", fmtSlope(m, p0.s), fmtSlope(m, p1.s));
     row("Whole test: 62.5% point", fmtMid(m, p0.T), fmtMid(m, p1.T));
   }
+  if (realView()) {
+    $("spreadNote").textContent = `${res.list.length} words with a fit, ${res.b.runs.length} runs recorded with normalisation, from ${res.b.nParts} participants. Both columns are real data: the same trials fitted at the levels played and at the levels the procedure asked for. The target, the cards’ adjustments and the left-out words in this view come from these runs alone, so judge the tables in the panel below instead.`;
+  } else {
   $("spreadNote").textContent = `${res.list.length} words with a fit, ${res.b.runs.length} runs from ${res.b.nParts} participants. Ceiling ${state.fixedCeiling ? "fixed at 100%" : "free (70–100%)"}. Normalised column: ${res.lopo ? "each participant’s trials adjusted with fits from everyone else (leave-one-out), then pooled. Pooling 24 such adjustments largely cancels the hold-out, so read this column as close to in-sample; the held-out check below is the honest preview" : "adjustments from all participants’ data (in-sample, so circular)"}. ${m === "LPF" ? "O’Beirne/Gibbins" : METHOD_LABEL[res.o.method]}${res.o.method === "gibbins" ? `, slope ratio capped at ×${res.o.cap}` : ""}${res.o.lim ? `, adjustment limited to ±${res.o.lim} ${m === "LPF" ? "oct" : "dB"}` : ""}.`;
+  }
 
   const lo = $("leftOut"); lo.textContent = "";
   const outs = res.list.filter(w => !res.inTarget(w)).concat(res.b.words.filter(w => !res.usable(w)));
@@ -1659,7 +1695,7 @@ function syncData() {
     (added.length ? ` Added: ${added.length} run${added.length === 1 ? "" : "s"}, ${added.filter(r => r.norm).length} of them with normalisation.` : " Add more with the button above.");
   const what = !has ? "" :
     state.dataSel === "orig" ? ` Showing the ${mm} runs without normalisation: the data the current tables were built from.` :
-    state.dataSel === "new" ? ` Showing only the ${mm} runs with normalisation, at the levels the procedure asked for, which shows how centred the words really are. The simulation switch is off in this view.` :
+    state.dataSel === "new" ? ` Showing only the ${mm} runs with normalisation. Here Apply normalisation switches between real data at the levels played (off) and at the levels the procedure asked for (on), so you see what normalisation actually did.` :
     ` Showing all ${mm} runs, fitted at the levels each word was actually played at: the data a refitted table would use.`;
   $("dataHint").textContent = loaded + what;
 }
@@ -1671,11 +1707,8 @@ function syncControls() {
     const n = state.all.filter(r => r.mode === k && inUseRun(r)).length;
     $("mode" + k).setAttribute("aria-pressed", String(m === k)); $("cnt" + k).textContent = n ? `(${n})` : "";
   }
-  // Simulating normalisation only makes sense on the levels actually played.
-  const req = useRequested();
-  if (req) state.norm = false;
   $("normToggle").checked = state.norm;
-  $("normToggle").disabled = req;
+  $("normToggle").disabled = false;
   syncData();
   $("stickyInfo").textContent = `${m === "LPF" ? "O’Beirne/Gibbins" : METHOD_LABEL[state.method]}, ${state.source === "lopo" ? "leave-one-out" : "in-sample"}, ceiling ${state.fixedCeiling ? "fixed" : "free"}`;
   $("methodSel").disabled = m === "LPF";
