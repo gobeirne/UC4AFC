@@ -177,6 +177,8 @@ tr.off td { color: var(--fg-3); }
 .sw.line.l-and-open { border-top-color: var(--and-open); }
 .load { border: 1.5px dashed var(--line); background: var(--surface); }
 .load.drag { border-color: var(--accent); background: var(--accent-soft); }
+.data-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.data-row .seg button { white-space: nowrap; }
 .load-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 #loadLog { font-size: 0.85rem; color: var(--fg-2); display: grid; gap: 2px; }
 #loadLog .warn { color: var(--serious); }
@@ -206,7 +208,7 @@ tr.off td { color: var(--fg-3); }
 <div class="wrap">
   <header>
     <h1>Word normalisation, simulated</h1>
-    <p class="lede">Joel and Barend’s normative runs are built in. Switch normalisation on to see each word’s trials as they would have come out had every word been played at its adjusted level, so you can judge the method before the next participants are tested.</p>
+    <p class="lede">Joel and Barend’s original normative runs are built in. Add the runs recorded with normalisation to see how the words are really doing, and switch <b>Apply normalisation</b> on to simulate what any table would do to the original data.</p>
   </header>
 
   <div class="stickybar" role="region" aria-label="Mode and normalisation">
@@ -218,6 +220,26 @@ tr.off td { color: var(--fg-3); }
     <span class="stickyinfo" id="stickyInfo"></span>
   </div>
 
+  <section class="panel load" id="dropZone" aria-label="Add results files">
+    <div class="load-row">
+      <label class="filebtn" for="fileInput">Add results files
+        <input id="fileInput" type="file" multiple accept=".txt,.tsv,.json,.zip,text/plain,application/json,application/zip">
+      </label>
+      <button id="resetData" type="button">Back to the built-in data</button>
+      <span class="small muted">.txt, .json or a .zip of them, or drop files here. Runs already loaded are counted once, so you can drop the whole growing set each time.</span>
+    </div>
+    <div class="data-row" id="dataRow" hidden>
+      <span class="small" style="font-weight:700">Show</span>
+      <div class="seg" role="group" aria-label="Which runs to show">
+        <button type="button" data-sel="orig" aria-pressed="false">Without normalisation <span class="num" id="selCntOrig"></span></button>
+        <button type="button" data-sel="new" aria-pressed="false">With normalisation <span class="num" id="selCntNew"></span></button>
+        <button type="button" data-sel="all" aria-pressed="true">All <span class="num" id="selCntAll"></span></button>
+      </div>
+    </div>
+    <p class="small muted" id="dataHint"></p>
+    <div id="loadLog" aria-live="polite"></div>
+  </section>
+
   <section class="panel controls" aria-label="Settings">
     <div style="display:grid; gap:12px; min-width:0">
       <div class="opts">
@@ -226,9 +248,6 @@ tr.off td { color: var(--fg-3); }
         </label>
         <label class="f" for="srcSel">Adjustments from
           <select id="srcSel"><option value="lopo">Other participants (leave-one-out, pooled)</option><option value="in">All participants (in-sample)</option></select>
-        </label>
-        <label class="f" for="axisSel" id="axisWrap" hidden>Levels in runs with normalisation
-          <select id="axisSel"><option value="played">Played (each word’s own level)</option><option value="requested">Requested (what the procedure asked for)</option></select>
         </label>
         <label class="f" for="ceilSel">Ceiling
           <select id="ceilSel"><option value="fixed">Fixed at 100%</option><option value="free">Free (70–100%)</option></select>
@@ -361,21 +380,10 @@ tr.off td { color: var(--fg-3); }
 
   <details class="panel">
     <summary>Participants and runs <span class="muted small" id="partCount"></span></summary>
-    <p class="small muted">Untick a run to leave it out of everything, for example the researchers’ own runs.</p>
-    <div class="copyrow" id="partQuick" hidden><button type="button" id="runsAll">Use all runs</button><button type="button" id="runsWithout">Only runs without normalisation</button><button type="button" id="runsWith">Only runs with normalisation</button></div>
+    <p class="small muted">Untick a run to leave it out of everything, for example the researchers’ own runs. Runs hidden by the Show buttons at the top are greyed.</p>
     <div class="tablewrap"><table id="partTable"></table></div>
   </details>
 
-  <section class="panel load" id="dropZone" aria-label="Add results files">
-    <div class="load-row">
-      <label class="filebtn" for="fileInput">Add results files
-        <input id="fileInput" type="file" multiple accept=".txt,.tsv,.json,.zip,text/plain,application/json,application/zip">
-      </label>
-      <button id="resetData" type="button">Back to the built-in data</button>
-      <span class="small muted">.txt, .json or a .zip of them, or drop files here. Built in: normalisation data to 21 October 2026 (24 low-pass and 24 noise runs). Runs already loaded are counted once.</span>
-    </div>
-    <div id="loadLog" aria-live="polite"></div>
-  </section>
 
   <details class="panel">
     <summary>How the simulation works</summary>
@@ -898,7 +906,7 @@ const METHOD_LABEL = { basic: "Basic (shift only)", gibbins: "O’Beirne/Gibbins
 const state = {
   all: [], excludedRuns: new Set(), mode: "LPF", norm: false,
   method: "basic",                         // SNR only; LPF is always O’Beirne/Gibbins
-  source: "lopo", fixedCeiling: true, axis: "played", cap: 3, lim: { SNR: 6, LPF: 0 }, adjustOut: true,
+  source: "lopo", fixedCeiling: true, dataSel: "all", cap: 3, lim: { SNR: 6, LPF: 0 }, adjustOut: true,
   crit: { ceiling: true, outside: true, steep: true, flat: true, midpoint: true, chance: true, confusion: true },
   override: { SNR: new Map(), LPF: new Map() },
   anderson: { open: false, closed: false }, slopeUnit: "oct",
@@ -940,13 +948,18 @@ const andersonP = (x, a) => a.floor + (1 - a.floor) / (1 + Math.exp(-(x - a.m) /
 // stimulus) unless "Requested levels" is chosen, which shows what the
 // procedure asked for: how centred the normalised words really were.
 const anyNormRuns = () => state.all.some(r => r.norm);
-const useRequested = () => state.axis === "requested" && anyNormRuns();
+// Which runs are shown: the Show buttons pick a category, and the participants
+// table can untick single runs. "With normalisation" is shown at the levels the
+// procedure asked for; otherwise runs are fitted at the levels actually played.
+const inSel = r => state.dataSel === "orig" ? !r.norm : state.dataSel === "new" ? !!r.norm : true;
+const inUseRun = r => !state.excludedRuns.has(r.id) && inSel(r);
+const useRequested = () => state.dataSel === "new" && anyNormRuns();
 function onAxis(r) {
   if (!r.norm || useRequested()) return r;
   if (!r._played) r._played = { ...r, trials: r.trials.map(t => ({ ...t, level: t.played ?? t.level, req: t.level })) };
   return r._played;
 }
-function runsFor(mode) { return state.all.filter(r => r.mode === mode && !state.excludedRuns.has(r.id)).map(onAxis); }
+function runsFor(mode) { return state.all.filter(r => r.mode === mode && inUseRun(r)).map(onAxis); }
 function baseFor(mode) {
   const runs = runsFor(mode), sig = (state.fixedCeiling ? "fixed|" : "free|") + (useRequested() ? "req|" : "") + runs.map(r => r.id).join("|");
   C.setFixedCeiling(state.fixedCeiling);
@@ -1067,8 +1080,11 @@ function refTarget(mode, ax, refRuns, words) {
 }
 function renderCheck() {
   const mode = state.mode, ax = C.AXES[mode], panel = $("checkPanel");
-  const inUse = state.all.filter(r => r.mode === mode && !state.excludedRuns.has(r.id));
-  const NR = inUse.filter(r => r.norm), ref = inUse.filter(r => !r.norm);
+  // Always: the runs with normalisation (unless unticked) against the target
+  // rebuilt from every run without normalisation, whatever the Show buttons say.
+  const NR = state.all.filter(r => r.mode === mode && r.norm && !state.excludedRuns.has(r.id));
+  const ref = state.all.filter(r => r.mode === mode && !r.norm);
+  const inUse = NR.concat(ref);
   if (!NR.length || !ref.length) { panel.hidden = true; return; }
   panel.hidden = false;
   const job = ++chkJob;
@@ -1486,15 +1502,14 @@ function renderParts() {
   const head = t.insertRow(); ["Use", "Participant", "Mode", "Started", "Trials", "Levels", "Normalisation", "Source"].forEach(h => { const th = document.createElement("th"); th.textContent = h; head.appendChild(th); });
   const runs = state.all.slice().sort((a, b) => a.mode.localeCompare(b.mode) || a.participant.localeCompare(b.participant, "en", { numeric: true }));
   for (const r of runs) {
-    const tr = t.insertRow(); if (state.excludedRuns.has(r.id)) tr.className = "off";
+    const tr = t.insertRow(); if (!inUseRun(r)) tr.className = "off";
     const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !state.excludedRuns.has(r.id);
     cb.setAttribute("aria-label", `Use ${r.participant} ${r.mode}`);
     cb.addEventListener("change", () => { cb.checked ? state.excludedRuns.delete(r.id) : state.excludedRuns.add(r.id); scheduleRender(0); });
     tr.insertCell().appendChild(cb);
     [r.participant, r.mode, r.started, String(r.trials.length), r.plan ? r.plan.split("·").slice(0, 2).join("·").trim() : (r.levels || []).join(", "), r.norm || "–", r.baked ? "built in" : r.file].forEach(v => { tr.insertCell().textContent = v; });
   }
-  const n = state.all.length - state.excludedRuns.size;
-  $("partQuick").hidden = !anyNormRuns();
+  const n = state.all.filter(inUseRun).length;
   $("partCount").textContent = `(${n} of ${state.all.length} runs in use)`;
 }
 
@@ -1628,11 +1643,32 @@ function saveText(name, text) {
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 }
 
+// ---------- data: what's loaded and which runs are shown ----------
+function syncData() {
+  const m = state.mode, has = anyNormRuns();
+  $("dataRow").hidden = !has;
+  if (!has && state.dataSel !== "all") state.dataSel = "all";
+  document.querySelectorAll("#dataRow [data-sel]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.sel === state.dataSel)));
+  const cnt = f => state.all.filter(r => r.mode === m && f(r)).length;
+  $("selCntOrig").textContent = `(${cnt(r => !r.norm)})`;
+  $("selCntNew").textContent = `(${cnt(r => !!r.norm)})`;
+  $("selCntAll").textContent = `(${cnt(() => true)})`;
+  const mm = m === "LPF" ? "low-pass" : "noise";
+  const built = state.all.filter(r => r.baked).length, added = state.all.filter(r => !r.baked);
+  const loaded = `Built in: ${built} runs without normalisation (${BAKED.source}).` +
+    (added.length ? ` Added: ${added.length} run${added.length === 1 ? "" : "s"}, ${added.filter(r => r.norm).length} of them with normalisation.` : " Add more with the button above.");
+  const what = !has ? "" :
+    state.dataSel === "orig" ? ` Showing the ${mm} runs without normalisation: the data the current tables were built from.` :
+    state.dataSel === "new" ? ` Showing only the ${mm} runs with normalisation, at the levels the procedure asked for, which shows how centred the words really are. The simulation switch is off in this view.` :
+    ` Showing all ${mm} runs, fitted at the levels each word was actually played at: the data a refitted table would use.`;
+  $("dataHint").textContent = loaded + what;
+}
+
 // ---------- controls ----------
 function syncControls() {
   const m = state.mode;
   for (const k of MODES) {
-    const n = state.all.filter(r => r.mode === k && !state.excludedRuns.has(r.id)).length;
+    const n = state.all.filter(r => r.mode === k && inUseRun(r)).length;
     $("mode" + k).setAttribute("aria-pressed", String(m === k)); $("cnt" + k).textContent = n ? `(${n})` : "";
   }
   // Simulating normalisation only makes sense on the levels actually played.
@@ -1640,8 +1676,7 @@ function syncControls() {
   if (req) state.norm = false;
   $("normToggle").checked = state.norm;
   $("normToggle").disabled = req;
-  $("axisWrap").hidden = !anyNormRuns();
-  $("axisSel").value = state.axis;
+  syncData();
   $("stickyInfo").textContent = `${m === "LPF" ? "O’Beirne/Gibbins" : METHOD_LABEL[state.method]}, ${state.source === "lopo" ? "leave-one-out" : "in-sample"}, ceiling ${state.fixedCeiling ? "fixed" : "free"}`;
   $("methodSel").disabled = m === "LPF";
   $("methodSel").value = m === "LPF" ? "gibbins" : state.method;
@@ -1690,7 +1725,7 @@ document.querySelectorAll(".panel").forEach((p, i) => { if (!p.id) p.id = "panel
 function render() { keepPlace(renderNow); }
 function renderNow() {
   syncControls();
-  if (!state.all.some(r => r.mode === state.mode && !state.excludedRuns.has(r.id))) {
+  if (!state.all.some(r => r.mode === state.mode && inUseRun(r))) {
     $("main").hidden = true; $("noData").hidden = false; renderParts(); return;
   }
   $("main").hidden = false; $("noData").hidden = true;
@@ -1747,11 +1782,13 @@ async function loadFiles(fileList) {
     if (r && r.trials.length) parsed.push(r); else skipped++;
   }
   const before = state.all.length;
+  const hadNorm = anyNormRuns();
   const keepIds = new Map(state.all.map(r => [C.runKey(r), state.excludedRuns.has(r.id)]));
   const { runs, dropped } = C.dedupe([...state.all, ...parsed]);
   state.excludedRuns = new Set(runs.filter(r => keepIds.get(C.runKey(r))).map(r => r.id));
   state.all = runs;
   log.unshift({ t: `Read ${parsed.length} file${parsed.length === 1 ? "" : "s"}: ${runs.length - before} new run${runs.length - before === 1 ? "" : "s"} added.` });
+  if (!hadNorm && anyNormRuns()) { state.dataSel = "new"; log.push({ t: "Now showing the runs with normalisation. Use the Show buttons to switch." }); }
   if (dropped.length) log.push({ t: `${dropped.length} run${dropped.length === 1 ? " was" : "s were"} already loaded, so counted once.` });
   if (skipped) log.push({ t: `Skipped ${skipped} file${skipped === 1 ? "" : "s"} that ${skipped === 1 ? "isn't a" : "aren't"} normalisation run${skipped === 1 ? "" : "s"}.` });
   showLog(log); scheduleRender(0);
@@ -1761,7 +1798,7 @@ function showLog(items) {
   for (const it of items) { const d = document.createElement("div"); d.textContent = it.t; if (it.warn) d.className = "warn"; el.appendChild(d); }
 }
 function resetData() {
-  state.all = C.dedupe(unpackBaked()).runs; state.excludedRuns.clear(); state.base = {};
+  state.all = C.dedupe(unpackBaked()).runs; state.excludedRuns.clear(); state.base = {}; state.dataSel = "all";
   showLog([]); scheduleRender(0);
 }
 
@@ -1780,11 +1817,11 @@ $("normSw").addEventListener("click", e => {
 });
 $("methodSel").addEventListener("change", e => { state.method = e.target.value; scheduleRender(0); });
 $("srcSel").addEventListener("change", e => { state.source = e.target.value; scheduleRender(0); });
-$("axisSel").addEventListener("change", e => { state.axis = e.target.value; scheduleRender(0); setTimeout(() => { for (const k of MODES) if (k !== state.mode) baseFor(k); }, 400); });
-const pickRuns = test => { state.excludedRuns = new Set(state.all.filter(r => !test(r)).map(r => r.id)); scheduleRender(0); };
-$("runsAll").addEventListener("click", () => pickRuns(() => true));
-$("runsWith").addEventListener("click", () => pickRuns(r => !!r.norm));
-$("runsWithout").addEventListener("click", () => pickRuns(r => !r.norm));
+document.querySelectorAll("#dataRow [data-sel]").forEach(b => b.addEventListener("click", () => {
+  state.dataSel = b.dataset.sel; state.show = "all";
+  scheduleRender(0);
+  setTimeout(() => { for (const k of MODES) if (k !== state.mode) baseFor(k); }, 400);
+}));
 $("ceilSel").addEventListener("change", e => {
   state.fixedCeiling = e.target.value === "fixed";
   // refit both modes; the leave-one-out fits restart in the background
