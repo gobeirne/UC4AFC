@@ -271,6 +271,20 @@ tr.off td { color: var(--fg-3); }
       <p class="small muted" id="heldOutNote">Ten random splits of the participants into halves, each half judged with the table from the other half (mean, with 5th–95th percentile across the 20 judgements). Every figure comes from half the participants, so the spreads include the noise of fitting half the data, in both columns. This is the honest preview of new listeners.</p>
     </section>
 
+    <section class="panel" aria-labelledby="checkH" id="checkPanel" hidden>
+      <h2 id="checkH">Runs with normalisation: how they’re doing</h2>
+      <p class="small muted" id="checkIntro"></p>
+      <div class="stats" id="checkFacts"></div>
+      <h3 style="margin-top:6px">The whole test at each requested level</h3>
+      <div class="tablewrap"><table id="checkLevels"></table></div>
+      <h3 style="margin-top:6px">How alike the words are</h3>
+      <div class="tablewrap"><table id="checkSpread"></table></div>
+      <p class="small muted" id="checkSpreadNote" aria-live="polite"></p>
+      <h3 style="margin-top:6px">Words furthest from the target</h3>
+      <div class="tablewrap"><table id="checkWords"></table></div>
+      <p class="small muted" id="checkWordsNote"></p>
+    </section>
+
     <section class="panel" aria-labelledby="clusterH">
       <h2 id="clusterH">Every word</h2>
       <p class="small muted" id="clusterNote"></p>
@@ -422,7 +436,8 @@ const CORE = (() => {
       started: h["Started at"] || "", calibration: h["Calibration"] || "", headphones: h["Headphones"] || "",
       level: h["Noise level"] || h["Presentation level"] || "", note: h["Note"] || "", plan: h["Level plan"] || "",
       planned: Number(h["Total presentations"]) || null, trials,
-      norm: h["Normalisation"] && h["Normalisation"] !== "off" ? h["Normalisation"] : ""
+      norm: h["Normalisation"] && h["Normalisation"] !== "off" ? h["Normalisation"] : "",
+      normSettings: h["Normalisation settings"] || ""
     };
   }
   function parseJson(name, text) {
@@ -1029,6 +1044,140 @@ function renderHeldOut(res, out) {
   row("Log loss against the target (lower is better)", mean(out.map(o => o.llRaw)).toFixed(4), mean(out.map(o => o.llNorm)).toFixed(4));
 }
 
+// ---------- runs recorded with normalisation: the real-world check ----------
+// Always on requested levels (what the procedure asked for), whatever the
+// "Levels" setting. The target is rebuilt from the runs without normalisation
+// with the page's settings, which with the defaults reproduces the deployed table.
+let chkJob = 0;
+const chkCache = new Map();
+function refTarget(mode, ax, refRuns, words) {
+  const key = JSON.stringify([mode, state.fixedCeiling, refRuns.map(r => r.id), state.crit, [...state.override[mode]]]);
+  if (chkCache.has(key)) return chkCache.get(key);
+  C.setFixedCeiling(state.fixedCeiling);
+  const rows = C.fitWords(refRuns, ax, words);
+  const conf = C.confusions(refRuns, ax, rows);
+  const reasons = C.autoReasons(rows, { slopeFence: 1.5, midFence: 3, on: state.crit, conf });
+  const ov = state.override[mode];
+  const usable = w => rows.get(w) && rows.get(w).fit && rows.get(w).status !== "thin";
+  const tw = words.filter(w => usable(w) && (ov.has(w) ? ov.get(w) : !reasons.get(w).length));
+  const T = C.target(new Map([...rows].map(([w, r]) => [w, r.fit])), tw);
+  const out = { T, rows };
+  chkCache.set(key, out);
+  return out;
+}
+function renderCheck() {
+  const mode = state.mode, ax = C.AXES[mode], panel = $("checkPanel");
+  const inUse = state.all.filter(r => r.mode === mode && !state.excludedRuns.has(r.id));
+  const NR = inUse.filter(r => r.norm), ref = inUse.filter(r => !r.norm);
+  if (!NR.length || !ref.length) { panel.hidden = true; return; }
+  panel.hidden = false;
+  const job = ++chkJob;
+  const u = mode === "LPF" ? "oct" : "dB";
+  const words = [...new Set(inUse.flatMap(r => r.trials.map(t => t.word)))].sort();
+  const parts = [...new Set(NR.map(r => r.participant))];
+  const P = parts.length;
+  const { T } = refTarget(mode, ax, ref, words);
+  if (!T) { panel.hidden = true; return; }
+  const tp = x => C.FLOOR + (1 - C.FLOOR) / (1 + Math.exp(-(x - T.m) / T.s));
+  const fmtL = L => mode === "LPF" ? `${L} Hz` : `${minus(L)} dB`;
+  const tables = [...new Set(NR.map(r => r.norm))];
+  const deployed = [...new Set(NR.map(r => (String(r.normSettings || "").match(/target midpoint ([^;]+)/) || [])[1]).filter(Boolean))];
+  $("checkIntro").textContent = `${NR.length} run${NR.length === 1 ? "" : "s"} from ${P} participant${P === 1 ? "" : "s"}, recorded with ${tables.length === 1 ? `the table “${tables[0]}”` : `${tables.length} different tables`}, judged at the levels the procedure asked for. ` +
+    `Target: ${mode === "LPF" ? Math.round(Math.pow(2, T.m)) + " Hz" : minus(T.m.toFixed(1)) + " dB"}, ${fmtSlope(mode, T.s)}, rebuilt from the ${ref.length} runs without normalisation with this page’s settings` +
+    `${deployed.length ? `; the runs’ own headers give ${deployed.join(" / ")}` : ""}.`;
+
+  // whole test at each requested level
+  const lv = [...new Set(NR.flatMap(r => r.trials.map(t => t.level)))].sort((a, b) => a - b);
+  const tl = $("checkLevels"); tl.textContent = "";
+  const hd = tl.insertRow(); ["Requested", "Observed", "Target", "Trials"].forEach(t => { const th = document.createElement("th"); th.textContent = t; hd.appendChild(th); });
+  for (const L of lv) {
+    const tr = NR.flatMap(r => r.trials.filter(t => t.level === L));
+    const row = tl.insertRow(); row.insertCell().textContent = fmtL(L);
+    for (const v of [`${(100 * tr.reduce((a, t) => a + t.correct, 0) / tr.length).toFixed(0)}%`, `${(100 * tp(ax.toX(L))).toFixed(0)}%`, String(tr.length)]) { const c = row.insertCell(); c.className = "num"; c.textContent = v; }
+  }
+
+  // log loss
+  let llN = 0, llR = 0, n = 0;
+  for (const r of NR) for (const t of r.trials) {
+    const pn = tp(ax.toX(t.level)), pr = tp(ax.toX(t.played ?? t.level));
+    llN -= t.correct ? Math.log(pn) : Math.log(1 - pn); llR -= t.correct ? Math.log(pr) : Math.log(1 - pr); n++;
+  }
+  // per-word fits at requested levels
+  C.setFixedCeiling(state.fixedCeiling);
+  const rowsN = C.fitWords(NR, ax, words);
+  const spN = C.spread(words.map(w => rowsN.get(w).fit).filter(Boolean));
+  const ff = $("checkFacts"); ff.textContent = "";
+  const add = (k, v, sub) => { const d = document.createElement("div"); d.className = "stat"; d.innerHTML = `<span class="v"></span><span class="k"></span><span class="sub"></span>`; d.children[0].textContent = v; d.children[1].textContent = k; d.children[2].textContent = sub || ""; ff.appendChild(d); };
+  add("participants", String(P), `${n} trials`);
+  add("midpoint spread (IQR)", spN ? `${spN.mIQR.toFixed(2)} ${u}` : "–", "words fitted at requested levels");
+  add("log loss against the target", (llN / n).toFixed(3), `${(llR / n).toFixed(3)} if scored at the played levels`);
+  add("median word midpoint", spN ? fmtMid(mode, spN.mMed) : "–", `target ${fmtMid(mode, T.m)}`);
+
+  // words furthest from the target
+  const per = words.map(w => {
+    const tr = NR.flatMap(r => r.trials.filter(t => t.word === w));
+    const k = tr.reduce((a, t) => a + t.correct, 0), e = tr.reduce((a, t) => a + tp(ax.toX(t.level)), 0);
+    const v = tr.reduce((a, t) => { const p = tp(ax.toX(t.level)); return a + p * (1 - p); }, 0);
+    return { w, n: tr.length, k, e, z: v > 0 ? (k - e) / Math.sqrt(v) : 0 };
+  }).filter(p => p.n).sort((a, b) => Math.abs(b.z) - Math.abs(a.z));
+  const tw = $("checkWords"); tw.textContent = "";
+  const hw = tw.insertRow(); ["Word", "Correct", "Expected", "z", ""].forEach(t => { const th = document.createElement("th"); th.textContent = t; hw.appendChild(th); });
+  for (const p of per.filter(p => Math.abs(p.z) >= 2).slice(0, 20)) {
+    const row = tw.insertRow();
+    const c0 = row.insertCell(); const bt = document.createElement("button"); bt.type = "button"; bt.className = "chip"; bt.textContent = p.w; bt.addEventListener("click", () => focusWord(p.w)); c0.appendChild(bt);
+    for (const v of [`${p.k}/${p.n}`, p.e.toFixed(1), (p.z > 0 ? "+" : "−") + Math.abs(p.z).toFixed(1)]) { const c = row.insertCell(); c.className = "num"; c.textContent = v; }
+    row.insertCell().textContent = p.z > 0 ? "easier than target" : "harder than target";
+  }
+  const nW = per.length;
+  $("checkWordsNote").textContent = `Words with |z| ≥ 2: correct responses over all of the word’s trials against what the target predicts at the requested levels. With ${nW} words, about ${(nW * 0.0455).toFixed(0)} would reach |z| ≥ 2 and about ${(nW * 0.0124).toFixed(1)} |z| ≥ 2.5 by chance alone, so single words need more participants before they count.`;
+
+  // spread: before (same number of participants, without normalisation) and the noise floor (async)
+  const ts = $("checkSpread"); ts.textContent = "";
+  $("checkSpreadNote").textContent = "Working out the comparisons…";
+  const refParts = [...new Set(ref.map(r => r.participant))];
+  let seed = 4242; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const before = [], floor = [];
+  const nBefore = Math.min(20, refParts.length >= P ? 20 : 0), nFloor = 60;
+  let i = 0, j = 0;
+  const Tm = { m: T.m, s: T.s, lam: 0 };
+  const step = () => {
+    if (job !== chkJob) return;
+    C.setFixedCeiling(state.fixedCeiling);
+    const t0 = performance.now();
+    while (performance.now() - t0 < 35 && (i < nBefore || j < nFloor)) {
+      if (i < nBefore) {
+        const pick = refParts.slice().sort(() => rnd() - 0.5).slice(0, P);
+        const sub = ref.filter(r => pick.includes(r.participant));
+        const rr = C.fitWords(sub, ax, words);
+        const s = C.spread(words.map(w => rr.get(w).fit).filter(Boolean)); if (s) before.push(s.mIQR);
+        i++;
+      } else {
+        const ms = [];
+        for (let w = 0; w < words.length; w++) {
+          const g = lv.map(L => { const x = ax.toX(L); let c = 0; for (let p = 0; p < P; p++) if (rnd() < C.pAt(x, Tm)) c++; return { x, L, n: P, k: c }; });
+          const f = C.fitWord(g, ax); if (f) ms.push(f.m);
+        }
+        floor.push(C.pctl(ms, 0.75) - C.pctl(ms, 0.25));
+        j++;
+      }
+    }
+    if (i < nBefore || j < nFloor) { $("checkSpreadNote").textContent = `Working out the comparisons… ${Math.round(100 * (i + j) / (nBefore + nFloor))}%`; setTimeout(step, 0); return; }
+    const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+    const fs = floor.slice().sort((a, b) => a - b), f5 = C.pctl(fs, 0.05), f95 = C.pctl(fs, 0.95);
+    ts.textContent = "";
+    const h = ts.insertRow(); ["", "Midpoint spread (IQR)"].forEach(t => { const th = document.createElement("th"); th.textContent = t; h.appendChild(th); });
+    const row = (k, v) => { const r = ts.insertRow(); r.insertCell().textContent = k; const c = r.insertCell(); c.className = "num"; c.textContent = v; };
+    if (before.length) row(`Without normalisation (${P} of the earlier participants, ${before.length} random picks)`, `${mean(before).toFixed(2)} ${u}`);
+    if (spN) row(`With normalisation (these ${P} participants)`, `${spN.mIQR.toFixed(2)} ${u}`);
+    row(`If every word were identical (sampling noise only, ${P} participants at these levels)`, `${mean(fs).toFixed(2)} ${u} (5–95%: ${f5.toFixed(2)}–${f95.toFixed(2)})`);
+    const v = !spN ? "" : spN.mIQR <= f95
+      ? "The words are as alike as this many participants can show."
+      : `The spread is above what sampling noise alone would give (${(spN.mIQR - f95).toFixed(2)} ${u} past its 95th percentile), so some words are still off target.`;
+    $("checkSpreadNote").textContent = `${v} Word midpoints are fitted at the requested levels. The noise row simulates ${nFloor} studies in which all ${words.length} words follow the target exactly, tested like these runs.`;
+  };
+  setTimeout(step, 0);
+}
+
 function showProgress() {
   const b = state.base[state.mode], el = $("progress");
   if (!b || state.source !== "lopo") { el.textContent = ""; return; }
@@ -1548,6 +1697,7 @@ function renderNow() {
   const res = analyse(state.mode); state.res = res;
   renderSummary(res); renderCluster(res); renderStrips(res); renderAdjust(res); renderPool(res); renderParts(); renderCards(res);
   startHeldOut();
+  renderCheck();
   showProgress();
 }
 function scheduleRender(ms = 120) { clearTimeout(state.renderTimer); state.renderTimer = setTimeout(render, ms); }
